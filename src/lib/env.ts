@@ -9,6 +9,7 @@ const schema = z
     ALLOW_DEMO_LOGIN_IN_PRODUCTION: z.enum(["true", "false"]).default("false"),
 
     ZOHO_DC: z.enum(["in", "com", "eu", "au"]).default("in"),
+    ZOHO_API_BASE_URL: z.string().url().optional(),
     ZOHO_CLIENT_ID: z.string().optional(),
     ZOHO_CLIENT_SECRET: z.string().optional(),
     ZOHO_REFRESH_TOKEN: z.string().optional(),

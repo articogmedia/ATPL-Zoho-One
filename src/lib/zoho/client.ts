@@ -9,7 +9,10 @@ export class ZohoError extends Error {
   }
 }
 
-const hosts = () => ZOHO_HOSTS[env().ZOHO_DC];
+const hosts = () => {
+  const e = env();
+  return { ...ZOHO_HOSTS[e.ZOHO_DC], api: e.ZOHO_API_BASE_URL ?? ZOHO_HOSTS[e.ZOHO_DC].api };
+};
 const API_VERSION = "v6";
 
 const g = globalThis as unknown as { __atplZohoToken?: { value: string; exp: number }; __atplZohoRefresh?: Promise<string> };

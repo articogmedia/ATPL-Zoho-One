@@ -15,6 +15,12 @@ Estimated time: 1–2 hours for someone with Zoho admin access. Do this in a **Z
 
 Use a **dedicated CRM admin user** (e.g. `portal@…`) as the integration identity.
 
+For Zoho CRM sandbox testing, set the optional `ZOHO_API_BASE_URL` to the sandbox API host
+(for example, `https://crmsandbox.zoho.in`). When it is not set, the portal uses the
+production CRM API host selected by `ZOHO_DC`. OAuth accounts URLs remain selected by
+`ZOHO_DC`; sandbox credentials and OAuth clients should be created in the corresponding
+Zoho API Console.
+
 1. In the API Console add a **Self Client**. Put its Client ID / Secret in `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET`.
 2. Open its **Generate Code** tab. Scope (comma-separated):
    `ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.users.READ`
