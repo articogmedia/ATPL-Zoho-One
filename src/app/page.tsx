@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { ArrowRight, CheckCircle2, ClipboardList, FileText, MapPin, Snowflake } from "lucide-react";
+import { ArrowRight, CheckCircle2, Snowflake } from "lucide-react";
 import { crm } from "@/lib/crm";
 import { env } from "@/lib/env";
 import { demoLoginAllowed } from "@/lib/auth/demo";
@@ -58,8 +58,8 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
   return (
     <div className="grid min-h-screen place-items-center bg-slate-50 px-3 py-4 sm:px-6 sm:py-6">
       <div className="flex max-h-[calc(100vh-2rem)] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] md:grid md:grid-cols-[0.9fr_1.1fr]">
-        <aside className="shrink-0 bg-slate-900 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:flex-col md:justify-between">
-          <div>
+        <aside className="shrink-0 bg-slate-900 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:min-h-[560px] md:flex-col md:justify-between">
+          <div className="flex flex-col justify-center md:flex-1">
             <div className="flex items-center gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white ring-1 ring-white/15">
                 <Snowflake className="h-6 w-6" aria-hidden="true" />
@@ -69,24 +69,11 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
                 <p className="text-xs text-slate-300">Air Trendz Pvt Ltd · Hyderabad</p>
               </div>
             </div>
-            <p className="mt-6 max-w-xs text-sm leading-6 text-slate-300 md:mt-10">
+            <p className="mt-8 max-w-xs text-xl font-medium leading-8 text-slate-200 md:mt-12">
               Leads, quotations and site visits in one place
             </p>
           </div>
-          <div className="mt-5 grid grid-cols-3 gap-3 md:mt-10 md:grid-cols-1 md:gap-4">
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <ClipboardList className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
-              <span>Manage Leads</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <FileText className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
-              <span>Create Quotation</span>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <MapPin className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
-              <span>My Work &amp; Site Visits</span>
-            </div>
-          </div>
+          <p className="mt-6 text-xs text-slate-400">© Air Trendz Pvt Ltd</p>
         </aside>
 
         <main className="flex min-h-0 flex-1 flex-col px-5 py-5 sm:px-8 sm:py-7">
