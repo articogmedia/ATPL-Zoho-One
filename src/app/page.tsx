@@ -56,9 +56,8 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
   const users = demo ? await crm().listUsers() : [];
 
   return (
-    <div className="grid min-h-screen place-items-center bg-slate-50 px-3 py-4 sm:px-6 sm:py-6">
-      <div className="flex max-h-[calc(100vh-2rem)] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] md:grid md:grid-cols-[0.9fr_1.1fr]">
-        <aside className="shrink-0 bg-slate-900 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:min-h-[560px] md:flex-col md:justify-between">
+    <div className="grid h-dvh min-h-screen w-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden bg-white md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] md:grid-rows-1">
+      <aside className="flex min-h-0 flex-col justify-between bg-slate-900 px-5 py-5 text-white sm:px-8 sm:py-7 md:p-12 lg:p-14">
           <div className="flex flex-col justify-center md:flex-1">
             <div className="flex items-center gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white ring-1 ring-white/15">
@@ -69,15 +68,17 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
                 <p className="text-xs text-slate-300">Air Trendz Pvt Ltd · Hyderabad</p>
               </div>
             </div>
-            <p className="mt-8 max-w-xs text-xl font-medium leading-8 text-slate-200 md:mt-12">
+            <p className="mt-5 max-w-xs text-sm font-medium leading-6 text-slate-300 md:mt-12 md:text-xl md:leading-8">
               Leads, quotations and site visits in one place
             </p>
           </div>
           <p className="mt-6 text-xs text-slate-400">© Air Trendz Pvt Ltd</p>
+
         </aside>
 
-        <main className="flex min-h-0 flex-1 flex-col px-5 py-5 sm:px-8 sm:py-7">
-          <div className="mb-5 flex items-start justify-between gap-4">
+        <main className="flex min-h-0 overflow-hidden bg-white px-5 py-6 sm:px-8 sm:py-8 md:px-10 lg:px-14">
+          <div className="mx-auto flex min-h-0 w-full max-w-lg flex-1 flex-col justify-center">
+            <div className="mb-5 flex shrink-0 items-start justify-between gap-4">
             <div>
               <h2 className="text-2xl font-bold tracking-tight text-slate-900">Sign in</h2>
               <p className="mt-1 text-sm text-slate-600">Select your profile to continue</p>
@@ -90,10 +91,10 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
             )}
           </div>
 
-          {error && <p role="alert" className="mb-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{ERRORS[error] ?? ERRORS.server}</p>}
+          {error && <p role="alert" className="mb-4 shrink-0 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{ERRORS[error] ?? ERRORS.server}</p>}
 
           {env().AUTH_MODE === "zoho" && (
-            <Button asChild size="lg" className="h-12 w-full justify-between rounded-lg bg-slate-900 px-4 text-sm text-white hover:bg-slate-800">
+            <Button asChild size="lg" className="mb-5 h-12 w-full shrink-0 justify-between rounded-lg bg-slate-900 px-4 text-sm text-white hover:bg-slate-800">
               <a href="/api/auth/zoho/start" aria-label="Sign in with Zoho">
                 <span>Sign in with Zoho</span>
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -142,8 +143,8 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
               <p className="mt-4 shrink-0 text-center text-xs text-slate-500">Sample data only · No real accounts are affected</p>
             </>
           )}
+          </div>
         </main>
-      </div>
     </div>
   );
 }
