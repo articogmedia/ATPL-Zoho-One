@@ -36,10 +36,15 @@ const schema = z
       });
     }
     if (e.AUTH_MODE === "zoho") need(["ZOHO_LOGIN_CLIENT_ID", "ZOHO_LOGIN_CLIENT_SECRET", "ZOHO_LOGIN_REDIRECT_URI"], "AUTH_MODE=zoho");
-    if (e.AUTH_MODE === "demo" && e.DATA_SOURCE === "zoho" && process.env.NODE_ENV === "production") {
+    if (
+      e.AUTH_MODE === "demo" &&
+      e.DATA_SOURCE === "zoho" &&
+      process.env.NODE_ENV === "production" &&
+      !(e.ALLOW_DEMO_LOGIN_IN_PRODUCTION === "true" && e.ZOHO_SANDBOX === "true")
+    ) {
       ctx.addIssue({
         code: "custom", path: ["AUTH_MODE"],
-        message: "Demo login must never be combined with live Zoho data in production",
+        message: "Demo login with live Zoho data in production requires ALLOW_DEMO_LOGIN_IN_PRODUCTION=true and ZOHO_SANDBOX=true",
       });
     }
   });
