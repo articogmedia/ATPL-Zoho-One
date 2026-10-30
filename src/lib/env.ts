@@ -9,6 +9,7 @@ const schema = z
     ALLOW_DEMO_LOGIN_IN_PRODUCTION: z.enum(["true", "false"]).default("false"),
 
     ZOHO_DC: z.enum(["in", "com", "eu", "au"]).default("in"),
+    ZOHO_SANDBOX: z.enum(["true", "false"]).default("false"),
     ZOHO_API_BASE_URL: z.string().url().optional(),
     ZOHO_CLIENT_ID: z.string().optional(),
     ZOHO_CLIENT_SECRET: z.string().optional(),
@@ -27,6 +28,13 @@ const schema = z
         if (!e[k]) ctx.addIssue({ code: "custom", path: [k], message: `${String(k)} is required when ${why}` });
       });
     if (e.DATA_SOURCE === "zoho") need(["ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET", "ZOHO_REFRESH_TOKEN"], "DATA_SOURCE=zoho");
+    if (e.DATA_SOURCE === "zoho" && process.env.NODE_ENV !== "production" && e.ZOHO_SANDBOX !== "true") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["ZOHO_SANDBOX"],
+        message: "Refusing to connect to production Zoho CRM in development. Set ZOHO_SANDBOX=true.",
+      });
+    }
     if (e.AUTH_MODE === "zoho") need(["ZOHO_LOGIN_CLIENT_ID", "ZOHO_LOGIN_CLIENT_SECRET", "ZOHO_LOGIN_REDIRECT_URI"], "AUTH_MODE=zoho");
     if (e.AUTH_MODE === "demo" && e.DATA_SOURCE === "zoho" && process.env.NODE_ENV === "production") {
       ctx.addIssue({

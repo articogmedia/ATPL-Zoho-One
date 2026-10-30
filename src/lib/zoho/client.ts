@@ -9,9 +9,20 @@ export class ZohoError extends Error {
   }
 }
 
-const hosts = () => {
+const hostLog = globalThis as unknown as { __atplZohoHostLogged?: boolean };
+
+export const hosts = () => {
   const e = env();
-  return { ...ZOHO_HOSTS[e.ZOHO_DC], api: e.ZOHO_API_BASE_URL ?? ZOHO_HOSTS[e.ZOHO_DC].api };
+  const api = e.ZOHO_API_BASE_URL ?? ZOHO_HOSTS[e.ZOHO_DC].api;
+  const resolved = {
+    ...ZOHO_HOSTS[e.ZOHO_DC],
+    api: e.ZOHO_SANDBOX === "true" ? api.replace("://www.", "://sandbox.") : api,
+  };
+  if (!hostLog.__atplZohoHostLogged) {
+    console.info(e.ZOHO_SANDBOX === "true" ? `[zoho] using SANDBOX host: ${resolved.api}` : "[zoho] using PRODUCTION host");
+    hostLog.__atplZohoHostLogged = true;
+  }
+  return resolved;
 };
 const API_VERSION = "v6";
 
