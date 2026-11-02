@@ -11,14 +11,11 @@ export default async function LeadsPage() {
   const repo = crm();
   const [all, users] = await Promise.all([repo.listLeads(), repo.listUsers()]);
   return (
-    <>
-      <h1 className="mb-5 text-2xl font-bold">Manage Leads</h1>
-      <LeadsClient
-        user={{ id: user.id, name: user.name, role: user.role }}
-        leads={visibleFor(user, all)}
-        executives={users.filter(isExecutive).map((u) => u.name)}
-        canAssign={user.role === "Manager" || user.role === "Calling Team"}
-      />
-    </>
+    <LeadsClient
+      user={{ id: user.id, name: user.name, role: user.role }}
+      leads={visibleFor(user, all)}
+      executives={users.filter(isExecutive).map((u) => u.name)}
+      canAssign={user.role === "Manager" || user.role === "Calling Team"}
+    />
   );
 }
