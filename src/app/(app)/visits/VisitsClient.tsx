@@ -64,6 +64,7 @@ function Item({ v, showExec }: { v: Visit; showExec: boolean }) {
   const [notes, setNotes] = useState("");
   const [date, setDate] = useState(v.date);
   const [time, setTime] = useState(v.time);
+  const [followUp, setFollowUp] = useState(v.followUp);
   const [pending, start] = useTransition();
 
   const send = (patch: Record<string, string>, ok: string) => start(async () => {
@@ -98,8 +99,9 @@ function Item({ v, showExec }: { v: Visit; showExec: boolean }) {
           <div className="flex gap-2">
             <input type="date" aria-label="New date" className={fieldClass} value={date} onChange={(e) => setDate(e.target.value)} />
             <input type="time" aria-label="New time" className={fieldClass} value={time} onChange={(e) => setTime(e.target.value)} />
+            <input type="date" aria-label="Follow-up date" className={fieldClass} value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
           </div>
-          <Button className="h-11 w-full" disabled={pending || !date || !time} onClick={() => send({ date, time }, "Rescheduled")}>Save new time</Button>
+          <Button className="h-11 w-full" disabled={pending || !date || !time} onClick={() => send({ date, time, followUp }, "Rescheduled")}>Save new time</Button>
         </div>
       )}
 

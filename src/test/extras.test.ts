@@ -42,9 +42,12 @@ describe("zoho mapping", () => {
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).assignedTo).toBeNull();
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).createdOn).toBe("2026-10-25");
   });
-  it("maps CRM roles, rejecting unknown ones", () => {
+  it("maps CRM roles with tolerant keywords and rejects unknown ones", () => {
     expect(mapRole({ id: "1", full_name: "A", role: { name: "Sales Executive" } })).toBe("Sales Executive");
     expect(mapRole({ id: "1", full_name: "A", profile: { name: "Administrator" } })).toBe("Manager");
+    expect(mapRole({ id: "1", full_name: "A", role: { name: "Business Development Specialist" } })).toBe("Sales Executive");
+    expect(mapRole({ id: "1", full_name: "A", profile: { name: "Telecalling Agent" } })).toBe("Calling Team");
+    expect(mapRole({ id: "1", full_name: "A", role: { name: "Intern" }, profile: { name: "NOT MAPPED" } })).toBeNull();
     expect(mapRole({ id: "1", full_name: "A", role: { name: "Intern" } })).toBeNull();
   });
   it("parses explicit role overrides and ignores malformed or unknown entries", () => {

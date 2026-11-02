@@ -1,5 +1,5 @@
 import type { Lead, LeadSource, LeadStatus, LeadUpdate, Product, Quotation, Role, User, Visit, VisitStatus } from "@/lib/domain";
-import { FIELD, READ_LEAD_STATUS, ROLE_BY_ZOHO_NAME } from "./fields";
+import { FIELD, READ_LEAD_STATUS, ROLE_BY_ZOHO_NAME, ROLE_KEYWORDS } from "./fields";
 
 /** Pure Zoho <-> portal mapping. No I/O, so it is fully unit-tested. */
 
@@ -37,9 +37,15 @@ export function mapRole(u: ZUser, overrides?: ReadonlyMap<string, Role>): Role |
   const email = u.email?.trim().toLowerCase();
   const override = email ? overrides?.get(email) : undefined;
   if (override) return override;
-  for (const name of [u.role?.name, u.profile?.name]) {
-    const r = name ? ROLE_BY_ZOHO_NAME[name.trim().toLowerCase()] : undefined;
+  const names = [u.role?.name, u.profile?.name].filter((name): name is string => !!name).map((name) => name.trim().toLowerCase());
+  for (const name of names) {
+    const r = ROLE_BY_ZOHO_NAME[name];
     if (r) return r;
+  }
+  for (const name of names) {
+    for (const role of ["Manager", "Sales Executive", "Calling Team"] as const) {
+      if (ROLE_KEYWORDS[role].some((keyword) => name.includes(keyword))) return role;
+    }
   }
   return null;
 }

@@ -112,7 +112,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
-              <tr><th className="w-12 p-2">S.No</th><th className="p-2">Product</th><th className="w-20 p-2">Unit</th><th className="w-28 p-2">Quantity</th><th className="w-32 p-2 text-right">Rate</th><th className="w-36 p-2 text-right">Amount</th><th className="w-12" /></tr>
+              <tr><th className="w-12 p-2">S.No</th><th className="p-2">Model</th><th className="w-20 p-2">Unit</th><th className="w-28 p-2">Qty</th><th className="w-32 p-2 text-right">Rate</th><th className="w-36 p-2 text-right">Amount</th><th className="w-12" /></tr>
             </thead>
             <tbody>
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
@@ -208,10 +208,11 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
         <p className="font-semibold">Sub: {COMPANY.subject}</p>
         <div className="overflow-x-auto">
           <table className="w-full border text-left">
-            <thead className="bg-secondary"><tr><th className="border p-2">S.No</th><th className="border p-2">Product</th><th className="border p-2">Unit</th><th className="border p-2 text-right">Qty</th><th className="border p-2 text-right">Rate</th><th className="border p-2 text-right">Amount</th></tr></thead>
+            <thead className="bg-secondary"><tr><th className="border p-2">S.No</th><th className="border p-2">Model</th><th className="border p-2">Unit</th><th className="border p-2 text-right">Qty</th><th className="border p-2 text-right">Rate</th><th className="border p-2 text-right">Amount</th></tr></thead>
             <tbody>{items.map((it, i) => (
               <tr key={i}><td className="border p-2">{i + 1}</td><td className="border p-2">{it.model}</td><td className="border p-2">{it.unit}</td><td className="border p-2 text-right">{it.qty}</td><td className="border p-2 text-right">{formatINR(it.price)}</td><td className="border p-2 text-right">{formatINR(it.qty * it.price)}</td></tr>
             ))}</tbody>
+            <tfoot><tr><td className="border p-2 text-right font-semibold" colSpan={5}>Total</td><td className="border p-2 text-right font-semibold">{formatINR(t.total)}</td></tr></tfoot>
           </table>
         </div>
         <Totals t={t} />

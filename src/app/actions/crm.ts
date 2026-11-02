@@ -10,7 +10,13 @@ import {
   type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
 } from "@/lib/domain";
 
-export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string };
+export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; duplicate?: { id: string; name: string } };
+
+class DuplicateLeadError extends Error {
+  constructor(readonly lead: { id: string; name: string }) {
+    super(`Lead already exists: ${lead.name}`);
+  }
+}
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
 async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
@@ -19,10 +25,16 @@ async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
     revalidatePath("/", "layout");
     return { ok: true, data };
   } catch (err) {
+    if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
     if (err instanceof ForbiddenError) return { ok: false, error: err.message };
     if (err instanceof z.ZodError) return { ok: false, error: "Please check the form values." };
     console.error("Action failed", err);
-    return { ok: false, error: err instanceof ZohoError ? err.message : "Something went wrong. Please try again." };
+    return {
+      ok: false,
+      error: err instanceof ZohoError
+        ? `${err.message}${err.code ? ` (code: ${err.code})` : ""}`
+        : "Something went wrong. Please try again.",
+    };
   }
 }
 
@@ -30,7 +42,15 @@ const id = z.string().trim().min(1).max(64);
 const text = (max: number) => z.string().trim().max(max);
 const status = z.string().refine((s): s is LeadStatus => (LEAD_STATUSES as string[]).includes(s));
 const source = z.string().refine((s): s is LeadSource => (LEAD_SOURCES as string[]).includes(s));
-const phone = z.string().trim().regex(/^[0-9+()\-\s]{7,20}$/, "Enter a valid mobile number");
+const phone = z.string().trim().transform((value, ctx) => {
+  const digits = value.replace(/\D/g, "");
+  const normalized = digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits;
+  if (!/^\d{10}$/.test(normalized)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid 10-digit Indian mobile number" });
+    return z.NEVER;
+  }
+  return normalized;
+});
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 
@@ -48,14 +68,20 @@ async function ownLeadOrThrow(user: User, leadId: string) {
 
 const newLeadSchema = z.object({
   name: text(120).min(1), company: text(160), phone, area: text(120), source, remarks: text(500),
+  assignedTo: text(120).nullable().optional(),
 });
 
 export async function addLeadAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
+    const duplicate = (await crm().listLeads()).find((lead) => lead.phone.replace(/\D/g, "").slice(-10) === data.phone);
+    if (duplicate) throw new DuplicateLeadError({ id: duplicate.id, name: duplicate.name });
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
-    return crm().createLead(data, user, isExecutive(user) ? user.name : null);
+    const assignee = isExecutive(user) ? user.name : data.assignedTo ?? null;
+    if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers and the calling team can assign leads.");
+    if (assignee && !(await executiveNames()).includes(assignee)) throw new ForbiddenError("Choose a sales executive.");
+    return crm().createLead(data, user, assignee);
   });
 }
 
@@ -116,6 +142,7 @@ export async function suggestOfferNoAction(): Promise<string> {
 const newVisitSchema = z.object({
   leadId: id, executive: text(120).optional(), type: text(80).min(1), isVisit: z.boolean(),
   date: isoDate, time: hhmm, nextAction: text(200),
+  followUp: isoDate.optional(),
 });
 
 export async function scheduleVisitAction(input: unknown) {
@@ -132,7 +159,7 @@ export async function scheduleVisitAction(input: unknown) {
 const visitPatchSchema = z.object({
   id,
   status: z.enum(["Assigned", "In Progress", "Completed"]).optional(),
-  notes: text(1000).optional(), date: isoDate.optional(), time: hhmm.optional(),
+  notes: text(1000).optional(), date: isoDate.optional(), time: hhmm.optional(), followUp: isoDate.optional(),
 });
 
 export async function updateVisitAction(input: unknown) {
@@ -141,6 +168,6 @@ export async function updateVisitAction(input: unknown) {
     const p = visitPatchSchema.parse(input);
     const visit = await crm().getVisit(p.id);
     if (!visit || visibleFor(user, [visit]).length === 0) throw new ForbiddenError("You can only update your own work.");
-    await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time }, user);
+    await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user);
   });
 }

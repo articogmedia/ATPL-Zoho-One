@@ -5,7 +5,7 @@ import type {
 export type NewLead = { name: string; company: string; phone: string; area: string; source: LeadSource; remarks: string };
 export type LeadPatch = { status?: LeadStatus; remarks?: string; assignedTo?: string | null };
 export type NewQuote = { offerNo: string; leadId: string; items: { productId: string; qty: number }[] };
-export type VisitPatch = { status?: VisitStatus; notes?: string; date?: string; time?: string };
+export type VisitPatch = { status?: VisitStatus; notes?: string; date?: string; time?: string; followUp?: string };
 
 /**
  * The only thing the rest of the app knows about the CRM. Zoho CRM is the system of

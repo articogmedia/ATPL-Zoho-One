@@ -56,6 +56,7 @@ export type NewVisit = {
   date: string;
   time: string;
   nextAction: string;
+  followUp?: string;
 };
 
 export type Visit = {

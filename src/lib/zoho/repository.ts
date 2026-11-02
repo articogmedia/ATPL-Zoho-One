@@ -21,7 +21,17 @@ async function users(): Promise<User[]> {
   return cached("users", LONG, async () => {
     const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
     const overrides = parseRoleOverrides(env().ZOHO_ROLE_OVERRIDES);
-    return (json?.users ?? []).map((u) => mapUser(u, overrides)).filter((u): u is User => !!u);
+    const rawUsers = json?.users ?? [];
+    const mapped = rawUsers.map((u) => mapUser(u, overrides));
+    const unmapped = rawUsers.filter((u, i) => !mapped[i]).map((u) =>
+      `${u.full_name} (role: ${u.role?.name ?? "none"}, profile: ${u.profile?.name ?? "none"})`,
+    );
+    if (rawUsers.length > 0 && !mapped.some((u) => u?.role === "Sales Executive")) {
+      console.warn(`[zoho] No Sales Executives mapped. Unmapped users: ${unmapped.join("; ") || "none"}`);
+    } else if (unmapped.length) {
+      console.warn(`[zoho] Unmapped active users: ${unmapped.join("; ")}`);
+    }
+    return mapped.filter((u): u is User => !!u);
   });
 }
 
@@ -57,14 +67,16 @@ export const zohoRepository: CrmRepository = {
 
   async createLead(input, actor, assignTo) {
     const owner = assignTo ? await userByName(assignTo) : null;
+    const queueOwner = !owner ? env().ZOHO_QUEUE_OWNER_ID : undefined;
+    if (!owner && !queueOwner) throw new ZohoError("Set ZOHO_QUEUE_OWNER_ID to create an unassigned lead");
     const record: Record<string, unknown> = {
       Last_Name: input.name, Company: input.company || "-", Mobile: input.phone, City: input.area,
       Lead_Source: input.source, Lead_Status: WRITE_LEAD_STATUS["Fresh Lead"], Description: input.remarks || undefined,
-      ...(owner ? { Owner: { id: owner.id } } : {}),
+      ...(owner ? { Owner: { id: owner.id } } : queueOwner ? { Owner: { id: queueOwner } } : {}),
     };
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
     await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
-    invalidate("leads");
+    invalidate("leads", "users");
     return (await leadMap()).get(id) ?? {
       id, ...input, status: "Fresh Lead", assignedTo: assignTo, createdOn: new Date().toISOString().slice(0, 10),
       address: "", touchedBy: [actor.name],
@@ -97,7 +109,7 @@ export const zohoRepository: CrmRepository = {
 
     await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
     await addNote(id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`);
-    invalidate("leads");
+    invalidate("leads", "users");
   },
 
   async getLeadHistory(id) {
@@ -165,6 +177,7 @@ export const zohoRepository: CrmRepository = {
       Who_Id: { id: lead.id },
       [FIELD.task.type]: input.type, [FIELD.task.isSiteVisit]: input.isVisit,
       [FIELD.task.visitTime]: input.time, [FIELD.task.nextAction]: input.nextAction,
+      [FIELD.task.followUp]: input.followUp || undefined,
     });
     await addNote(lead.id, "Work scheduled", `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date} (by ${actor.name})`);
     invalidate("visits");
@@ -176,6 +189,7 @@ export const zohoRepository: CrmRepository = {
     if (p.notes) record.Description = p.notes;
     if (p.date) record.Due_Date = p.date;
     if (p.time) record[FIELD.task.visitTime] = p.time;
+    if (p.followUp) record[FIELD.task.followUp] = p.followUp;
     await zohoWrite("PUT", `/Tasks/${id}`, record);
     invalidate("visits");
   },

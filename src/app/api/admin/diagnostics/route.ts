@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth/guard";
 import { env } from "@/lib/env";
-import { LEAD_SOURCES, type Role } from "@/lib/domain";
+import { LEAD_SOURCES } from "@/lib/domain";
 import { FIELD, ROLE_BY_ZOHO_NAME, WRITE_LEAD_STATUS } from "@/lib/zoho/fields";
 import { hosts, zoho } from "@/lib/zoho/client";
 import { mapRole, parseRoleOverrides, type ZUser } from "@/lib/zoho/mappers";
@@ -55,6 +55,11 @@ export async function GET() {
             portalRole: mapRole(u, overrides) ?? "NOT MAPPED",
           })),
           salesExecutives: rawUsers.filter((u) => mapRole(u, overrides) === "Sales Executive").length,
+          unmapped: rawUsers.filter((u) => !mapRole(u, overrides)).map((u) => ({
+            name: u.full_name, email: u.email ?? "", role: u.role?.name ?? "", profile: u.profile?.name ?? "",
+          })),
+          suggestedRoleOverrides: rawUsers.filter((u) => !mapRole(u, overrides) && u.email)
+            .map((u) => `${u.email}:Sales Executive`).join(","),
         };
 
     const leadFields = await check(async () => {

@@ -17,6 +17,7 @@ export default async function LeadsPage() {
         user={{ id: user.id, name: user.name, role: user.role }}
         leads={visibleFor(user, all)}
         executives={users.filter(isExecutive).map((u) => u.name)}
+        canAssign={user.role === "Manager" || user.role === "Calling Team"}
       />
     </>
   );

@@ -27,6 +27,13 @@ export const ROLE_BY_ZOHO_NAME: Record<string, Role> = {
   "calling team": "Calling Team",
 };
 
+/** Partial, case-insensitive Zoho role/profile keywords used when names vary by org. */
+export const ROLE_KEYWORDS: Record<Role, string[]> = {
+  "Sales Executive": ["sales", "business development", "executive"],
+  "Calling Team": ["calling", "telecall"],
+  Manager: ["manager", "admin", "ceo"],
+};
+
 /** Pick-list values used by the portal when WRITING Lead_Status. Create these values in Zoho. */
 export const WRITE_LEAD_STATUS: Record<LeadStatus, string> = {
   "Fresh Lead": "Fresh Lead",
