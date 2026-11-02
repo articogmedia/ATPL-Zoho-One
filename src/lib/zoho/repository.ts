@@ -68,11 +68,12 @@ export const zohoRepository: CrmRepository = {
   async createLead(input, actor, assignTo) {
     const owner = assignTo ? await userByName(assignTo) : null;
     const queueOwner = !owner ? env().ZOHO_QUEUE_OWNER_ID : undefined;
-    if (!owner && !queueOwner) throw new ZohoError("Set ZOHO_QUEUE_OWNER_ID to create an unassigned lead");
+    const fallbackOwner = !owner && !queueOwner ? actor.id : undefined;
+    if (fallbackOwner) console.warn("[zoho] ZOHO_QUEUE_OWNER_ID is not set; assigning the lead to the signed-in actor.");
     const record: Record<string, unknown> = {
       Last_Name: input.name, Company: input.company || "-", Mobile: input.phone, City: input.area,
       Lead_Source: input.source, Lead_Status: WRITE_LEAD_STATUS["Fresh Lead"], Description: input.remarks || undefined,
-      ...(owner ? { Owner: { id: owner.id } } : queueOwner ? { Owner: { id: queueOwner } } : {}),
+      ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner ?? fallbackOwner } }),
     };
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
     await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
@@ -99,8 +100,9 @@ export const zohoRepository: CrmRepository = {
         parts.push(`Assigned to ${p.assignedTo}`);
       } else {
         const queue = env().ZOHO_QUEUE_OWNER_ID;
-        if (!queue) throw new ZohoError("Set ZOHO_QUEUE_OWNER_ID to allow un-assigning leads");
-        record.Owner = { id: queue };
+        const fallbackOwner = queue ?? actor.id;
+        if (!queue) console.warn("[zoho] ZOHO_QUEUE_OWNER_ID is not set; assigning the lead to the signed-in actor.");
+        record.Owner = { id: fallbackOwner };
         parts.push("Unassigned");
       }
     }

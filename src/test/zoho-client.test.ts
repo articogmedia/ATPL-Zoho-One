@@ -8,6 +8,7 @@ beforeEach(() => {
   process.env.DATA_SOURCE = "mock";
   delete process.env.ZOHO_API_BASE_URL;
   delete process.env.ZOHO_SANDBOX;
+  vi.doUnmock("@/lib/zoho/client");
   vi.resetModules();
 });
 
@@ -48,4 +49,58 @@ describe("Zoho hosts", () => {
       });
     }
   });
+});
+
+describe("Zoho lead owner fallbacks", () => {
+    it("uses the actor as owner when creating without a queue owner", async () => {
+      const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
+        if (path === "/Leads") expect(record.Owner).toEqual({ id: "actor-1" });
+        return "lead-1";
+      });
+      vi.doMock("@/lib/zoho/client", () => ({
+        ZohoError: class extends Error {},
+        zoho: vi.fn(async () => ({ users: [] })),
+        zohoList: vi.fn(async () => [{ id: "lead-1", Last_Name: "Lead" }]),
+        zohoWrite: write,
+      }));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { zohoRepository } = await import("@/lib/zoho/repository");
+
+      await zohoRepository.createLead(
+        { name: "New lead", company: "", phone: "9999999999", area: "", source: "Direct Call", remarks: "" },
+        { id: "actor-1", name: "Manager", role: "Manager" },
+        null,
+      );
+
+      expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.anything(), { trigger: ["workflow"] });
+      expect(warn).toHaveBeenCalledOnce();
+      warn.mockRestore();
+    });
+
+    it("uses the actor as owner when un-assigning without a queue owner", async () => {
+      const write = vi.fn(async (_method: string, _path: string, record: Record<string, unknown>) => {
+        if (record.Owner) expect(record.Owner).toEqual({ id: "actor-1" });
+        return "ok";
+      });
+      vi.doMock("@/lib/zoho/client", () => ({
+        ZohoError: class extends Error {},
+        zoho: vi.fn(async () => ({ users: [{ id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } }] })),
+        zohoList: vi.fn(async () => [{ id: "lead-1", Last_Name: "Lead", Owner: { id: "exec-1", name: "Executive" } }]),
+        zohoWrite: write,
+      }));
+      const { invalidate } = await import("@/lib/cache");
+      invalidate("users", "leads");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const { zohoRepository } = await import("@/lib/zoho/repository");
+
+      await zohoRepository.updateLead(
+        "lead-1",
+        { assignedTo: null },
+        { id: "actor-1", name: "Manager", role: "Manager" },
+      );
+
+      expect(write).toHaveBeenCalledWith("PUT", "/Leads/lead-1", { Owner: { id: "actor-1" } }, { trigger: ["workflow"] });
+      expect(warn).toHaveBeenCalledOnce();
+      warn.mockRestore();
+    });
 });
