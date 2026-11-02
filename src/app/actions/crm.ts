@@ -7,7 +7,7 @@ import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { ZohoError } from "@/lib/zoho/client";
 import { env } from "@/lib/env";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
+  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isAssignable, isExecutive, nextOfferNo, todayIST, visibleFor,
   type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
 } from "@/lib/domain";
 
@@ -59,8 +59,9 @@ const zohoLeadUrl = (leadId: string) => {
   return base ? `${base}/tab/Leads/${encodeURIComponent(leadId)}` : undefined;
 };
 
-async function executiveNames() {
-  return (await crm().listUsers()).filter(isExecutive).map((u) => u.name);
+async function assignableNames() {
+  const queueOwnerId = env().ZOHO_QUEUE_OWNER_ID;
+  return (await crm().listUsers()).filter((u) => isAssignable(u, queueOwnerId)).map((u) => u.name);
 }
 
 async function ownLeadOrThrow(user: User, leadId: string) {
@@ -85,7 +86,7 @@ export async function addLeadAction(input: unknown) {
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
     const assignee = isExecutive(user) ? user.name : data.assignedTo ?? null;
     if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers and the calling team can assign leads.");
-    if (assignee && !(await executiveNames()).includes(assignee)) throw new ForbiddenError("Choose a sales executive.");
+    if (assignee && !(await assignableNames()).includes(assignee)) throw new ForbiddenError("Choose a team member.");
     const lead = await crm().createLead(data, user, assignee);
     revalidateTag("leads");
     revalidateTag("users");
@@ -104,7 +105,7 @@ export async function saveLeadUpdateAction(input: unknown) {
     await ownLeadOrThrow(user, p.id);
     if (p.assignedTo !== undefined) {
       if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers and the calling team can assign leads.");
-      if (p.assignedTo && !(await executiveNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a sales executive.");
+      if (p.assignedTo && !(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     }
     await crm().updateLead(p.id, { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo }, user);
     revalidateTag("leads");
@@ -165,7 +166,7 @@ export async function scheduleVisitAction(input: unknown) {
     const v = newVisitSchema.parse(input);
     await ownLeadOrThrow(user, v.leadId);
     const executive = isExecutive(user) ? user.name : v.executive;
-    if (!executive || !(await executiveNames()).includes(executive)) throw new ForbiddenError("Choose a sales executive.");
+    if (!executive || !(await assignableNames()).includes(executive)) throw new ForbiddenError("Choose a team member.");
     await crm().createVisit({ ...v, executive }, user);
     revalidateTag("visits");
   });

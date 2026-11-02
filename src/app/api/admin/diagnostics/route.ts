@@ -45,6 +45,10 @@ export async function GET() {
       const response = await zoho<{ users?: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
       return response?.users ?? [];
     });
+    const queueOwner = isError(rawUsers) ? undefined : rawUsers.find((u) => u.id === configuredQueueOwnerId);
+    const queueOwnerRole = queueOwner ? mapRole(queueOwner, overrides) : null;
+    const queueOwnerIsAssignable = !!configuredQueueOwnerId &&
+      (queueOwnerRole === "Sales Executive" || queueOwnerRole === "Manager");
     const users = isError(rawUsers)
       ? rawUsers
       : {
@@ -67,6 +71,10 @@ export async function GET() {
           queueOwner: {
             configured: !!configuredQueueOwnerId,
             resolvesToActiveUser: !!configuredQueueOwnerId && rawUsers.some((u) => u.id === configuredQueueOwnerId),
+            queueOwnerIsAssignable,
+            warning: queueOwnerIsAssignable
+              ? "The queue owner is assignable; leads owned by this user will never show as unassigned."
+              : undefined,
           },
         };
 

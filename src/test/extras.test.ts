@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { financialYear, nextOfferNo, todayIST } from "@/lib/domain";
+import { financialYear, isAssignable, nextOfferNo, todayIST } from "@/lib/domain";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 
 describe("offer numbering", () => {
@@ -36,11 +36,18 @@ describe("zoho mapping", () => {
     expect(normalizeStatus("Won")).toBe("Won");
     expect(normalizeStatus("something custom")).toBe("Fresh Lead");
   });
-  it("treats an executive owner as 'assigned' and any other owner as the fresh queue", () => {
+  it("treats assignable owners as assigned and the queue owner as the fresh queue", () => {
     const base = { id: "1", Last_Name: "Rao", Created_Time: "2026-10-25T10:15:00+05:30", Lead_Status: "Not Contacted" };
-    expect(mapLead({ ...base, Owner: { id: "u1", name: "Anil Kumar" } }, execs).assignedTo).toBe("Anil Kumar");
+    const assignable = new Set(["Anil Kumar", "Manager"]);
+    expect(mapLead({ ...base, Owner: { id: "u1", name: "Anil Kumar" } }, assignable).assignedTo).toBe("Anil Kumar");
+    expect(mapLead({ ...base, Owner: { id: "manager-1", name: "Manager" } }, assignable).assignedTo).toBe("Manager");
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).assignedTo).toBeNull();
+    expect(mapLead({ ...base, Owner: { id: "queue-1", name: "Queue Owner" } }, assignable).assignedTo).toBeNull();
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).createdOn).toBe("2026-10-25");
+  });
+  it("excludes the queue owner from assignable users", () => {
+    expect(isAssignable({ id: "manager-1", name: "Manager", role: "Manager" }, "queue-1")).toBe(true);
+    expect(isAssignable({ id: "queue-1", name: "Queue Owner", role: "Manager" }, "queue-1")).toBe(false);
   });
   it("maps CRM roles with tolerant keywords and rejects unknown ones", () => {
     expect(mapRole({ id: "1", full_name: "A", role: { name: "Sales Executive" } })).toBe("Sales Executive");

@@ -1,6 +1,7 @@
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
-import { isExecutive, todayIST, visibleFor } from "@/lib/domain";
+import { env } from "@/lib/env";
+import { isAssignable, todayIST, visibleFor } from "@/lib/domain";
 import { VisitsClient } from "./VisitsClient";
 
 export const metadata = { title: "My Work & Site Visits" };
@@ -16,7 +17,7 @@ export default async function VisitsPage() {
       <VisitsClient
         user={{ id: user.id, name: user.name, role: user.role }}
         visits={visibleFor(user, visits)}
-        executives={users.filter(isExecutive).map((u) => u.name)}
+        executives={users.filter((u) => isAssignable(u, env().ZOHO_QUEUE_OWNER_ID)).map((u) => u.name)}
         today={todayIST()}
       />
     </>

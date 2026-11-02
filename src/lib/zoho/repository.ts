@@ -1,5 +1,5 @@
 import "server-only";
-import { quoteTotals, type Lead, type User } from "@/lib/domain";
+import { isAssignable, quoteTotals, type Lead, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -37,7 +37,10 @@ async function users(): Promise<User[]> {
   return mappedUsers;
 }
 
-const execNames = async () => new Set((await users()).filter((u) => u.role === "Sales Executive").map((u) => u.name));
+const assignableNames = async () => {
+  const queueOwnerId = env().ZOHO_QUEUE_OWNER_ID;
+  return new Set((await users()).filter((u) => isAssignable(u, queueOwnerId)).map((u) => u.name));
+};
 const userByName = async (name: string) => {
   const u = (await users()).find((x) => x.name === name);
   if (!u) throw new ZohoError(`No active Zoho user named "${name}"`);
@@ -58,8 +61,8 @@ const queueOwnerId = async () => {
 
 async function leads(): Promise<Lead[]> {
   return cached("leads", SHORT, async () => {
-    const [raw, execs] = await Promise.all([zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS), execNames()]);
-    return raw.map((z) => mapLead(z, execs));
+    const [raw, assignable] = await Promise.all([zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS), assignableNames()]);
+    return raw.map((z) => mapLead(z, assignable));
   });
 }
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));

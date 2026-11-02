@@ -196,6 +196,9 @@ export function leadsForTab(user: User, leads: Lead[], tab: LeadTab, search = ""
 }
 
 export const canAssignLeads = (role: Role) => role === "Manager" || role === "Calling Team";
+export function isAssignable(u: User, queueOwnerId?: string): boolean {
+  return (u.role === "Sales Executive" || u.role === "Manager") && u.id !== queueOwnerId;
+}
 
 // ---------- Time and numbering helpers ----------
 

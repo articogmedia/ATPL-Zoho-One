@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccess, formatINR, visibleFor, ACCESS } from "@/lib/domain";
+import { canAccess, formatINR, isAssignable, visibleFor, ACCESS } from "@/lib/domain";
 import { MOCK_LEADS as SAMPLE_LEADS, MOCK_USERS as USERS, MOCK_QUOTES as SAMPLE_QUOTES, MOCK_VISITS as SAMPLE_VISITS } from "@/lib/crm/mock-data";
 
 const u = (id: string) => USERS.find((x) => x.id === id)!;
@@ -32,6 +32,11 @@ describe("access rules", () => {
   it("executives see only their own leads", () => {
     expect(visibleFor(u("anil"), SAMPLE_LEADS).every((l) => l.assignedTo === "Anil")).toBe(true);
     expect(visibleFor(u("pavan"), SAMPLE_LEADS)).toHaveLength(SAMPLE_LEADS.length);
+  });
+  it("assigns to executives and managers but not the queue owner", () => {
+    expect(isAssignable(u("anil"), "queue-owner")).toBe(true);
+    expect(isAssignable(u("pavan"), "queue-owner")).toBe(true);
+    expect(isAssignable({ id: "queue-owner", name: "Queue", role: "Manager" }, "queue-owner")).toBe(false);
   });
 });
 
