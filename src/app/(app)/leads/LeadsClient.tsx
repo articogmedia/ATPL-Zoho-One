@@ -194,7 +194,10 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
   const save = (saveNext = false) => start(async () => {
     const result = await saveLeadUpdateAction({ id: lead.id, status, remarks, ...(canAssign ? { assignedTo: assignee || null } : {}) });
     if (!result.ok) { toast.error(result.error); return; }
-    toast.success(`Saved update for ${lead.name}`);
+    const zohoUrl = result.data?.zohoUrl;
+    toast.success(`Saved update for ${lead.name}`, zohoUrl ? {
+      action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") },
+    } : undefined);
     onSaved();
     setRemarks("");
     if (saveNext && nextLead) {
@@ -238,7 +241,7 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
                   <input autoFocus className={`${fieldClass} h-9 text-sm`} placeholder="Search executives…" value={assigneeSearch} onChange={(event) => setAssigneeSearch(event.target.value)} aria-label="Search executives" />
                   <button type="button" role="option" aria-selected={!assignee} className="mt-1 block w-full rounded px-2 py-2 text-left text-sm font-medium hover:bg-secondary" onClick={() => { setAssignee(""); setComboboxOpen(false); }}>Unassigned</button>
                   {filteredExecutives.map((name) => <button key={name} type="button" role="option" aria-selected={assignee === name} className="mt-1 block w-full rounded px-2 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setAssignee(name); setComboboxOpen(false); }}>{name}</button>)}
-                  {!executives.length && <p className="p-2 text-xs text-destructive">No sales executives found. Ask an admin to check Zoho roles.</p>}
+                  {!executives.length && <p className="p-2 text-xs text-destructive">No sales executives found. A manager must check ZOHO_ROLE_OVERRIDES / Zoho roles.</p>}
                   {!!executives.length && !filteredExecutives.length && <p className="p-2 text-xs text-muted-foreground">No executives match your search.</p>}
                 </div>}
               </label>}
@@ -294,7 +297,7 @@ function AddLead({ onDone, executives, canAssign }: { onDone: () => void; execut
   const [duplicate, setDuplicate] = useState<{ id: string; name: string } | null>(null);
   const [pending, start] = useTransition();
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [key]: event.target.value });
-  return <form className="grid gap-2 rounded-xl border border-border bg-card p-4 shadow-sm sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null }); if (result.ok) { toast.success("Lead added"); onDone(); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
+  return <form className="grid gap-2 rounded-xl border border-border bg-card p-4 shadow-sm sm:grid-cols-2" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null }); if (result.ok) { const zohoUrl = result.data?.zohoUrl; toast.success("Lead added", zohoUrl ? { action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") } } : undefined); onDone(); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" />

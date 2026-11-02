@@ -1,0 +1,18 @@
+warning: in the working copy of '.env.example', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/SETUP.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/actions/crm.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/cache.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/env.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/zoho/client.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/zoho/repository.ts', LF will be replaced by CRLF the next time Git touches it
+ .env.example                           |  2 [32m+[m
+ docs/SETUP.md                          | 14 [32m++++++[m
+ src/app/(app)/leads/LeadsClient.tsx    |  9 [32m++[m[31m--[m
+ src/app/actions/crm.ts                 | 22 [32m+++++++[m[31m--[m
+ src/app/api/admin/diagnostics/route.ts |  8 [32m++++[m
+ src/lib/cache.ts                       | 25 [32m++++++[m[31m----[m
+ src/lib/env.ts                         |  1 [32m+[m
+ src/lib/zoho/client.ts                 |  7 [32m+++[m
+ src/lib/zoho/repository.ts             | 39 [32m+++++++++++[m[31m----[m
+ src/test/zoho-client.test.ts           | 87 [32m++++++++++++++++++++++++++[m[31m--------[m
+ 10 files changed, 170 insertions(+), 44 deletions(-)

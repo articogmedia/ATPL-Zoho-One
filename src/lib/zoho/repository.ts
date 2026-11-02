@@ -18,7 +18,7 @@ const SHORT = 20_000;   // transactional lists
 const LONG = 300_000;   // users, products
 
 async function users(): Promise<User[]> {
-  return cached("users", LONG, async () => {
+  const mappedUsers = await cached("users", LONG, async () => {
     const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
     const overrides = parseRoleOverrides(env().ZOHO_ROLE_OVERRIDES);
     const rawUsers = json?.users ?? [];
@@ -33,6 +33,8 @@ async function users(): Promise<User[]> {
     }
     return mapped.filter((u): u is User => !!u);
   });
+  if (!mappedUsers.length) invalidate("users");
+  return mappedUsers;
 }
 
 const execNames = async () => new Set((await users()).filter((u) => u.role === "Sales Executive").map((u) => u.name));
@@ -40,6 +42,18 @@ const userByName = async (name: string) => {
   const u = (await users()).find((x) => x.name === name);
   if (!u) throw new ZohoError(`No active Zoho user named "${name}"`);
   return u;
+};
+const activeUserById = async (id: string) => {
+  const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
+  return (json?.users ?? []).find((u) => u.id === id);
+};
+const queueOwnerId = async () => {
+  const configured = env().ZOHO_QUEUE_OWNER_ID;
+  if (!configured) throw new ZohoError("Set ZOHO_QUEUE_OWNER_ID to an active Zoho user");
+  if (!(await activeUserById(configured))) {
+    throw new ZohoError(`ZOHO_QUEUE_OWNER_ID "${configured}" is not an active Zoho user`);
+  }
+  return configured;
 };
 
 async function leads(): Promise<Lead[]> {
@@ -67,13 +81,11 @@ export const zohoRepository: CrmRepository = {
 
   async createLead(input, actor, assignTo) {
     const owner = assignTo ? await userByName(assignTo) : null;
-    const queueOwner = !owner ? env().ZOHO_QUEUE_OWNER_ID : undefined;
-    const fallbackOwner = !owner && !queueOwner ? actor.id : undefined;
-    if (fallbackOwner) console.warn("[zoho] ZOHO_QUEUE_OWNER_ID is not set; assigning the lead to the signed-in actor.");
+    const queueOwner = !owner ? await queueOwnerId() : undefined;
     const record: Record<string, unknown> = {
       Last_Name: input.name, Company: input.company || "-", Mobile: input.phone, City: input.area,
       Lead_Source: input.source, Lead_Status: WRITE_LEAD_STATUS["Fresh Lead"], Description: input.remarks || undefined,
-      ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner ?? fallbackOwner } }),
+      ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner } }),
     };
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
     await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
@@ -99,10 +111,7 @@ export const zohoRepository: CrmRepository = {
         record.Owner = { id: (await userByName(p.assignedTo)).id };
         parts.push(`Assigned to ${p.assignedTo}`);
       } else {
-        const queue = env().ZOHO_QUEUE_OWNER_ID;
-        const fallbackOwner = queue ?? actor.id;
-        if (!queue) console.warn("[zoho] ZOHO_QUEUE_OWNER_ID is not set; assigning the lead to the signed-in actor.");
-        record.Owner = { id: fallbackOwner };
+        record.Owner = { id: await queueOwnerId() };
         parts.push("Unassigned");
       }
     }
@@ -185,7 +194,9 @@ export const zohoRepository: CrmRepository = {
     invalidate("visits");
   },
 
-  async updateVisit(id, p) {
+  async updateVisit(id, p, actor) {
+    const current = await this.getVisit(id);
+    if (!current) throw new ZohoError("Visit not found", 404);
     const record: Record<string, unknown> = {};
     if (p.status) record.Status = TASK_STATUS_WRITE[p.status];
     if (p.notes) record.Description = p.notes;
@@ -193,6 +204,14 @@ export const zohoRepository: CrmRepository = {
     if (p.time) record[FIELD.task.visitTime] = p.time;
     if (p.followUp) record[FIELD.task.followUp] = p.followUp;
     await zohoWrite("PUT", `/Tasks/${id}`, record);
+    const changes = [
+      p.status ? `Status: ${p.status}` : "",
+      p.date ? `Date: ${p.date}` : "",
+      p.time ? `Time: ${p.time}` : "",
+      p.followUp ? `Follow-up: ${p.followUp}` : "",
+      p.notes?.trim() ? `Notes: ${p.notes.trim()}` : "",
+    ].filter(Boolean);
+    if (changes.length) await addNote(current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`);
     invalidate("visits");
   },
 };

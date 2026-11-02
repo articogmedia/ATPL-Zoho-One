@@ -13,6 +13,7 @@ const schema = z
     /** Explicit roles, "email:Role,email:Role", wins over role/profile name matching. */
     ZOHO_ROLE_OVERRIDES: z.string().optional(),
     ZOHO_API_BASE_URL: z.string().url().optional(),
+    ZOHO_CRM_WEB_BASE: z.string().url().optional(),
     ZOHO_CLIENT_ID: z.string().optional(),
     ZOHO_CLIENT_SECRET: z.string().optional(),
     ZOHO_REFRESH_TOKEN: z.string().optional(),

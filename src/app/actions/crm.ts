@@ -1,10 +1,11 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { ZohoError } from "@/lib/zoho/client";
+import { env } from "@/lib/env";
 import {
   LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
   type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
@@ -53,6 +54,10 @@ const phone = z.string().trim().transform((value, ctx) => {
 });
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+const zohoLeadUrl = (leadId: string) => {
+  const base = env().ZOHO_CRM_WEB_BASE?.replace(/\/+$/, "");
+  return base ? `${base}/tab/Leads/${encodeURIComponent(leadId)}` : undefined;
+};
 
 async function executiveNames() {
   return (await crm().listUsers()).filter(isExecutive).map((u) => u.name);
@@ -81,7 +86,10 @@ export async function addLeadAction(input: unknown) {
     const assignee = isExecutive(user) ? user.name : data.assignedTo ?? null;
     if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers and the calling team can assign leads.");
     if (assignee && !(await executiveNames()).includes(assignee)) throw new ForbiddenError("Choose a sales executive.");
-    return crm().createLead(data, user, assignee);
+    const lead = await crm().createLead(data, user, assignee);
+    revalidateTag("leads");
+    revalidateTag("users");
+    return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
   });
 }
 
@@ -99,6 +107,9 @@ export async function saveLeadUpdateAction(input: unknown) {
       if (p.assignedTo && !(await executiveNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a sales executive.");
     }
     await crm().updateLead(p.id, { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo }, user);
+    revalidateTag("leads");
+    revalidateTag("users");
+    return { zohoUrl: zohoLeadUrl(p.id) };
   });
 }
 
@@ -127,7 +138,10 @@ export async function createQuoteAction(input: unknown) {
     const q = quoteSchema.parse(input);
     const lead = await ownLeadOrThrow(user, q.leadId);
     const executive = lead.assignedTo ?? user.name;
-    return crm().createQuote(q, user, executive);
+    const quote = await crm().createQuote(q, user, executive);
+    revalidateTag("quotes");
+    revalidateTag("leads");
+    return quote;
   });
 }
 
@@ -153,6 +167,7 @@ export async function scheduleVisitAction(input: unknown) {
     const executive = isExecutive(user) ? user.name : v.executive;
     if (!executive || !(await executiveNames()).includes(executive)) throw new ForbiddenError("Choose a sales executive.");
     await crm().createVisit({ ...v, executive }, user);
+    revalidateTag("visits");
   });
 }
 
@@ -169,5 +184,6 @@ export async function updateVisitAction(input: unknown) {
     const visit = await crm().getVisit(p.id);
     if (!visit || visibleFor(user, [visit]).length === 0) throw new ForbiddenError("You can only update your own work.");
     await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user);
+    revalidateTag("visits");
   });
 }

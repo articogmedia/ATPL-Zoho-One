@@ -35,6 +35,19 @@ authorization errors, a separate Self Client may be needed for the sandbox.
    ```
 4. Save the returned `refresh_token` as `ZOHO_REFRESH_TOKEN`. Treat it like a password.
 
+### Environment variables
+
+Set `DATA_SOURCE`, `AUTH_MODE`, `SESSION_SECRET`, `ZOHO_DC`, `ZOHO_SANDBOX`,
+`ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`, and
+`ZOHO_QUEUE_OWNER_ID`. For Zoho sign-in also set
+`ZOHO_LOGIN_CLIENT_ID`, `ZOHO_LOGIN_CLIENT_SECRET`, and `ZOHO_LOGIN_REDIRECT_URI`.
+`ZOHO_ROLE_OVERRIDES` is optional. `ZOHO_CRM_WEB_BASE` is optional and enables
+the **Open in Zoho** link after lead create/assignment.
+
+Managers can check the live configuration at `/api/admin/diagnostics`; it reports
+role mappings, queue-owner resolution, picklists, custom fields, and the active
+sandbox/production host without returning tokens.
+
 ## 3. Create the custom fields (Setup → Customization → Modules and Fields)
 
 | Module | Field label → API name | Type |
@@ -81,3 +94,4 @@ leads from ad forms should be owned by that user (Setup → Automation → Assig
 8. Deactivate a test user in Zoho → within ~5 minutes they are bounced to login.
 9. Submit a test Meta and Google lead form → appear in Fresh Leads with the right source label.
 10. Kill the network / use a wrong token → users see a friendly error, no stack traces or secrets.
+11. Open `/api/admin/diagnostics` as a Manager and confirm the queue owner resolves and all expected executives are mapped.

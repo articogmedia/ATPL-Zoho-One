@@ -59,6 +59,7 @@ export async function zoho<T = unknown>(
   path: string,
   opts: { query?: Query; body?: unknown } = {},
   retried = false,
+  rateLimitAttempt = 0,
 ): Promise<T | null> {
   const url = new URL(`${hosts().api}/crm/${API_VERSION}${path}`);
   for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
@@ -76,6 +77,12 @@ export async function zoho<T = unknown>(
   if (res.status === 401 && !retried) return zoho<T>(method, path, opts, true);
 
   const json = (await res.json().catch(() => null)) as (T & { code?: string; message?: string }) | null;
+  if (res.status === 429 && rateLimitAttempt < 2) {
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 4000) : 250 * 2 ** rateLimitAttempt;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1);
+  }
   if (!res.ok) {
     throw new ZohoError(
       res.status === 429 ? "Zoho API rate limit reached. Please retry shortly." : json?.message ?? `Zoho request failed (${res.status})`,

@@ -35,6 +35,7 @@ export async function GET() {
     if (isError(configuration)) return NextResponse.json(configuration, { status: 500 });
 
     const overrides = parseRoleOverrides(env().ZOHO_ROLE_OVERRIDES);
+    const configuredQueueOwnerId = env().ZOHO_QUEUE_OWNER_ID;
     const org = await check(async () => {
       const response = await zoho<{ org?: { company_name?: string; type?: string }[] }>("GET", "/org");
       const item = response?.org?.[0];
@@ -55,11 +56,18 @@ export async function GET() {
             portalRole: mapRole(u, overrides) ?? "NOT MAPPED",
           })),
           salesExecutives: rawUsers.filter((u) => mapRole(u, overrides) === "Sales Executive").length,
+          mappedExecutiveNames: rawUsers
+            .filter((u) => mapRole(u, overrides) === "Sales Executive")
+            .map((u) => u.full_name),
           unmapped: rawUsers.filter((u) => !mapRole(u, overrides)).map((u) => ({
             name: u.full_name, email: u.email ?? "", role: u.role?.name ?? "", profile: u.profile?.name ?? "",
           })),
           suggestedRoleOverrides: rawUsers.filter((u) => !mapRole(u, overrides) && u.email)
             .map((u) => `${u.email}:Sales Executive`).join(","),
+          queueOwner: {
+            configured: !!configuredQueueOwnerId,
+            resolvesToActiveUser: !!configuredQueueOwnerId && rawUsers.some((u) => u.id === configuredQueueOwnerId),
+          },
         };
 
     const leadFields = await check(async () => {
