@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { canAccess, type Section, type User } from "@/lib/domain";
 import { crm } from "@/lib/crm";
 import { readSession } from "./session";
+import { STATIC_USERS, staticUserAsPortalUser } from "./users";
 
 export class ForbiddenError extends Error {
   constructor(message = "You are not allowed to do that.") {
@@ -18,6 +19,8 @@ export class ForbiddenError extends Error {
 export async function currentUser(): Promise<User | null> {
   const s = await readSession();
   if (!s) return null;
+  const staticUser = STATIC_USERS.find((u) => u.username === s.username && u.zohoUserId === s.zohoUserId);
+  if (staticUser) return staticUserAsPortalUser(staticUser);
   const live = (await crm().listUsers()).find((u) => u.id === s.uid);
   return live ?? null;
 }
@@ -25,7 +28,7 @@ export async function currentUser(): Promise<User | null> {
 /** For pages: redirect to login if signed out. */
 export async function requireUser(): Promise<User> {
   const user = await currentUser();
-  if (!user) redirect("/");
+  if (!user) redirect("/login");
   return user;
 }
 

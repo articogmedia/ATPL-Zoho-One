@@ -7,6 +7,10 @@ const schema = z
     AUTH_MODE: z.enum(["demo", "zoho"]).default("demo"),
     SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
     ALLOW_DEMO_LOGIN_IN_PRODUCTION: z.enum(["true", "false"]).default("false"),
+    ALLOW_DEMO_LOGIN: z.enum(["true", "false"]).default("false"),
+    ATPL_RESHMA_PASSWORD: z.string().optional(),
+    ATPL_PAVAN_PASSWORD: z.string().optional(),
+    ATPL_SAIKIRAN_PASSWORD: z.string().optional(),
 
     ZOHO_DC: z.enum(["in", "com", "eu", "au"]).default("in"),
     ZOHO_SANDBOX: z.enum(["true", "false"]).default("false"),

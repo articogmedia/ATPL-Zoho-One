@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { financialYear, isAssignable, nextOfferNo, todayIST } from "@/lib/domain";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
+import { canAccess } from "@/lib/domain";
+import { verifyStaticCredentials } from "@/lib/auth/users";
 
 describe("offer numbering", () => {
   it("derives the Indian financial year", () => {
@@ -28,6 +30,20 @@ describe("zoho mapping", () => {
     expect(normalizeSource("Google AdWords")).toBe("Google Ads");
     expect(normalizeSource("Cold Call")).toBe("Direct Call");
     expect(normalizeSource(undefined)).toBe("Direct Call");
+  });
+
+  describe("static login", () => {
+    it("accepts a configured password and rejects invalid credentials", () => {
+      process.env.ATPL_PAVAN_PASSWORD = "correct-password";
+      expect(verifyStaticCredentials("pavan", "correct-password")?.username).toBe("pavan");
+      expect(verifyStaticCredentials("pavan", "wrong-password")).toBeNull();
+      expect(verifyStaticCredentials("unknown", "correct-password")).toBeNull();
+    });
+    it("keeps section access role-based", () => {
+      expect(canAccess("Manager", "performance")).toBe(true);
+      expect(canAccess("Sales Executive", "visits")).toBe(true);
+      expect(canAccess("Calling Team", "quotations")).toBe(false);
+    });
   });
   it("maps Zoho's stock statuses to portal statuses", () => {
     expect(normalizeStatus("Not Contacted")).toBe("Fresh Lead");

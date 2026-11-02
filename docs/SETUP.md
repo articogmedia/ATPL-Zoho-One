@@ -37,12 +37,18 @@ authorization errors, a separate Self Client may be needed for the sandbox.
 
 ### Environment variables
 
-Set `DATA_SOURCE`, `AUTH_MODE`, `SESSION_SECRET`, `ZOHO_DC`, `ZOHO_SANDBOX`,
+Set `DATA_SOURCE`, `AUTH_MODE`, `SESSION_SECRET`, `ALLOW_DEMO_LOGIN`, `ZOHO_DC`, `ZOHO_SANDBOX`,
 `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`, and
 `ZOHO_QUEUE_OWNER_ID`. For Zoho sign-in also set
 `ZOHO_LOGIN_CLIENT_ID`, `ZOHO_LOGIN_CLIENT_SECRET`, and `ZOHO_LOGIN_REDIRECT_URI`.
 `ZOHO_ROLE_OVERRIDES` is optional. `ZOHO_CRM_WEB_BASE` is optional and enables
 the **Open in Zoho** link after lead create/assignment.
+
+For static portal login, set `ATPL_RESHMA_PASSWORD`, `ATPL_PAVAN_PASSWORD`, and
+`ATPL_SAIKIRAN_PASSWORD`. Replace the placeholder Zoho user ids in
+`src/lib/auth/users.ts` with the matching active CRM user ids. The static login
+uses the same signed session and server-side role checks as Zoho login.
+`ALLOW_DEMO_LOGIN=true` is required to show the sandbox demo-user buttons.
 
 Managers can check the live configuration at `/api/admin/diagnostics`; it reports
 role mappings, queue-owner resolution, picklists, custom fields, and the active

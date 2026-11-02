@@ -81,6 +81,7 @@ export function mapLead(z: ZLead, executives: ReadonlySet<string>): Lead {
     status: normalizeStatus(z.Lead_Status),
     // Ownership is the assignment: an executive owner means "assigned", anyone else means the fresh queue.
     assignedTo: executives.has(ownerName) ? ownerName : null,
+    assignedToId: executives.has(ownerName) ? z.Owner?.id : undefined,
     remarks: z.Description ?? "",
     createdOn: day(z.Created_Time),
     touchedBy: [z.Created_By?.name, z.Modified_By?.name].filter((n): n is string => !!n),
@@ -121,6 +122,7 @@ export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
     address: lead?.address ?? "",
     area: lead?.area ?? "",
     executive: z.Owner?.name ?? "",
+    executiveId: z.Owner?.id,
     type: String(z[FIELD.task.type] || z.Subject || "Work"),
     isVisit: z[FIELD.task.isSiteVisit] === true,
     date: z.Due_Date ?? "",

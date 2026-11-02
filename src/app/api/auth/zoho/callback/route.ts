@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const e = env();
   const home = new URL(e.ZOHO_LOGIN_REDIRECT_URI ?? req.url).origin;
-  const fail = (reason: string) => NextResponse.redirect(`${home}/?error=${reason}`);
+  const fail = (reason: string) => NextResponse.redirect(`${home}/login?error=${reason}`);
 
   const code = req.nextUrl.searchParams.get("code");
   const state = req.nextUrl.searchParams.get("state");

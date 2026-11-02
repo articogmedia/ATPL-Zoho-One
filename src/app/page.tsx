@@ -6,6 +6,7 @@ import { demoLoginAllowed } from "@/lib/auth/demo";
 import { currentUser } from "@/lib/auth/guard";
 import { demoLogin } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
+import { LoginForm } from "@/components/LoginForm";
 import type { Role } from "@/lib/domain";
 
 export const metadata = { title: "Sign in" };
@@ -49,9 +50,9 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-export default async function Login({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+export default async function Login({ searchParams }: { searchParams?: Promise<{ error?: string }> }) {
   if (await currentUser()) redirect("/home");
-  const { error } = await searchParams;
+  const error = (await searchParams)?.error;
   const demo = demoLoginAllowed();
   const users = demo ? await crm().listUsers() : [];
 
@@ -100,6 +101,10 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
               </a>
             </Button>
           )}
+
+          <div className="mb-5">
+            <LoginForm />
+          </div>
 
           {demo && (
             <>

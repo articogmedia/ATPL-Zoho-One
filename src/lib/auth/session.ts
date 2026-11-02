@@ -7,12 +7,12 @@ import { env } from "@/lib/env";
 export const SESSION_COOKIE = "atpl_session";
 const MAX_AGE_SECONDS = 8 * 60 * 60; // one working day
 
-export type SessionClaims = { uid: string; name: string; role: Role };
+export type SessionClaims = { uid: string; username: string; name: string; role: Role; zohoUserId: string };
 
 const key = () => new TextEncoder().encode(env().SESSION_SECRET);
 
-export async function createSession(user: User) {
-  const token = await new SignJWT({ name: user.name, role: user.role } satisfies Omit<SessionClaims, "uid">)
+export async function createSession(user: User, username = user.name.toLowerCase()) {
+  const token = await new SignJWT({ username, name: user.name, role: user.role, zohoUserId: user.id } satisfies Omit<SessionClaims, "uid">)
     .setProtectedHeader({ alg: "HS256" })
     .setSubject(user.id)
     .setIssuedAt()
@@ -33,7 +33,10 @@ export async function readSession(): Promise<SessionClaims | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, key(), { algorithms: ["HS256"] });
-    return { uid: String(payload.sub), name: String(payload.name), role: payload.role as Role };
+    const role = payload.role;
+    if (role !== "Manager" && role !== "Sales Executive" && role !== "Calling Team") return null;
+    const zohoUserId = String(payload.zohoUserId ?? payload.sub);
+    return { uid: String(payload.sub), username: String(payload.username ?? ""), name: String(payload.name), role, zohoUserId };
   } catch {
     return null;
   }
