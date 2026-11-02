@@ -10,7 +10,7 @@ import { updateVisitAction } from "@/app/actions/crm";
 import { workForTab, type User, type Visit, type WorkTab } from "@/lib/domain";
 
 const TABS: { id: WorkTab; label: string }[] = [
-  { id: "assigned", label: "Assigned" },
+  { id: "assigned", label: "Tasks" },
   { id: "progress", label: "In Progress" },
   { id: "upcoming", label: "Upcoming Visits" },
   { id: "completed", label: "Completed" },

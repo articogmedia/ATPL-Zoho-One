@@ -15,6 +15,7 @@ export type ZLead = {
 export type ZProduct = { id: string; Product_Name: string; Unit_Price?: number; Usage_Unit?: string };
 export type ZQuote = { id: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; [k: string]: unknown };
 export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; Description?: string; [k: string]: unknown };
+export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
 export type ZNote = { Note_Content?: string; Created_Time?: string; Created_By?: Ref };
 
 export function parseRoleOverrides(raw?: string): Map<string, Role> {
@@ -101,6 +102,7 @@ export function mapQuote(z: ZQuote, leadsById: ReadonlyMap<string, Lead>): Quota
     executive: z.Owner?.name ?? "",
     total: z.Grand_Total ?? 0,
     date: day(z.Created_Time),
+    status: String(z.Status ?? "Draft"),
   };
 }
 

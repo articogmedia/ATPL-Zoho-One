@@ -55,7 +55,7 @@ async function accessToken(force = false): Promise<string> {
 type Query = Record<string, string | number | undefined>;
 
 export async function zoho<T = unknown>(
-  method: "GET" | "POST" | "PUT",
+  method: "GET" | "POST" | "PUT" | "DELETE",
   path: string,
   opts: { query?: Query; body?: unknown } = {},
   retried = false,

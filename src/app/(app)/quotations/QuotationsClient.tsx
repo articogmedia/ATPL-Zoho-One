@@ -9,7 +9,7 @@ import { addLeadAction, createQuoteAction } from "@/app/actions/crm";
 import { COMPANY } from "@/lib/company";
 import { LEAD_SOURCES, formatINR, quoteTotals, type Lead, type LeadSource, type Product, type Quotation } from "@/lib/domain";
 
-type Row = { productId: string; qty: number };
+type Row = { productId: string; qty: number; discount: number };
 type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; suggestedOfferNo: string; presetLeadId: string };
 
 export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, presetLeadId }: Props) {
@@ -19,13 +19,13 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const [leadId, setLeadId] = useState(presetLeadId);
   const [adding, setAdding] = useState(false);
   const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: "Direct Call" as LeadSource });
-  const [rows, setRows] = useState<Row[]>([{ productId: products[0]?.id ?? "", qty: 1 }]);
+  const [rows, setRows] = useState<Row[]>([{ productId: products[0]?.id ?? "", qty: 1, discount: 0 }]);
   const [offerNo, setOfferNo] = useState(suggestedOfferNo);
   const [preview, setPreview] = useState(false);
   const [pending, start] = useTransition();
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
-  const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ model: p.model, unit: p.unit, price: p.price, qty: r.qty }] : []; });
+  const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ model: p.model, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
   const t = quoteTotals(items);
   const lead = myLeads.find((l) => l.id === leadId);
   const upd = (i: number, p: Partial<Row>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
@@ -44,18 +44,17 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const save = () => start(async () => {
     if (!lead) return;
     const res = await createQuoteAction({ offerNo, leadId: lead.id, items: rows });
-    if (res.ok) { toast.success("Quotation saved"); setRows([{ productId: products[0]?.id ?? "", qty: 1 }]); setPreview(false); } else toast.error(res.error);
+    if (res.ok) { toast.success("Quotation saved"); } else toast.error(res.error);
   });
 
   if (preview && lead) {
     return <Offer lead={lead} offerNo={offerNo} setOfferNo={setOfferNo} items={items} onBack={() => setPreview(false)} onSave={save} saving={pending} />;
   }
 
-  const productSelect = (r: Row, i: number) => (
-    <select aria-label="Product" className={fieldClass} value={r.productId} onChange={(e) => upd(i, { productId: e.target.value })}>
-      {products.map((m) => <option key={m.id} value={m.id}>{m.model}</option>)}
-    </select>
-  );
+  const productSelect = (r: Row, i: number) => <input aria-label="Search product" list="zoho-products" className={fieldClass} value={byId.get(r.productId)?.model ?? ""} placeholder="Search products" onChange={(e) => {
+    const product = products.find((item) => item.model === e.target.value);
+    if (product) upd(i, { productId: product.id });
+  }} />;
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
 
@@ -122,6 +121,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
                   <td className="p-2">{p?.unit}</td>
                   <td className="p-2"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
                   <td className="p-2 text-right">{formatINR(p?.price ?? 0)}</td>
+                  <td className="p-2"><input aria-label="Discount" type="number" min={0} className={fieldClass} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
                   <td className="p-2 text-right font-semibold">{formatINR((p?.price ?? 0) * r.qty)}</td>
                   <td className="p-2"><Button variant="ghost" size="icon" aria-label="Remove row" onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></td>
                 </tr>); })}
@@ -134,15 +134,17 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               <div className="flex items-center justify-between"><span className="font-semibold">#{i + 1}</span>
                 <Button variant="ghost" size="sm" onClick={() => remove(i)}><Trash2 className="h-4 w-4" /> Remove</Button></div>
               {productSelect(r, i)}
-              <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="grid grid-cols-3 gap-2 text-sm">
                 <label className="space-y-1"><span>Quantity ({p?.unit})</span><input type="number" min={1} inputMode="numeric" className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></label>
                 <div className="space-y-1"><span>Rate</span><div className="flex h-12 items-center">{formatINR(p?.price ?? 0)}</div></div>
+                <label className="space-y-1"><span>Discount</span><input type="number" min={0} className={fieldClass} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></label>
               </div>
               <div className="flex justify-between font-semibold"><span>Amount</span><span>{formatINR((p?.price ?? 0) * r.qty)}</span></div>
             </div>); })}
         </div>
         <Button variant="outline" size="lg" className="h-12 w-full sm:w-auto" disabled={rows.length >= 50 || !products.length}
-          onClick={() => setRows([...rows, { productId: products[0]!.id, qty: 1 }])}><Plus className="h-5 w-5" /> Add Row</Button>
+          onClick={() => setRows([...rows, { productId: products[0]!.id, qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add Row</Button>
+        <datalist id="zoho-products">{products.map((product) => <option key={product.id} value={product.model}>{formatINR(product.price)}</option>)}</datalist>
         <Totals t={t} />
         <Button size="lg" className="h-14 w-full text-base" disabled={!lead || !items.length} onClick={() => setPreview(true)}><Eye className="h-5 w-5" /> Preview Offer</Button>
         {!lead && <p className="text-center text-sm text-muted-foreground">Choose a customer first.</p>}
@@ -154,7 +156,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         {quotes.map((x) => (
           <div key={x.id} className="rounded-xl bg-card p-4 shadow-sm">
             <div className="flex justify-between gap-2"><span className="font-semibold">{x.customer}</span><span className="font-bold text-primary">{formatINR(x.total)}</span></div>
-            <div className="text-sm text-muted-foreground">Offer {x.offerNo} · {x.date} · {x.executive}</div>
+            <div className="text-sm text-muted-foreground">Offer {x.offerNo} · {x.date} · {x.executive} · Status: {x.status ?? "Draft"}</div>
           </div>
         ))}
       </section>
@@ -162,17 +164,18 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   );
 }
 
-function Totals({ t }: { t: { subtotal: number; gst: number; total: number } }) {
+function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; total: number } }) {
   return (
     <dl className="ml-auto max-w-sm space-y-1 rounded-lg bg-secondary p-4 text-secondary-foreground">
       <div className="flex justify-between"><dt>Subtotal</dt><dd>{formatINR(t.subtotal)}</dd></div>
-      <div className="flex justify-between"><dt>GST</dt><dd>{formatINR(t.gst)}</dd></div>
+      <div className="flex justify-between"><dt>Discount</dt><dd>-{formatINR(t.discount)}</dd></div>
+      <div className="flex justify-between"><dt>Tax</dt><dd>{formatINR(t.gst)}</dd></div>
       <div className="flex justify-between text-lg font-bold"><dt>Grand Total</dt><dd>{formatINR(t.total)}</dd></div>
     </dl>
   );
 }
 
-type Item = { model: string; unit: string; qty: number; price: number };
+type Item = { model: string; unit: string; qty: number; price: number; discount?: number };
 
 function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; onBack: () => void; onSave: () => void; saving: boolean;
@@ -208,11 +211,11 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
         <p className="font-semibold">Sub: {COMPANY.subject}</p>
         <div className="overflow-x-auto">
           <table className="w-full border text-left">
-            <thead className="bg-secondary"><tr><th className="border p-2">S.No</th><th className="border p-2">Model</th><th className="border p-2">Unit</th><th className="border p-2 text-right">Qty</th><th className="border p-2 text-right">Rate</th><th className="border p-2 text-right">Amount</th></tr></thead>
+            <thead className="bg-secondary"><tr><th className="border p-2">S.No</th><th className="border p-2">Model</th><th className="border p-2">Unit</th><th className="border p-2 text-right">Qty</th><th className="border p-2 text-right">Rate</th><th className="border p-2 text-right">Discount</th><th className="border p-2 text-right">Amount</th></tr></thead>
             <tbody>{items.map((it, i) => (
-              <tr key={i}><td className="border p-2">{i + 1}</td><td className="border p-2">{it.model}</td><td className="border p-2">{it.unit}</td><td className="border p-2 text-right">{it.qty}</td><td className="border p-2 text-right">{formatINR(it.price)}</td><td className="border p-2 text-right">{formatINR(it.qty * it.price)}</td></tr>
+              <tr key={i}><td className="border p-2">{i + 1}</td><td className="border p-2">{it.model}</td><td className="border p-2">{it.unit}</td><td className="border p-2 text-right">{it.qty}</td><td className="border p-2 text-right">{formatINR(it.price)}</td><td className="border p-2 text-right">{formatINR(it.discount ?? 0)}</td><td className="border p-2 text-right">{formatINR(it.qty * it.price - (it.discount ?? 0))}</td></tr>
             ))}</tbody>
-            <tfoot><tr><td className="border p-2 text-right font-semibold" colSpan={5}>Total</td><td className="border p-2 text-right font-semibold">{formatINR(t.total)}</td></tr></tfoot>
+            <tfoot><tr><td className="border p-2 text-right font-semibold" colSpan={6}>Total</td><td className="border p-2 text-right font-semibold">{formatINR(t.total)}</td></tr></tfoot>
           </table>
         </div>
         <Totals t={t} />

@@ -1,11 +1,15 @@
 import type {
-  Lead, LeadSource, LeadStatus, LeadUpdate, NewVisit, Product, Quotation, User, Visit, VisitStatus,
+  CallOutcome, Lead, LeadSource, LeadStatus, LeadTimelineItem, LeadUpdate, NewVisit, Product, Quotation, User, Visit, VisitStatus,
 } from "@/lib/domain";
 
 export type NewLead = { name: string; company: string; phone: string; area: string; source: LeadSource; remarks: string };
-export type LeadPatch = { status?: LeadStatus; remarks?: string; assignedTo?: string | null };
-export type NewQuote = { offerNo: string; leadId: string; items: { productId: string; qty: number }[] };
+export type LeadPatch = {
+  name?: string; company?: string; phone?: string; source?: LeadSource;
+  status?: LeadStatus; remarks?: string; assignedTo?: string | null;
+};
+export type NewQuote = { offerNo: string; leadId: string; items: { productId: string; qty: number; discount: number }[] };
 export type VisitPatch = { status?: VisitStatus; notes?: string; date?: string; time?: string; followUp?: string };
+export type LogCallInput = { leadId: string; outcome: CallOutcome; remarks: string; followUp?: string; followUpTime?: string };
 
 /**
  * The only thing the rest of the app knows about the CRM. Zoho CRM is the system of
@@ -18,9 +22,13 @@ export interface CrmRepository {
 
   listLeads(): Promise<Lead[]>;
   getLead(id: string): Promise<Lead | null>;
+  listAssignableUsers(): Promise<User[]>;
   createLead(input: NewLead, actor: User, assignTo: string | null): Promise<Lead>;
   updateLead(id: string, patch: LeadPatch, actor: User): Promise<void>;
+  deleteLead(id: string): Promise<void>;
   getLeadHistory(id: string): Promise<LeadUpdate[]>;
+  getLeadTimeline(id: string): Promise<LeadTimelineItem[]>;
+  logCall(input: LogCallInput, actor: User): Promise<void>;
 
   listProducts(): Promise<Product[]>;
   listQuotes(): Promise<Quotation[]>;

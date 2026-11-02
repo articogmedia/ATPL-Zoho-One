@@ -15,6 +15,10 @@ export const FIELD = {
     followUp: "Follow_Up_Date" /* Date */,
     type: "Task_Type" /* Single line or pick list */,
   },
+  call: {
+    result: "Call_Result",
+    startTime: "Call_Start_Time",
+  },
 } as const;
 
 /** Zoho role or profile name -> portal role. Users that match nothing cannot sign in. */

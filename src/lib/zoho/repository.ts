@@ -1,5 +1,5 @@
 import "server-only";
-import { isAssignable, quoteTotals, type Lead, type User } from "@/lib/domain";
+import { isAssignable, quoteTotals, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -7,12 +7,13 @@ import { zoho, zohoList, zohoWrite, ZohoError } from "./client";
 import { FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
-  type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
+  type ZCall, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
 
 const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Street", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
 const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "Description", ...Object.values(FIELD.task)];
-const QUOTE_FIELDS = ["Subject", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
+const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result"];
+const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
 
 const SHORT = 20_000;   // transactional lists
 const LONG = 300_000;   // users, products
@@ -37,10 +38,11 @@ async function users(): Promise<User[]> {
   return mappedUsers;
 }
 
-const assignableNames = async () => {
+const listAssignableUsers = async () => {
   const queueOwnerId = env().ZOHO_QUEUE_OWNER_ID;
-  return new Set((await users()).filter((u) => isAssignable(u, queueOwnerId)).map((u) => u.name));
+  return (await users()).filter((u) => isAssignable(u, queueOwnerId));
 };
+const assignableNames = async () => new Set((await listAssignableUsers()).map((u) => u.name));
 const userByName = async (name: string) => {
   const u = (await users()).find((x) => x.name === name);
   if (!u) throw new ZohoError(`No active Zoho user named "${name}"`);
@@ -61,8 +63,24 @@ const queueOwnerId = async () => {
 
 async function leads(): Promise<Lead[]> {
   return cached("leads", SHORT, async () => {
-    const [raw, assignable] = await Promise.all([zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS), assignableNames()]);
-    return raw.map((z) => mapLead(z, assignable));
+    const [raw, assignable, tasks] = await Promise.all([
+      zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS),
+      assignableNames(),
+      zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
+    ]);
+    const followUps = new Map<string, { date: string; time: string }>();
+    for (const task of tasks) {
+      const leadId = task.Who_Id?.id;
+      const date = String(task[FIELD.task.followUp] ?? "");
+      if (leadId && date && (!followUps.has(leadId) || date > followUps.get(leadId)!.date)) {
+        followUps.set(leadId, { date, time: String(task[FIELD.task.visitTime] ?? "") });
+      }
+    }
+    return raw.map((z) => {
+      const lead = mapLead(z, assignable);
+      const followUp = followUps.get(lead.id);
+      return followUp ? { ...lead, followUp: followUp.date, followUpTime: followUp.time } : lead;
+    });
   });
 }
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));
@@ -75,6 +93,7 @@ async function addNote(leadId: string, title: string, content: string) {
 
 export const zohoRepository: CrmRepository = {
   listUsers: users,
+  listAssignableUsers,
   async findUserByEmail(email) {
     return (await users()).find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null;
   },
@@ -105,6 +124,11 @@ export const zohoRepository: CrmRepository = {
     const record: Record<string, unknown> = {};
     const parts: string[] = [];
 
+    if (p.name?.trim() && p.name.trim() !== current.name) { record.Last_Name = p.name.trim(); parts.push("Name updated"); }
+    if (p.company !== undefined && p.company.trim() !== current.company) { record.Company = p.company.trim() || "-"; parts.push("Company updated"); }
+    if (p.phone?.trim() && p.phone.trim() !== current.phone) { record.Mobile = p.phone.trim(); parts.push("Phone updated"); }
+    if (p.source && p.source !== current.source) { record.Lead_Source = p.source; parts.push(`Source: ${p.source}`); }
+
     if (p.status && p.status !== current.status) {
       record.Lead_Status = WRITE_LEAD_STATUS[p.status];
       parts.push(`Result: ${p.status}`);
@@ -126,11 +150,62 @@ export const zohoRepository: CrmRepository = {
     invalidate("leads", "users");
   },
 
+  async deleteLead(id) {
+    const json = await zoho<{ data?: { code?: string; message?: string }[] }>("DELETE", "/Leads", { query: { ids: id } });
+    const result = json?.data?.[0];
+    if (!result || result.code !== "SUCCESS") {
+      throw new ZohoError(result?.message ?? "Zoho could not delete the lead", undefined, result?.code);
+    }
+    invalidate("leads", "users");
+  },
+
   async getLeadHistory(id) {
     const json = await zoho<{ data?: ZNote[] }>("GET", `/Leads/${id}/Notes`, {
       query: { fields: "Note_Content,Created_Time,Created_By", sort_by: "Created_Time", sort_order: "desc", per_page: 50 },
     });
     return (json?.data ?? []).map(mapNote);
+  },
+
+  async getLeadTimeline(id): Promise<LeadTimelineItem[]> {
+    const [notes, calls, tasks] = await Promise.all([
+      zoho<{ data?: ZNote[] }>("GET", `/Leads/${id}/Notes`),
+      zoho<{ data?: ZCall[] }>("GET", `/Leads/${id}/Calls`, { query: { fields: CALL_FIELDS.join(",") } }),
+      zoho<{ data?: ZTask[] }>("GET", `/Leads/${id}/Tasks`, { query: { fields: TASK_FIELDS.join(",") } }),
+    ]);
+    const timeline: LeadTimelineItem[] = [
+      ...(notes?.data ?? []).map((n) => ({ date: n.Created_Time?.slice(0, 10) ?? "", user: n.Created_By?.name ?? "", kind: "Note" as const, title: "Note", detail: n.Note_Content ?? "" })),
+      ...(calls?.data ?? []).map((c) => ({ date: c.Call_Start_Time?.slice(0, 10) ?? "", user: c.Owner?.name ?? "", kind: "Call" as const, title: String(c[FIELD.call.result] ?? c.Subject ?? "Call"), detail: String(c.Subject ?? "") })),
+      ...(tasks?.data ?? []).map((t) => ({ date: t.Due_Date ?? "", user: t.Owner?.name ?? "", kind: "Task" as const, title: String(t.Subject ?? "Task"), detail: t.Description ?? "" })),
+    ];
+    return timeline.sort((a, b) => b.date.localeCompare(a.date));
+  },
+
+  async logCall(input, actor) {
+    const lead = await this.getLead(input.leadId);
+    if (!lead) throw new ZohoError("Lead not found", 404);
+    const status = input.outcome === "Connected" ? "Contacted"
+      : input.outcome === "Call Back Later" ? "Callback in Future"
+      : input.outcome === "Wrong Number" ? "Lost"
+      : "Attempted to Contact";
+    await zohoWrite("POST", "/Calls", {
+      Subject: `${input.outcome} - ${lead.name}`,
+      What_Id: { id: lead.id }, Call_Type: "Outbound",
+      [FIELD.call.result]: input.outcome,
+      [FIELD.call.startTime]: new Date().toISOString(),
+      Description: input.remarks || undefined, Owner: { id: actor.id },
+    });
+    await zohoWrite("PUT", `/Leads/${lead.id}`, { Lead_Status: WRITE_LEAD_STATUS[status] }, { trigger: ["workflow"] });
+    await addNote(lead.id, "Call logged", `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name})`);
+    if (input.followUp) {
+      const owner = lead.assignedTo ? await userByName(lead.assignedTo) : actor;
+      await zohoWrite("POST", "/Tasks", {
+        Subject: `Follow-up call - ${lead.name}`, Status: TASK_STATUS_WRITE.Assigned,
+        Due_Date: input.followUp, Owner: { id: owner.id }, Who_Id: { id: lead.id },
+        [FIELD.task.isSiteVisit]: false, [FIELD.task.visitTime]: input.followUpTime || undefined,
+        [FIELD.task.nextAction]: "Follow up call", [FIELD.task.followUp]: input.followUp,
+      });
+    }
+    invalidate("leads", "users", "visits");
   },
 
   async listProducts() {
@@ -154,9 +229,10 @@ export const zohoRepository: CrmRepository = {
     const lines = input.items.map((i) => {
       const p = products.find((x) => x.id === i.productId);
       if (!p) throw new ZohoError("Unknown product");
-      return { p, qty: i.qty, amount: p.price * i.qty };
+      const discount = Math.min(p.price * i.qty, Math.max(0, i.discount));
+      return { p, qty: i.qty, discount, amount: p.price * i.qty - discount };
     });
-    const { total } = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price })));
+    const totals = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price, discount: l.discount })));
     const customer = lead.company || lead.name;
     const id = await zohoWrite("POST", "/Quotes", {
       Subject: `Offer ${input.offerNo} - ${customer}`,
@@ -165,13 +241,13 @@ export const zohoRepository: CrmRepository = {
       Owner: { id: owner.id },
       Quoted_Items: lines.map((l) => ({
         Product_Name: { id: l.p.id }, Quantity: l.qty, List_Price: l.p.price,
-        Total: l.amount, Total_After_Discount: l.amount, Net_Total: l.amount,
+        Discount: l.discount, Total: l.p.price * l.qty, Total_After_Discount: l.amount, Net_Total: l.amount,
       })),
-      Sub_Total: total, Grand_Total: total,
+      Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
     });
     await addNote(lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`);
     invalidate("quotes", "leads");
-    return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total, date: new Date().toISOString().slice(0, 10) };
+    return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total: totals.total, status: "Draft", date: new Date().toISOString().slice(0, 10) };
   },
 
   async listVisits() {
@@ -185,6 +261,7 @@ export const zohoRepository: CrmRepository = {
   async createVisit(input, actor) {
     const [owner, lead] = await Promise.all([userByName(input.executive), this.getLead(input.leadId)]);
     if (!lead) throw new ZohoError("Lead not found", 404);
+    const address = input.address?.trim() || [lead.address, lead.area].filter(Boolean).join(", ");
     await zohoWrite("POST", "/Tasks", {
       Subject: `${input.type} - ${lead.company || lead.name}`,
       Status: TASK_STATUS_WRITE.Assigned, Due_Date: input.date, Owner: { id: owner.id },
@@ -193,6 +270,17 @@ export const zohoRepository: CrmRepository = {
       [FIELD.task.visitTime]: input.time, [FIELD.task.nextAction]: input.nextAction,
       [FIELD.task.followUp]: input.followUp || undefined,
     });
+    if (input.isVisit) {
+      const start = `${input.date}T${input.time}:00+05:30`;
+      const endMinutes = Number(input.time.slice(0, 2)) * 60 + Number(input.time.slice(3)) + 60;
+      const end = `${input.date}T${String(Math.floor(endMinutes / 60) % 24).padStart(2, "0")}:${String(endMinutes % 60).padStart(2, "0")}:00+05:30`;
+      await zohoWrite("POST", "/Events", {
+        Event_Title: `${input.type} - ${lead.company || lead.name}`,
+        Start_DateTime: start, End_DateTime: end, Location: address || undefined,
+        Who_Id: { id: lead.id }, Owner: { id: owner.id },
+        Description: input.nextAction || undefined,
+      });
+    }
     await addNote(lead.id, "Work scheduled", `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date} (by ${actor.name})`);
     invalidate("visits");
   },

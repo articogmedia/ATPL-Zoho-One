@@ -3,12 +3,13 @@
 import { revalidatePath, revalidateTag } from "next/cache";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
+import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { ZohoError } from "@/lib/zoho/client";
 import { env } from "@/lib/env";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isAssignable, isExecutive, nextOfferNo, todayIST, visibleFor,
-  type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
+  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
+  type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
 } from "@/lib/domain";
 
 export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; duplicate?: { id: string; name: string } };
@@ -54,14 +55,16 @@ const phone = z.string().trim().transform((value, ctx) => {
 });
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+const callOutcome = z.string().refine((value): value is CallOutcome =>
+  ["Connected", "No Answer", "Busy", "Wrong Number", "Call Back Later"].includes(value),
+);
 const zohoLeadUrl = (leadId: string) => {
   const base = env().ZOHO_CRM_WEB_BASE?.replace(/\/+$/, "");
   return base ? `${base}/tab/Leads/${encodeURIComponent(leadId)}` : undefined;
 };
 
 async function assignableNames() {
-  const queueOwnerId = env().ZOHO_QUEUE_OWNER_ID;
-  return (await crm().listUsers()).filter((u) => isAssignable(u, queueOwnerId)).map((u) => u.name);
+  return (await crm().listAssignableUsers()).map((u) => u.name);
 }
 
 async function ownLeadOrThrow(user: User, leadId: string) {
@@ -98,6 +101,56 @@ const updateLeadSchema = z.object({
   id, status: status.optional(), remarks: text(500).optional(), assignedTo: text(120).nullable().optional(),
 });
 
+const editLeadSchema = z.object({
+  id, name: text(120).min(1), company: text(160), phone, source,
+  status: status.optional(), remarks: text(500).optional(),
+});
+
+export async function updateLeadAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    const p = editLeadSchema.parse(input);
+    await ownLeadOrThrow(user, p.id);
+    const patch: LeadPatch = {
+      name: p.name, company: p.company, phone: p.phone, source: p.source,
+      status: p.status, remarks: p.remarks,
+    };
+    await crm().updateLead(p.id, patch, user);
+    revalidateTag("leads");
+    return { zohoUrl: zohoLeadUrl(p.id) };
+  });
+}
+
+const reassignLeadSchema = z.object({ id, assignedTo: text(120).min(1) });
+
+export async function reassignLeadAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    if (user.role !== "Manager") throw new ForbiddenError("Only managers can reassign leads.");
+    const p = reassignLeadSchema.parse(input);
+    await ownLeadOrThrow(user, p.id);
+    if (!(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
+    await crm().updateLead(p.id, { assignedTo: p.assignedTo }, user);
+    revalidateTag("leads");
+    revalidateTag("users");
+    return { zohoUrl: zohoLeadUrl(p.id) };
+  });
+}
+
+const deleteLeadSchema = z.object({ id });
+
+export async function deleteLeadAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    if (user.role !== "Manager") throw new ForbiddenError("Only managers can delete leads.");
+    const p = deleteLeadSchema.parse(input);
+    await ownLeadOrThrow(user, p.id);
+    await crm().deleteLead(p.id);
+    revalidateTag("leads");
+    revalidateTag("users");
+  });
+}
+
 export async function saveLeadUpdateAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("leads");
@@ -125,12 +178,40 @@ export async function getLeadHistoryAction(leadId: string): Promise<ActionResult
   }
 }
 
+const callSchema = z.object({
+  leadId: id, outcome: callOutcome, remarks: text(500),
+  followUp: isoDate.optional(), followUpTime: hhmm.optional(),
+});
+
+export async function logCallAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    const data = callSchema.parse(input);
+    await ownLeadOrThrow(user, data.leadId);
+    if (data.followUp && !data.followUpTime) throw new ForbiddenError("Choose a follow-up time.");
+    await crm().logCall(data, user);
+    revalidateTag("leads");
+    revalidateTag("visits");
+  });
+}
+
+export async function getLeadTimelineAction(leadId: string): Promise<ActionResult<import("@/lib/domain").LeadTimelineItem[]>> {
+  try {
+    const user = await requireActionUser("leads");
+    await ownLeadOrThrow(user, id.parse(leadId));
+    return { ok: true, data: await crm().getLeadTimeline(leadId) };
+  } catch (err) {
+    console.error("Timeline failed", err);
+    return { ok: false, error: err instanceof ForbiddenError ? err.message : "Could not load timeline." };
+  }
+}
+
 // ---------- Quotations ----------
 
 const quoteSchema = z.object({
   offerNo: text(30).min(1),
   leadId: id,
-  items: z.array(z.object({ productId: id, qty: z.number().int().min(1).max(10_000) })).min(1).max(50),
+  items: z.array(z.object({ productId: id, qty: z.number().int().min(1).max(10_000), discount: z.number().min(0).default(0) })).min(1).max(50),
 });
 
 export async function createQuoteAction(input: unknown) {
@@ -156,7 +237,7 @@ export async function suggestOfferNoAction(): Promise<string> {
 
 const newVisitSchema = z.object({
   leadId: id, executive: text(120).optional(), type: text(80).min(1), isVisit: z.boolean(),
-  date: isoDate, time: hhmm, nextAction: text(200),
+  date: isoDate, time: hhmm, address: text(240).optional(), nextAction: text(200),
   followUp: isoDate.optional(),
 });
 

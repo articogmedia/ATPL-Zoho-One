@@ -16,6 +16,10 @@ export type LeadSource = "Meta Ads" | "Google Ads" | "Direct Call";
 export const LEAD_SOURCES: LeadSource[] = ["Meta Ads", "Google Ads", "Direct Call"];
 
 export type LeadUpdate = { date: string; user: string; note: string };
+export type CallOutcome = "Connected" | "No Answer" | "Busy" | "Wrong Number" | "Call Back Later";
+export type LeadTimelineItem = {
+  date: string; user: string; kind: "Call" | "Note" | "Task"; title: string; detail: string;
+};
 
 export type Lead = {
   id: string;
@@ -32,11 +36,13 @@ export type Lead = {
   address: string;
   /** Names of users who created / last modified the record (drives the "My Leads" tab). */
   touchedBy: string[];
+  followUp?: string;
+  followUpTime?: string;
 };
 
 export const leadLabel = (l: Lead) => (l.company ? `${l.name} (${l.company})` : l.name);
 
-export type QuoteItem = { model: string; unit: string; qty: number; price: number };
+export type QuoteItem = { model: string; unit: string; qty: number; price: number; discount?: number };
 export type Quotation = {
   id: string;
   offerNo: string;
@@ -45,6 +51,7 @@ export type Quotation = {
   executive: string;
   total: number;
   date: string;
+  status?: string;
 };
 
 export type VisitStatus = "Assigned" | "In Progress" | "Completed";
@@ -55,6 +62,7 @@ export type NewVisit = {
   isVisit: boolean;
   date: string;
   time: string;
+  address?: string;
   nextAction: string;
   followUp?: string;
 };
@@ -102,8 +110,10 @@ export function formatINR(n: number): string {
 
 export function quoteTotals(items: QuoteItem[]) {
   const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
-  const gst = Math.round(subtotal * GST_RATE);
-  return { subtotal, gst, total: subtotal + gst };
+  const discount = items.reduce((s, i) => s + Math.min(i.qty * i.price, i.discount ?? 0), 0);
+  const taxable = subtotal - discount;
+  const gst = Math.round(taxable * GST_RATE);
+  return { subtotal, discount, gst, total: taxable + gst };
 }
 
 // ---------- Performance dashboard ----------
@@ -187,7 +197,7 @@ export function leadsForTab(user: User, leads: Lead[], tab: LeadTab, search = ""
   const q = search.trim().toLowerCase();
   return visibleFor(user, leads).filter((l) => {
     if (tab === "fresh" && !(l.status === "Fresh Lead" && !l.assignedTo)) return false;
-    if (tab === "callback" && l.status !== "Callback in Future") return false;
+    if (tab === "callback" && !(l.status === "Callback in Future" && !!l.followUp && l.followUp <= todayIST())) return false;
     if (tab === "mine" && !(l.assignedTo === user.name || l.touchedBy.includes(user.name))) return false;
     if (source !== "All" && l.source !== source) return false;
     if (q && ![l.name, l.company, l.phone.replace(/\s/g, ""), l.phone, l.id].some((f) => f.toLowerCase().includes(q))) return false;

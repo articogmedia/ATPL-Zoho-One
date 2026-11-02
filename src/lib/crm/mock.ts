@@ -1,5 +1,7 @@
-import { quoteTotals, type Lead, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
-import type { CrmRepository } from "./repository";
+import { quoteTotals, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
+import type { CrmRepository, LogCallInput } from "./repository";
+import { isAssignable } from "@/lib/domain";
+import { env } from "@/lib/env";
 import { MOCK_HISTORY, MOCK_LEADS, MOCK_PRODUCTS, MOCK_QUOTES, MOCK_USERS, MOCK_VISITS } from "./mock-data";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -24,6 +26,7 @@ export const mockRepository: CrmRepository = {
 
   async listLeads() { return [...state.leads].sort((a, b) => b.createdOn.localeCompare(a.createdOn)); },
   async getLead(id) { return state.leads.find((l) => l.id === id) ?? null; },
+  async listAssignableUsers() { return MOCK_USERS.filter((u) => isAssignable(u, env().ZOHO_QUEUE_OWNER_ID)); },
   async createLead(input, actor, assignTo) {
     const lead: Lead = {
       ...input, id: `L${101 + state.leads.length}`, status: "Fresh Lead", assignedTo: assignTo,
@@ -37,6 +40,10 @@ export const mockRepository: CrmRepository = {
     const l = state.leads.find((x) => x.id === id);
     if (!l) throw new Error("Lead not found");
     const parts: string[] = [];
+    if (p.name?.trim() && p.name.trim() !== l.name) { l.name = p.name.trim(); parts.push("Name updated"); }
+    if (p.company !== undefined && p.company.trim() !== l.company) { l.company = p.company.trim(); parts.push("Company updated"); }
+    if (p.phone?.trim() && p.phone.trim() !== l.phone) { l.phone = p.phone.trim(); parts.push("Phone updated"); }
+    if (p.source && p.source !== l.source) { l.source = p.source; parts.push(`Source: ${p.source}`); }
     if (p.status && p.status !== l.status) { parts.push(`Result: ${p.status}`); l.status = p.status; }
     if (p.assignedTo !== undefined && p.assignedTo !== l.assignedTo) {
       parts.push(p.assignedTo ? `Assigned to ${p.assignedTo}` : "Unassigned");
@@ -46,7 +53,29 @@ export const mockRepository: CrmRepository = {
     if (!l.touchedBy.includes(actor.name)) l.touchedBy.push(actor.name);
     if (parts.length) note(id, actor.name, parts.join(" · "));
   },
+  async deleteLead(id) {
+    const index = state.leads.findIndex((l) => l.id === id);
+    if (index < 0) throw new Error("Lead not found");
+    state.leads.splice(index, 1);
+  },
   async getLeadHistory(id) { return state.history[id] ?? []; },
+  async getLeadTimeline(id): Promise<LeadTimelineItem[]> {
+    return (state.history[id] ?? []).map((item) => ({
+      date: item.date, user: item.user, kind: "Note" as const, title: "Note", detail: item.note,
+    }));
+  },
+  async logCall(input: LogCallInput, actor) {
+    const lead = state.leads.find((item) => item.id === input.leadId);
+    if (!lead) throw new Error("Lead not found");
+    lead.status = input.outcome === "Connected" ? "Contacted"
+      : input.outcome === "Call Back Later" ? "Callback in Future"
+      : input.outcome === "Wrong Number" ? "Lost"
+      : "Attempted to Contact";
+    lead.followUp = input.followUp;
+    lead.followUpTime = input.followUpTime;
+    note(lead.id, actor.name, `Call: ${input.outcome}${input.remarks ? ` · ${input.remarks}` : ""}`);
+    if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
+  },
 
   async listProducts() { return MOCK_PRODUCTS; },
   async listQuotes() { return [...state.quotes].sort((a, b) => b.date.localeCompare(a.date)); },
@@ -56,11 +85,11 @@ export const mockRepository: CrmRepository = {
     const items = input.items.map((i) => {
       const p = MOCK_PRODUCTS.find((x) => x.id === i.productId);
       if (!p) throw new Error("Unknown product");
-      return { model: p.model, unit: p.unit, qty: i.qty, price: p.price };
+      return { model: p.model, unit: p.unit, qty: i.qty, price: p.price, discount: Math.min(p.price * i.qty, Math.max(0, i.discount)) };
     });
     const q: Quotation = {
       id: `Q${2001 + state.quotes.length}`, offerNo: input.offerNo, leadId: lead.id,
-      customer: lead.company || lead.name, executive, date: today(), total: quoteTotals(items).total,
+      customer: lead.company || lead.name, executive, date: today(), total: quoteTotals(items).total, status: "Draft",
     };
     state.quotes.unshift(q);
     note(lead.id, actor.name, `Quotation ${q.offerNo} created`);

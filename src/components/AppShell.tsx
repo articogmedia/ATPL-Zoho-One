@@ -21,7 +21,7 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
 
   return (
     <div className="flex min-h-screen w-full bg-muted">
-      <aside className="hidden w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground lg:flex">
+      <aside className="hidden w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground md:flex">
         <Link href="/home" className="flex items-center gap-2 px-6 py-6">
           <Snowflake className="h-7 w-7" />
           <div>
@@ -40,9 +40,9 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b bg-card px-4 py-3 lg:px-8">
+        <header className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b bg-card px-4 py-3 md:px-8">
           <div className="flex min-w-0 items-center gap-3">
-            <Snowflake className="h-6 w-6 shrink-0 text-primary lg:hidden" />
+            <Snowflake className="h-6 w-6 shrink-0 text-primary md:hidden" />
             <div className="min-w-0">
               <div className="truncate font-semibold">{user.name}</div>
               <div className="truncate text-xs text-muted-foreground">{user.role}</div>
@@ -52,11 +52,11 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
             <Button type="submit" variant="outline" size="lg"><LogOut className="h-4 w-4" /> Logout</Button>
           </form>
         </header>
-        <main className="flex-1 px-4 pb-28 pt-5 lg:px-8 lg:pb-10">{children}</main>
+        <main className="min-w-0 flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">{children}</main>
       </div>
 
       {items.length > 1 && (
-        <nav className="fixed inset-x-0 bottom-0 z-30 grid border-t bg-card lg:hidden" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0,1fr))` }}>
+        <nav className="fixed inset-x-0 bottom-0 z-30 grid border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0,1fr))` }}>
           {items.map((n) => (
             <Link key={n.to} href={n.to}
               className={`flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
