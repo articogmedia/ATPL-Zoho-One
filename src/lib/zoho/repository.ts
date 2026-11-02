@@ -6,7 +6,7 @@ import type { CrmRepository } from "@/lib/crm/repository";
 import { zoho, zohoList, zohoWrite, ZohoError } from "./client";
 import { FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS } from "./fields";
 import {
-  mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser,
+  mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
   type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
 
@@ -20,7 +20,8 @@ const LONG = 300_000;   // users, products
 async function users(): Promise<User[]> {
   return cached("users", LONG, async () => {
     const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
-    return (json?.users ?? []).map(mapUser).filter((u): u is User => !!u);
+    const overrides = parseRoleOverrides(env().ZOHO_ROLE_OVERRIDES);
+    return (json?.users ?? []).map((u) => mapUser(u, overrides)).filter((u): u is User => !!u);
   });
 }
 
@@ -57,11 +58,11 @@ export const zohoRepository: CrmRepository = {
   async createLead(input, actor, assignTo) {
     const owner = assignTo ? await userByName(assignTo) : null;
     const record: Record<string, unknown> = {
-      Last_Name: input.name, Company: input.company || undefined, Mobile: input.phone, City: input.area,
+      Last_Name: input.name, Company: input.company || "-", Mobile: input.phone, City: input.area,
       Lead_Source: input.source, Lead_Status: WRITE_LEAD_STATUS["Fresh Lead"], Description: input.remarks || undefined,
       ...(owner ? { Owner: { id: owner.id } } : {}),
     };
-    const id = await zohoWrite("POST", "/Leads", record);
+    const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
     await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
     invalidate("leads");
     return (await leadMap()).get(id) ?? {
@@ -94,7 +95,7 @@ export const zohoRepository: CrmRepository = {
     if (p.remarks?.trim()) { record.Description = p.remarks.trim(); parts.push(`"${p.remarks.trim()}"`); }
     if (!parts.length) return;
 
-    await zohoWrite("PUT", `/Leads/${id}`, record);
+    await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
     await addNote(id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`);
     invalidate("leads");
   },

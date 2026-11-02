@@ -85,14 +85,25 @@ export async function zoho<T = unknown>(
   return json;
 }
 
-type WriteResult = { data: { code: string; message?: string; details?: { id?: string } }[] };
+type WriteResult = {
+  data: { code: string; message?: string; details?: { id?: string; api_name?: string } }[];
+};
 
 /** POST/PUT wrapper that fails if ANY record in the response is not SUCCESS, and returns the first id. */
-export async function zohoWrite(method: "POST" | "PUT", path: string, record: unknown): Promise<string> {
-  const json = await zoho<WriteResult>(method, path, { body: { data: [record] } });
+export async function zohoWrite(
+  method: "POST" | "PUT",
+  path: string,
+  record: unknown,
+  opts: { trigger?: string[] } = {},
+): Promise<string> {
+  const json = await zoho<WriteResult>(method, path, {
+    body: { data: [record], ...(opts.trigger ? { trigger: opts.trigger } : {}) },
+  });
   const first = json?.data?.[0];
   if (!first || first.code !== "SUCCESS") {
-    throw new ZohoError(first?.message ?? "Zoho rejected the change", undefined, first?.code);
+    const message = first?.message ?? "Zoho rejected the change";
+    const apiName = first?.details?.api_name;
+    throw new ZohoError(apiName ? `${message} (field: ${apiName})` : message, undefined, first?.code);
   }
   return first.details?.id ?? "";
 }

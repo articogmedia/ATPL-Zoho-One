@@ -36,7 +36,7 @@ export const WRITE_LEAD_STATUS: Record<LeadStatus, string> = {
   "Site Visit Scheduled": "Site Visit Scheduled",
   "Quotation Sent": "Quotation Sent",
   Won: "Won",
-  Lost: "Lost",
+  Lost: "Lost Lead",
 };
 
 /** Tolerant READ mapping, so Zoho's stock statuses still land in a sensible bucket. */

@@ -17,7 +17,26 @@ export type ZQuote = { id: string; Owner?: Ref; Created_Time?: string; Grand_Tot
 export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; Description?: string; [k: string]: unknown };
 export type ZNote = { Note_Content?: string; Created_Time?: string; Created_By?: Ref };
 
-export function mapRole(u: ZUser): Role | null {
+export function parseRoleOverrides(raw?: string): Map<string, Role> {
+  const overrides = new Map<string, Role>();
+  for (const entry of raw?.split(",") ?? []) {
+    const separator = entry.lastIndexOf(":");
+    if (separator <= 0) continue;
+    const email = entry.slice(0, separator).trim().toLowerCase();
+    const roleName = entry.slice(separator + 1).trim().toLowerCase();
+    if (!email || !roleName) continue;
+    const role = (["Manager", "Sales Executive", "Calling Team"] as const).find(
+      (candidate) => candidate.toLowerCase() === roleName,
+    );
+    if (role) overrides.set(email, role);
+  }
+  return overrides;
+}
+
+export function mapRole(u: ZUser, overrides?: ReadonlyMap<string, Role>): Role | null {
+  const email = u.email?.trim().toLowerCase();
+  const override = email ? overrides?.get(email) : undefined;
+  if (override) return override;
   for (const name of [u.role?.name, u.profile?.name]) {
     const r = name ? ROLE_BY_ZOHO_NAME[name.trim().toLowerCase()] : undefined;
     if (r) return r;
@@ -25,8 +44,8 @@ export function mapRole(u: ZUser): Role | null {
   return null;
 }
 
-export function mapUser(u: ZUser): User | null {
-  const role = mapRole(u);
+export function mapUser(u: ZUser, overrides?: ReadonlyMap<string, Role>): User | null {
+  const role = mapRole(u, overrides);
   return role ? { id: u.id, name: u.full_name, role, email: u.email } : null;
 }
 

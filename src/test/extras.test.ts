@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { financialYear, nextOfferNo, todayIST } from "@/lib/domain";
-import { mapLead, mapRole, mapTask, mapTaskStatus, normalizeSource, normalizeStatus } from "@/lib/zoho/mappers";
+import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 
 describe("offer numbering", () => {
   it("derives the Indian financial year", () => {
@@ -46,6 +46,17 @@ describe("zoho mapping", () => {
     expect(mapRole({ id: "1", full_name: "A", role: { name: "Sales Executive" } })).toBe("Sales Executive");
     expect(mapRole({ id: "1", full_name: "A", profile: { name: "Administrator" } })).toBe("Manager");
     expect(mapRole({ id: "1", full_name: "A", role: { name: "Intern" } })).toBeNull();
+  });
+  it("parses explicit role overrides and ignores malformed or unknown entries", () => {
+    expect([...parseRoleOverrides("Anil@ATPL.com:sales executive, bad-entry, x@y.com:Superuser, boss@atpl.com:Manager")]).toEqual([
+      ["anil@atpl.com", "Sales Executive"],
+      ["boss@atpl.com", "Manager"],
+    ]);
+  });
+  it("prefers an override over names and leaves unknown roles unmapped", () => {
+    const overrides = parseRoleOverrides("a@example.com:Calling Team");
+    expect(mapUser({ id: "1", full_name: "A", email: "A@EXAMPLE.COM", role: { name: "Manager" } }, overrides)?.role).toBe("Calling Team");
+    expect(mapUser({ id: "2", full_name: "B", role: { name: "Unknown" } })).toBeNull();
   });
   it("maps tasks to visits using the linked lead's address", () => {
     const lead = mapLead({ id: "L1", Last_Name: "Ramesh", Company: "Clinic", Street: "Plot 45", City: "Kukatpally", Owner: { id: "u1", name: "Anil Kumar" } }, execs);

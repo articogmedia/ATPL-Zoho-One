@@ -10,6 +10,8 @@ const schema = z
 
     ZOHO_DC: z.enum(["in", "com", "eu", "au"]).default("in"),
     ZOHO_SANDBOX: z.enum(["true", "false"]).default("false"),
+    /** Explicit roles, "email:Role,email:Role", wins over role/profile name matching. */
+    ZOHO_ROLE_OVERRIDES: z.string().optional(),
     ZOHO_API_BASE_URL: z.string().url().optional(),
     ZOHO_CLIENT_ID: z.string().optional(),
     ZOHO_CLIENT_SECRET: z.string().optional(),

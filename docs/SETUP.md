@@ -18,13 +18,15 @@ Use a **dedicated CRM admin user** (e.g. `portal@…`) as the integration identi
 ### Using the Zoho sandbox
 
 Sandbox access requires Zoho CRM Enterprise or above. Set `ZOHO_SANDBOX=true` to use
-the sandbox CRM API host; OAuth accounts URLs remain selected by `ZOHO_DC`. The custom
+the sandbox CRM API host (`https://sandbox.zohoapis.<dc>`); OAuth accounts URLs remain selected by `ZOHO_DC`.
+The refresh token must be generated for the SANDBOX org; a live-org token causes `DOMAIN_TOKEN_MISMATCH`.
+The custom
 fields in step 3 must be created in the sandbox too. If sandbox calls return
 authorization errors, a separate Self Client may be needed for the sandbox.
 
 1. In the API Console add a **Self Client**. Put its Client ID / Secret in `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET`.
 2. Open its **Generate Code** tab. Scope (comma-separated):
-   `ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.users.READ`
+   `ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.users.READ,ZohoCRM.org.READ,ZohoCRM.settings.fields.READ`
    Time duration 10 minutes → Generate → copy the code.
 3. Exchange it before it expires:
    ```bash
@@ -49,7 +51,7 @@ Different API names? Change them in `src/lib/zoho/fields.ts` — nothing else.
 
 ## 4. Pick-list values
 
-- **Leads → Lead Status:** Fresh Lead, Attempted to Contact, Callback in Future, Contacted, Site Visit Scheduled, Quotation Sent, Won, Lost.
+- **Leads → Lead Status:** Fresh Lead, Attempted to Contact, Callback in Future, Contacted, Site Visit Scheduled, Quotation Sent, Won, Lost Lead.
 - **Leads → Lead Source:** Meta Ads, Google Ads, Direct Call (other values such as "Facebook" are folded in automatically).
 - Meta/Google lead forms keep feeding Zoho natively (plan §P2). Map their source to the values above and set new-lead default status to **Fresh Lead**.
 
