@@ -29,7 +29,9 @@ export async function cached<T>(key: string, ttlMs: number, load: () => Promise<
 
 export function invalidate(...prefixes: string[]) {
   for (const prefix of prefixes) {
-    store.inflight.delete(prefix);
+    for (const key of store.inflight.keys()) {
+      if (key === prefix || key.startsWith(`${prefix}:`)) store.inflight.delete(key);
+    }
     revalidateTag(tagFor(prefix));
   }
 }

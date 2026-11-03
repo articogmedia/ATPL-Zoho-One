@@ -18,6 +18,10 @@ const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total
 const SHORT = 20_000;   // transactional lists
 const LONG = 300_000;   // users, products
 
+const taskRows = () => cached("visits:tasks", SHORT, () =>
+  zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
+);
+
 async function users(): Promise<User[]> {
   const mappedUsers = await cached("users", LONG, async () => {
     const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
@@ -66,7 +70,7 @@ async function leads(): Promise<Lead[]> {
     const [raw, assignable, tasks] = await Promise.all([
       zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS),
       assignableNames(),
-      zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
+      taskRows(),
     ]);
     const followUps = new Map<string, { date: string; time: string }>();
     for (const task of tasks) {
@@ -252,7 +256,7 @@ export const zohoRepository: CrmRepository = {
 
   async listVisits() {
     return cached("visits", SHORT, async () => {
-      const [raw, map] = await Promise.all([zohoList<ZTask>("Tasks", TASK_FIELDS, 1000), leadMap()]);
+      const [raw, map] = await Promise.all([taskRows(), leadMap()]);
       return raw.map((z) => mapTask(z, map));
     });
   },
