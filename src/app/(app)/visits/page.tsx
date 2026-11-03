@@ -20,6 +20,10 @@ export default async function VisitsPage() {
   }
   const callsResult = results[4];
   if (callsResult.status === "rejected") console.error("[page] Calls list failed", callsResult.reason);
+  const callsError = callsResult.status === "rejected"
+    ? callsResult.reason instanceof Error ? callsResult.reason.message : String(callsResult.reason)
+    : "";
+  const callsScopeMismatch = /scope|permission/i.test(callsError);
   const visits = results[0].status === "fulfilled" ? results[0].value : [];
   const assignableUsers = results[1].status === "fulfilled" ? results[1].value : [];
   const leads = results[2].status === "fulfilled" ? results[2].value : [];
@@ -36,7 +40,7 @@ export default async function VisitsPage() {
   return (
     <>
       <h1 className="mb-5 text-2xl font-bold">My Work &amp; Site Visits</h1>
-      {callsResult.status === "rejected" && <div role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Call history is temporarily unavailable. Visits are still shown.</div>}
+      {callsResult.status === "rejected" && <div role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{callsScopeMismatch ? "Call history is unavailable because the Zoho refresh token lacks Calls permission. Re-authorize Zoho with ZohoCRM.modules.calls.ALL, then reconnect." : "Call history is temporarily unavailable. Visits are still shown."}</div>}
       <VisitsClient
         user={{ id: user.id, name: user.name, role: user.role }}
         visits={visibleFor(user, visits)}

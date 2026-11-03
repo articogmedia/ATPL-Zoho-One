@@ -10,7 +10,11 @@ export default async function LeadsPage() {
   const started = Date.now();
   const user = await requireSection("leads");
   const repo = crm();
-  const [all, assignableUsers] = await Promise.all([repo.listLeads(), repo.listAssignableUsers()]);
+  const [all, assignableUsers, fixableLeads] = await Promise.all([
+    repo.listLeads(),
+    repo.listAssignableUsers(),
+    user.role === "Manager" ? repo.listFixableAssignedLeads(user) : [],
+  ]);
   console.info(`[page] leads ${Date.now() - started}ms`);
   return (
     <LeadsClient
@@ -19,6 +23,7 @@ export default async function LeadsPage() {
       executives={assignableUsers.map((u) => u.name)}
       owners={assignableUsers.map((u) => u.name)}
       canAssign={user.role === "Manager" || user.role === "Calling Team"}
+      fixableLeads={fixableLeads}
     />
   );
 }

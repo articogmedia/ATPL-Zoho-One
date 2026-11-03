@@ -217,6 +217,20 @@ export const zohoRepository: CrmRepository = {
     invalidate("leads");
     return stale.length;
   },
+  async listFixableAssignedLeads(actor) {
+    if (actor.role !== "Manager") throw new ZohoError("Only managers can inspect assigned leads.");
+    const [allLeads, allUsers] = await Promise.all([leads(), users()]);
+    const salesUsers = new Map(allUsers
+      .filter((user) => user.role === "Sales Executive")
+      .map((user) => [String(user.id).trim(), user.name]));
+    return allLeads
+      .filter((lead) => lead.status === "Fresh Lead" && salesUsers.has(String(lead.ownerId ?? "").trim()))
+      .map((lead) => ({
+        id: lead.id,
+        name: lead.name,
+        ownerName: salesUsers.get(String(lead.ownerId ?? "").trim()) ?? "",
+      }));
+  },
 
   async updateLead(id, p, actor) {
     const current = await this.getLead(id);

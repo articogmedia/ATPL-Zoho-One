@@ -211,6 +211,14 @@ export async function fixAssignedLeadsAction() {
   });
 }
 
+export async function listFixableAssignedLeadsAction() {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    if (user.role !== "Manager") throw new ForbiddenError("Only managers can inspect assigned leads.");
+    return crm().listFixableAssignedLeads(user);
+  });
+}
+
 export async function getLeadTimelineAction(leadId: string): Promise<ActionResult<import("@/lib/domain").LeadTimelineItem[]>> {
   try {
     const user = await requireActionUser("leads");

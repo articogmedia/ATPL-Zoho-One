@@ -51,6 +51,12 @@ export const mockRepository: CrmRepository = {
     stale.forEach((lead) => { lead.status = ASSIGNED_STAGE; });
     return stale.length;
   },
+  async listFixableAssignedLeads(actor) {
+    if (actor.role !== "Manager") throw new Error("Only managers can inspect assigned leads.");
+    return state.leads
+      .filter((lead) => lead.status === "Fresh Lead" && !!lead.assignedTo)
+      .map((lead) => ({ id: lead.id, name: lead.name, ownerName: lead.assignedTo ?? "" }));
+  },
   async updateLead(id, p, actor) {
     const l = state.leads.find((x) => x.id === id);
     if (!l) throw new Error("Lead not found");

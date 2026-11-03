@@ -273,7 +273,7 @@ export function leadBucket(lead: Lead): LeadBucket {
   if (lead.status === "Fresh Lead" && !hasAssignee) return "fresh";
   if (lead.status === "Fresh Lead" && hasAssignee) return "assigned";
   if (lead.status === "Assigned to Sales") return "assigned";
-  if (lead.status === "Callback in Future" && !!lead.followUp && lead.followUp <= todayIST()) return "callback";
+  if (lead.status === "Callback in Future") return "callback";
   return "other";
 }
 

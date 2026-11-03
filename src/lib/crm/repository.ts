@@ -26,6 +26,7 @@ export interface CrmRepository {
   createLead(input: NewLead, actor: User, assignTo: string | null): Promise<Lead>;
   assignLead(id: string, assignee: string, actor: User): Promise<void>;
   fixAssignedLeads(actor: User): Promise<number>;
+  listFixableAssignedLeads(actor: User): Promise<{ id: string; name: string; ownerName: string }[]>;
   updateLead(id: string, patch: LeadPatch, actor: User): Promise<void>;
   deleteLead(id: string): Promise<void>;
   getLeadHistory(id: string): Promise<LeadUpdate[]>;
