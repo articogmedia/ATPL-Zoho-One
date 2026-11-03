@@ -82,6 +82,7 @@ export function mapLead(z: ZLead, executives: ReadonlySet<string>): Lead {
     // Ownership is the assignment: an executive owner means "assigned", anyone else means the fresh queue.
     assignedTo: executives.has(ownerName) ? ownerName : null,
     assignedToId: executives.has(ownerName) ? z.Owner?.id : undefined,
+    ownerId: z.Owner?.id,
     remarks: z.Description ?? "",
     createdOn: day(z.Created_Time),
     touchedBy: [z.Created_By?.name, z.Modified_By?.name].filter((n): n is string => !!n),
@@ -101,6 +102,7 @@ export function mapQuote(z: ZQuote, leadsById: ReadonlyMap<string, Lead>): Quota
     leadId: ref?.id ?? "",
     customer: lead ? lead.company || lead.name : ref?.name ?? "",
     executive: z.Owner?.name ?? "",
+    ownerId: z.Owner?.id,
     total: z.Grand_Total ?? 0,
     date: day(z.Created_Time),
     status: String(z.Status ?? "Draft"),

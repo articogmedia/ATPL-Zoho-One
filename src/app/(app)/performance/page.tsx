@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
-import { isExecutive, perfStats, todayIST, type PerfRange } from "@/lib/domain";
+import { perfStats, todayIST, type PerfRange } from "@/lib/domain";
+import { portalRole, STATIC_USERS } from "@/lib/auth/users";
 
 export const metadata = { title: "Performance" };
 export const dynamic = "force-dynamic";
@@ -14,13 +15,19 @@ const RANGES: { id: PerfRange; label: string }[] = [
 const fmtDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 
 export default async function PerformancePage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
-  await requireSection("performance");
+  const viewer = await requireSection("performance");
   const { range: raw } = await searchParams;
   const range: PerfRange = RANGES.some((r) => r.id === raw) ? (raw as PerfRange) : "month";
 
   const repo = crm();
-  const [leads, quotes, visits, users] = await Promise.all([repo.listLeads(), repo.listQuotes(), repo.listVisits(), repo.listUsers()]);
-  const s = perfStats(leads, quotes, visits, range, todayIST(), users.filter(isExecutive).map((u) => u.name));
+  const [leads, quotes, visits] = await Promise.all([repo.listLeads(), repo.listQuotes(), repo.listVisits()]);
+  const executives = STATIC_USERS.map((user) => ({
+    id: user.zohoUserId.trim(),
+    name: user.role === "Manager" ? `${user.name} (Manager)` : user.name,
+    role: portalRole(user.role),
+  }));
+  const s = perfStats(leads, quotes, visits, range, todayIST(), executives, viewer);
+  const unsetIds = STATIC_USERS.filter((user) => user.zohoUserId.startsWith("REPLACE_")).map((user) => user.name);
 
   const cards = [
     { k: "Total Leads", v: String(s.totalLeads), sub: `${s.won} won` },
@@ -34,6 +41,11 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
   return (
     <div className="space-y-5">
       <h1 className="text-2xl font-bold">Performance</h1>
+      {viewer.role === "Manager" && unsetIds.length > 0 && (
+        <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {unsetIds.map((name) => <div key={name}>Zoho user ID not set for {name}</div>)}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {RANGES.map((r) => (
           <Link key={r.id} href={`/performance?range=${r.id}`} scroll={false}
@@ -82,8 +94,8 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
 
       <div className="rounded-xl bg-card p-5 shadow-sm">
         <h2 className="mb-4 text-base font-semibold">Executive-wise Performance</h2>
-        <div className="hidden overflow-x-auto md:block">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+          <table className="min-w-[700px] w-full text-sm">
             <thead>
               <tr className="border-b text-left text-muted-foreground">
                 <th className="py-2 pr-3 font-medium">Executive</th>
@@ -107,21 +119,6 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
               ))}
             </tbody>
           </table>
-        </div>
-        <div className="space-y-3 md:hidden">
-          {s.rows.map((r) => (
-            <div key={r.name} className="rounded-lg border p-3">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold">{r.name}</span>
-                <span className="rounded-full bg-accent px-2.5 py-1 text-xs font-semibold text-accent-foreground">{r.conversion}%</span>
-              </div>
-              <div className="mt-2 grid grid-cols-4 gap-2 text-center text-sm">
-                {([["Leads", r.leads], ["Visits", r.visits], ["Quotes", r.quotes], ["Won", r.won]] as const).map(([l, n]) => (
-                  <div key={l}><div className="font-bold">{n}</div><div className="text-xs text-muted-foreground">{l}</div></div>
-                ))}
-              </div>
-            </div>
-          ))}
         </div>
       </div>
     </div>

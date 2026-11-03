@@ -13,7 +13,7 @@ export type StaticUser = {
 export const STATIC_USERS: readonly StaticUser[] = [
   { username: "reshma", name: "Reshma", role: "Manager", zohoUserId: "REPLACE_RESHMA_ZOHO_USER_ID", passwordEnv: "ATPL_RESHMA_PASSWORD" },
   { username: "pavan", name: "Pavan", role: "Sales", zohoUserId: "REPLACE_PAVAN_ZOHO_USER_ID", passwordEnv: "ATPL_PAVAN_PASSWORD" },
-  { username: "saikiran", name: "Saikiran", role: "Sales", zohoUserId: "REPLACE_SAIKIRAN_ZOHO_USER_ID", passwordEnv: "ATPL_SAIKIRAN_PASSWORD" },
+  { username: "saikiran", name: "Sai Kiran", role: "Sales", zohoUserId: "REPLACE_SAIKIRAN_ZOHO_USER_ID", passwordEnv: "ATPL_SAIKIRAN_PASSWORD" },
 ];
 
 export function portalRole(role: StaticRole): Role {

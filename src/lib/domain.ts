@@ -31,6 +31,7 @@ export type Lead = {
   status: LeadStatus;
   assignedTo: string | null;
   assignedToId?: string;
+  ownerId?: string;
   remarks: string;
   createdOn: string;
   /** Street address (used on site-visit cards). */
@@ -53,6 +54,7 @@ export type Quotation = {
   total: number;
   date: string;
   status?: string;
+  ownerId?: string;
 };
 
 export type VisitStatus = "Assigned" | "In Progress" | "Completed";
@@ -138,39 +140,98 @@ export function rangeDates(range: PerfRange, today: string): { from: string; to:
   return { from: todayISO(first), to: todayISO(last) };
 }
 
+export type PerfExecutive = { id: string; name: string; role: Role };
 export type PerfRow = { name: string; leads: number; visits: number; quotes: number; won: number; conversion: number };
 
+const normalizeOwnerId = (id: unknown) => String(id ?? "").trim();
+
 /** Everything the dashboard shows, for one date range. */
-export function perfStats(leads: Lead[], quotes: Quotation[], visits: Visit[], range: PerfRange, today: string, executives: string[]) {
+export function perfStats(
+  leads: Lead[],
+  quotes: Quotation[],
+  visits: Visit[],
+  range: PerfRange,
+  today: string,
+  executives: (PerfExecutive | string)[],
+  viewer?: User,
+) {
   const { from, to } = rangeDates(range, today);
   const inR = (date: string) => date >= from && date <= to;
   const ls = leads.filter((l) => inR(l.createdOn));
   const qs = quotes.filter((q) => inR(q.date));
   const vs = visits.filter((v) => v.isVisit && inR(v.date));
+  const viewerId = normalizeOwnerId(viewer?.id);
+  const viewerName = viewer?.name.trim();
+  const scopedLeads = viewer?.role === "Sales Executive"
+    ? ls.filter((lead) => normalizeOwnerId(lead.ownerId ?? lead.assignedToId) === viewerId ||
+      (!lead.ownerId && !lead.assignedToId && lead.assignedTo === viewerName))
+    : ls;
+  const scopedQuotes = viewer?.role === "Sales Executive"
+    ? qs.filter((quote) => normalizeOwnerId(quote.ownerId) === viewerId ||
+      (!quote.ownerId && quote.executive === viewerName))
+    : qs;
+  const scopedVisits = viewer?.role === "Sales Executive"
+    ? vs.filter((visit) => normalizeOwnerId(visit.executiveId) === viewerId ||
+      (!visit.executiveId && visit.executive === viewerName))
+    : vs;
   const bySource = LEAD_SOURCES.map((source) => ({ source, count: ls.filter((l) => l.source === source).length }));
-  const won = ls.filter((l) => l.status === "Won").length;
-  const rows: PerfRow[] = executives.map((name) => {
-    const mine = ls.filter((l) => l.assignedTo === name);
-    const wonN = mine.filter((l) => l.status === "Won").length;
-    return {
-      name,
-      leads: mine.length,
-      visits: vs.filter((v) => v.executive === name && v.status === "Completed").length,
-      quotes: qs.filter((q) => q.executive === name).length,
-      won: wonN,
-      conversion: mine.length ? Math.round((wonN / mine.length) * 100) : 0,
-    };
-  });
+  const roster = executives.map((executive) =>
+    typeof executive === "string" ? { id: "", name: executive, role: "Sales Executive" as const } : executive,
+  );
+  const visibleRoster = viewer?.role === "Sales Executive"
+    ? roster.filter((executive) => normalizeOwnerId(executive.id) === normalizeOwnerId(viewer.id))
+    : roster;
+  const byId = new Map(visibleRoster.filter((executive) => executive.id).map((executive) => [normalizeOwnerId(executive.id), executive]));
+  const byName = new Map(visibleRoster.map((executive) => [executive.name.trim(), executive]));
+  const totals = new Map<string, PerfRow>();
+  for (const executive of visibleRoster) {
+    totals.set(executive.id ? normalizeOwnerId(executive.id) : executive.name, {
+      name: executive.name, leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0,
+    });
+  }
+  const other: PerfRow = { name: "Other / Unassigned", leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0 };
+  const rowFor = (id: string | undefined, name: string | undefined) => {
+    const executive = id ? byId.get(normalizeOwnerId(id)) : byName.get((name ?? "").trim());
+    if (!executive) return other;
+    const key = executive.id ? normalizeOwnerId(executive.id) : executive.name;
+    const existing = totals.get(key) ?? { name: executive.name, leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0 };
+    totals.set(key, existing);
+    return existing;
+  };
+  for (const lead of scopedLeads) {
+    const row = rowFor(lead.ownerId ?? lead.assignedToId, lead.assignedTo ?? undefined);
+    row.leads++;
+    if (lead.status === "Won") row.won++;
+  }
+  for (const visit of scopedVisits) {
+    if (visit.status === "Completed") rowFor(visit.executiveId, visit.executive).visits++;
+  }
+  for (const quote of scopedQuotes) rowFor(quote.ownerId, quote.executive).quotes++;
+  for (const row of totals.values()) row.conversion = row.leads ? Math.round((row.won / row.leads) * 100) : 0;
+  if (other.leads || other.visits || other.quotes) {
+    other.conversion = other.leads ? Math.round((other.won / other.leads) * 100) : 0;
+    totals.set("other", other);
+  }
+  const rows = [...totals.values()];
+  const totalRow: PerfRow = {
+    name: "Total",
+    leads: scopedLeads.length,
+    visits: scopedVisits.filter((v) => v.status === "Completed").length,
+    quotes: scopedQuotes.length,
+    won: scopedLeads.filter((lead) => lead.status === "Won").length,
+    conversion: scopedLeads.length ? Math.round((scopedLeads.filter((lead) => lead.status === "Won").length / scopedLeads.length) * 100) : 0,
+  };
   return {
     from, to,
-    totalLeads: ls.length,
-    won,
-    conversion: ls.length ? Math.round((won / ls.length) * 100) : 0,
+    totalLeads: scopedLeads.length,
+    won: scopedLeads.filter((lead) => lead.status === "Won").length,
+    conversion: scopedLeads.length ? Math.round((scopedLeads.filter((lead) => lead.status === "Won").length / scopedLeads.length) * 100) : 0,
     bySource,
     scheduled: vs.length,
     completed: vs.filter((v) => v.status === "Completed").length,
     quotesSent: qs.length,
-    rows,
+    rows: viewer?.role === "Manager" || !viewer ? [...rows, totalRow] : rows,
+    totalRow,
   };
 }
 
