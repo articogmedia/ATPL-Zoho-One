@@ -1,5 +1,6 @@
 import "server-only";
 import { env, ZOHO_HOSTS } from "@/lib/env";
+import { revalidateTag, unstable_cache } from "next/cache";
 
 /** Server-side Zoho CRM client. Tokens never leave the server. */
 export class ZohoError extends Error {
@@ -26,9 +27,12 @@ export const hosts = () => {
 };
 const API_VERSION = "v6";
 
-const g = globalThis as unknown as { __atplZohoToken?: { value: string; exp: number }; __atplZohoRefresh?: Promise<string> };
+const g = globalThis as unknown as {
+  __atplZohoToken?: { value: string; exp: number };
+  __atplZohoRefresh?: Promise<string>;
+};
 
-async function refreshAccessToken(): Promise<string> {
+async function requestAccessToken(): Promise<{ value: string; exp: number }> {
   const e = env();
   const body = new URLSearchParams({
     refresh_token: e.ZOHO_REFRESH_TOKEN!, client_id: e.ZOHO_CLIENT_ID!,
@@ -39,16 +43,36 @@ async function refreshAccessToken(): Promise<string> {
   });
   const json = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string };
   if (!res.ok || !json.access_token) throw new ZohoError(`Zoho token refresh failed: ${json.error ?? res.status}`, res.status);
-  // Zoho limits how many access tokens can be minted, so cache until shortly before expiry.
-  g.__atplZohoToken = { value: json.access_token, exp: Date.now() + ((json.expires_in ?? 3600) - 120) * 1000 };
-  return json.access_token;
+  const lifetimeMs = Math.max(60_000, ((json.expires_in ?? 3600) - 120) * 1000);
+  return { value: json.access_token, exp: Date.now() + lifetimeMs };
+}
+
+const cachedAccessToken = unstable_cache(
+  requestAccessToken,
+  ["atpl", "zoho-access-token"],
+  { revalidate: 3_480, tags: ["zoho-access-token"] },
+);
+
+async function refreshAccessToken(): Promise<string> {
+  const token = await cachedAccessToken();
+  g.__atplZohoToken = token;
+  return token.value;
 }
 
 async function accessToken(force = false): Promise<string> {
   const t = g.__atplZohoToken;
   if (!force && t && t.exp > Date.now()) return t.value;
+  if (force) revalidateTag("zoho-access-token");
   // De-duplicate concurrent refreshes.
-  g.__atplZohoRefresh ??= refreshAccessToken().finally(() => { g.__atplZohoRefresh = undefined; });
+  g.__atplZohoRefresh ??= (async () => {
+    const cached = await cachedAccessToken();
+    if (cached.exp > Date.now() + 1_000) {
+      g.__atplZohoToken = cached;
+      return cached.value;
+    }
+    revalidateTag("zoho-access-token");
+    return refreshAccessToken();
+  })().finally(() => { g.__atplZohoRefresh = undefined; });
   return g.__atplZohoRefresh;
 }
 
@@ -61,6 +85,7 @@ export async function zoho<T = unknown>(
   retried = false,
   rateLimitAttempt = 0,
 ): Promise<T | null> {
+  const started = Date.now();
   const url = new URL(`${hosts().api}/crm/${API_VERSION}${path}`);
   for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
 
@@ -72,6 +97,7 @@ export async function zoho<T = unknown>(
     },
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
+  console.info(`[zoho] ${method} ${path} ${res.status} ${Date.now() - started}ms`);
 
   if (res.status === 204) return null;
   if (res.status === 401 && !retried) return zoho<T>(method, path, opts, true);

@@ -1,10 +1,9 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { crm } from "@/lib/crm";
 import { demoLoginAllowed } from "@/lib/auth/demo";
 import { createSession, destroySession } from "@/lib/auth/session";
-import { staticUserAsPortalUser, verifyStaticCredentials } from "@/lib/auth/users";
+import { STATIC_USERS, staticUserAsPortalUser, verifyStaticCredentials } from "@/lib/auth/users";
 
 const LOCKOUT_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
@@ -12,9 +11,9 @@ const attempts = globalThis as typeof globalThis & { __atplLoginAttempts?: Map<s
 
 export async function demoLogin(userId: string) {
   if (!demoLoginAllowed()) redirect("/login");
-  const user = (await crm().listUsers()).find((u) => u.id === userId);
+  const user = STATIC_USERS.find((candidate) => candidate.zohoUserId === userId);
   if (!user) redirect("/login");
-  await createSession(user);
+  await createSession(staticUserAsPortalUser(user), user.username);
   redirect("/home");
 }
 

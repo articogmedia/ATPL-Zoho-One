@@ -8,9 +8,11 @@ export const metadata = { title: "Manage Leads" };
 export const dynamic = "force-dynamic";
 
 export default async function LeadsPage() {
+  const started = Date.now();
   const user = await requireSection("leads");
   const repo = crm();
   const [all, assignableUsers] = await Promise.all([repo.listLeads(), repo.listAssignableUsers()]);
+  console.info(`[page] leads ${Date.now() - started}ms`);
   return (
     <LeadsClient
       user={{ id: user.id, name: user.name, role: user.role }}

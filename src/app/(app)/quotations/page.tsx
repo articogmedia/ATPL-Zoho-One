@@ -7,10 +7,12 @@ export const metadata = { title: "Create Quotation" };
 export const dynamic = "force-dynamic";
 
 export default async function QuotationsPage({ searchParams }: { searchParams: Promise<{ lead?: string }> }) {
+  const started = Date.now();
   const user = await requireSection("quotations");
   const { lead } = await searchParams;
   const repo = crm();
   const [leads, products, quotes] = await Promise.all([repo.listLeads(), repo.listProducts(), repo.listQuotes()]);
+  console.info(`[page] quotations ${Date.now() - started}ms`);
 
   return (
     <>

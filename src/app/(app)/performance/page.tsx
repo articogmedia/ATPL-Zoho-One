@@ -15,12 +15,14 @@ const RANGES: { id: PerfRange; label: string }[] = [
 const fmtDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 
 export default async function PerformancePage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
+  const started = Date.now();
   const viewer = await requireSection("performance");
   const { range: raw } = await searchParams;
   const range: PerfRange = RANGES.some((r) => r.id === raw) ? (raw as PerfRange) : "month";
 
   const repo = crm();
   const [leads, quotes, visits] = await Promise.all([repo.listLeads(), repo.listQuotes(), repo.listVisits()]);
+  console.info(`[page] performance ${Date.now() - started}ms`);
   const executives = STATIC_USERS.map((user) => ({
     id: user.zohoUserId.trim(),
     name: user.role === "Manager" ? `${user.name} (Manager)` : user.name,

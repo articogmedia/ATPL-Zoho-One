@@ -7,11 +7,13 @@ export const metadata = { title: "My Work & Site Visits" };
 export const dynamic = "force-dynamic";
 
 export default async function VisitsPage() {
+  const started = Date.now();
   const user = await requireSection("visits");
   const repo = crm();
   const [visits, assignableUsers, leads, quotes, calls] = await Promise.all([
     repo.listVisits(), repo.listAssignableUsers(), repo.listLeads(), repo.listQuotes(), repo.listCalls(),
   ]);
+  console.info(`[page] visits ${Date.now() - started}ms`);
   const performance = (range: PerfRange) => {
     const stats = perfStats(leads, quotes, visits, range, todayIST(), [{ id: user.id, name: user.name, role: user.role }], user, calls);
     return {

@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { isAssignable, quoteTotals, todayIST, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
@@ -16,12 +17,12 @@ const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_I
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
 
 const SHORT = 20_000;   // transactional lists
-const LONG = 300_000;   // users, products
-const taskRows = () => cached("visits:tasks", SHORT, () =>
+const LONG = 600_000;   // users, products
+const taskRows = cache(() => cached("visits:tasks", SHORT, () =>
   zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
-);
+));
 
-async function users(): Promise<User[]> {
+const users = cache(async function users(): Promise<User[]> {
   const mappedUsers = await cached("users", LONG, async () => {
     const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
     const overrides = parseRoleOverrides(env().ZOHO_ROLE_OVERRIDES);
@@ -39,7 +40,7 @@ async function users(): Promise<User[]> {
   });
   if (!mappedUsers.length) invalidate("users");
   return mappedUsers;
-}
+});
 
 const listAssignableUsers = async () => {
   const queueOwnerId = env().ZOHO_QUEUE_OWNER_ID;
@@ -65,7 +66,7 @@ const queueOwnerId = async () => {
   return configured.trim();
 };
 
-async function leads(): Promise<Lead[]> {
+const leads = cache(async function leads(): Promise<Lead[]> {
   return cached("leads", SHORT, async () => {
     const [raw, assignable, tasks] = await Promise.all([
       zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS),
@@ -86,7 +87,7 @@ async function leads(): Promise<Lead[]> {
       return followUp ? { ...lead, followUp: followUp.date, followUpTime: followUp.time } : lead;
     });
   });
-}
+});
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));
 
 async function addNote(leadId: string, title: string, content: string) {
@@ -276,13 +277,15 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listCalls(): Promise<CallActivity[]> {
-    const raw = await zohoList<ZCall>("Calls", CALL_FIELDS, env().ZOHO_MAX_LEADS);
-    return raw.map((call) => ({
-      id: String(call.id).trim(),
-      leadId: String(call.What_Id?.id ?? "").trim(),
-      ownerId: String(call.Owner?.id ?? "").trim(),
-      date: call.Call_Start_Time?.slice(0, 10) ?? "",
-    }));
+    return cached("visits:calls", SHORT, async () => {
+      const raw = await zohoList<ZCall>("Calls", CALL_FIELDS, env().ZOHO_MAX_LEADS);
+      return raw.map((call) => ({
+        id: String(call.id).trim(),
+        leadId: String(call.What_Id?.id ?? "").trim(),
+        ownerId: String(call.Owner?.id ?? "").trim(),
+        date: call.Call_Start_Time?.slice(0, 10) ?? "",
+      }));
+    });
   },
 
   async listProducts() {

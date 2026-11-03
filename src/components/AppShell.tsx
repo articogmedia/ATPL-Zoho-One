@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useEffect, type ReactNode } from "react";
+import { Suspense, useEffect, type ReactNode } from "react";
 import { BarChart3, ClipboardList, FileText, LogOut, MapPin } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout } from "@/app/actions/auth";
@@ -50,6 +50,7 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
         <nav className="flex flex-col gap-1 px-3">
           {items.map((n) => (
             <Link key={n.to} href={n.to}
+              prefetch
               className={`flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${path === n.to ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-primary"}`}>
               <n.icon className="h-5 w-5" /> {n.label}
             </Link>
@@ -75,13 +76,18 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
             <Button type="submit" variant="outline" size="lg"><LogOut className="h-4 w-4" /> Logout</Button>
           </form>
         </header>
-        <main className="min-w-0 flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">{children}</main>
+        <main className="min-w-0 flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">
+          <Suspense fallback={<div className="space-y-4" aria-label="Loading"><div className="h-8 w-48 animate-pulse rounded-lg bg-secondary" /><div className="h-32 animate-pulse rounded-xl bg-secondary" /></div>}>
+            {children}
+          </Suspense>
+        </main>
       </div>
 
       {items.length > 0 && (
         <nav className="fixed inset-x-0 bottom-0 z-30 grid border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0,1fr))` }}>
           {items.map((n) => (
             <Link key={n.to} href={n.to}
+              prefetch
               className={`flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
               <n.icon className="h-6 w-6" /> {n.short}
             </Link>

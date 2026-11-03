@@ -1,11 +1,11 @@
 import { redirect } from "next/navigation";
 import Image from "next/image";
 import { ArrowRight, CheckCircle2 } from "lucide-react";
-import { crm } from "@/lib/crm";
 import { env } from "@/lib/env";
 import { demoLoginAllowed } from "@/lib/auth/demo";
 import { currentUser } from "@/lib/auth/guard";
 import { demoLogin } from "@/app/actions/auth";
+import { STATIC_USERS, portalRole } from "@/lib/auth/users";
 import { Button } from "@/components/ui/button";
 import { LoginForm } from "@/components/LoginForm";
 import type { Role } from "@/lib/domain";
@@ -55,24 +55,26 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
   if (await currentUser()) redirect("/home");
   const error = (await searchParams)?.error;
   const demo = demoLoginAllowed();
-  const users = demo ? await crm().listUsers() : [];
+  const users = demo ? STATIC_USERS.map((user) => ({ id: user.zohoUserId, name: user.name, role: portalRole(user.role) })) : [];
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#F3F6FA] px-4 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
       <div className="w-full max-w-[420px]">
         <main className="relative overflow-hidden rounded-2xl border border-[#E5EAF1] bg-white p-7 shadow-lg sm:p-10">
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#F5A623] via-[#1E7FD0] to-[#4CAF50]" />
+          <div className="absolute inset-x-0 top-0 flex h-1" aria-hidden="true">
+            <span className="flex-1 bg-[#F5A623]" />
+            <span className="flex-1 bg-[#1E7FD0]" />
+            <span className="flex-1 bg-[#4CAF50]" />
+          </div>
           <div className="mb-6 flex justify-center">
-            <Image src="/brand/atpl-logo.png" width={240} height={100} priority alt="ATPL - Air Trendz Private Limited" className="h-auto w-[200px] object-contain sm:w-[240px]" />
+            <Image src="/brand/atpl-logo.webp" width={240} height={100} sizes="(max-width: 640px) 200px, 240px" priority alt="ATPL - Air Trendz Private Limited" className="h-auto w-[200px] object-contain sm:w-[240px]" />
           </div>
           <div className="mb-6">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h1 className="text-2xl font-semibold tracking-tight text-[#172554]">Sign in</h1>
-                <p className="mt-1 text-sm text-slate-600">Access the ATPL Sales Portal</p>
-              </div>
+            <div className="relative text-center">
+              <h1 className="text-2xl font-semibold tracking-tight text-[#172554]">Sign in</h1>
+              <p className="mt-1 text-sm text-slate-600">Access the ATPL Sales Portal</p>
               {demo && (
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+                <span className="absolute right-0 top-0 inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
                   <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
                   Demo mode
                 </span>
@@ -83,7 +85,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
           {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{ERRORS[error] ?? ERRORS.server}</p>}
 
           {env().AUTH_MODE === "zoho" && (
-            <Button asChild size="lg" className="mb-4 h-12 w-full justify-between rounded-lg bg-[#2454c5] px-4 text-sm text-white hover:bg-[#1d46a5]">
+            <Button asChild size="lg" className="mb-4 h-12 w-full justify-between rounded-lg bg-primary px-4 text-sm text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">
               <a href="/api/auth/zoho/start" aria-label="Sign in with Zoho">
                 <span>Sign in with Zoho</span>
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -111,7 +113,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
                           <button
                             type="submit"
                             aria-label={`Continue as ${u.name}, ${u.role}`}
-                            className="group flex h-14 w-full items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 text-left hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2 sm:px-3.5"
+                            className="group flex h-14 w-full items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 text-left hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 sm:px-3.5"
                           >
                             <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${ROLE_STYLES[u.role].avatar}`} aria-hidden="true">
                               {initials(u.name)}
