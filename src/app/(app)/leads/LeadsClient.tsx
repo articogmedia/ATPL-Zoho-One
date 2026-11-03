@@ -59,25 +59,29 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
   const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
 
   return (
-    <div className="space-y-4 text-sm max-[480px]:space-y-3 max-[480px]:pt-10">
+    <div className="space-y-4 text-sm max-[480px]:space-y-3 max-[480px]:pt-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="w-full">
-          <h1 className="text-xl font-bold sm:text-2xl">Manage Leads</h1>
-          <p className="mt-1 text-muted-foreground">Review enquiries, assign ownership, and track follow-ups.</p>
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-xl font-semibold sm:text-2xl sm:font-bold">Manage Leads</h1>
+            {!isExec && <Button className="h-10 rounded-lg px-4 sm:hidden" onClick={() => setAdding((value) => !value)}><Plus /> Add</Button>}
+          </div>
+          <p className="mt-1 truncate text-sm text-slate-500 sm:text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
+          {!isExec && <p className="mt-1 text-xs text-slate-500 sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
         </div>
-        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && <span className="max-[480px]:hidden"><FixAssignedLeads count={fixableCount} /></span>}</div>}
+        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0 max-[480px]:hidden" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && <span className="max-[480px]:hidden"><FixAssignedLeads count={fixableCount} /></span>}</div>}
       </div>
 
-      {user.role === "Manager" && fixableCount > 0 && <div className="hidden items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900 max-[480px]:flex"><span>Some assigned leads still show as Fresh Lead.</span><FixAssignedLeads count={fixableCount} /></div>}
+      {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads count={fixableCount} compact /></div>}
 
-      <div className="flex gap-2 overflow-x-auto border-b pb-2 max-[480px]:-mx-1 max-[480px]:px-1" role="tablist" aria-label="Lead views">
+      <div className="flex gap-2 overflow-x-auto border-b pb-2 max-[480px]:-mx-1 max-[480px]:rounded-lg max-[480px]:border-0 max-[480px]:bg-slate-100 max-[480px]:p-1 max-[480px]:px-1" role="tablist" aria-label="Lead views">
         {availableTabs.map((item) => (
           <button
             key={item.id}
             role="tab"
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
-            className={`h-11 shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:w-[calc(50vw-1.5rem)] max-[480px]:min-w-[calc(50vw-1.5rem)] ${tab === item.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+            className={`h-11 shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:h-10 max-[480px]:min-w-[calc(50vw-2rem)] max-[480px]:flex-1 ${tab === item.id ? "bg-primary text-primary-foreground max-[480px]:bg-white max-[480px]:text-blue-700 max-[480px]:shadow-sm" : "text-muted-foreground hover:bg-secondary hover:text-foreground max-[480px]:text-slate-600"}`}
           >
             <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>
@@ -197,7 +201,7 @@ function EmptyState({ filtered, onClear }: { filtered: boolean; onClear: () => v
   return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{filtered ? "No leads match your filters" : "No leads in this view"}</div><p className="mt-1 text-muted-foreground">{filtered ? "Try a different search or source." : "New enquiries will appear here."}</p>{filtered && <Button variant="outline" className="mt-4 h-10" onClick={onClear}>Clear filters</Button>}</div>;
 }
 
-function FixAssignedLeads({ count }: { count: number }) {
+function FixAssignedLeads({ count, compact = false }: { count: number; compact?: boolean }) {
   const [pending, start] = useTransition();
   const fix = () => {
     if (!window.confirm(`Move ${count} Sales-owned lead${count === 1 ? "" : "s"} from Fresh Lead to Assigned to Sales?`)) return;
@@ -207,7 +211,7 @@ function FixAssignedLeads({ count }: { count: number }) {
       else toast.error(result.error);
     });
   };
-  return <Button variant="outline" className="h-10 max-[480px]:h-11 max-[480px]:text-xs" onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : `Fix assigned leads (${count})`}</Button>;
+  return <Button variant={compact ? "ghost" : "outline"} className={compact ? "h-11 min-w-11 px-2 font-medium underline" : "h-10 max-[480px]:h-11 max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>;
 }
 
 function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceChange, onClose }: {
