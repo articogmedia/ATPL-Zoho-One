@@ -93,6 +93,7 @@ export async function addLeadAction(input: unknown) {
     if (assignee && !(await assignableNames()).includes(assignee)) throw new ForbiddenError("Choose a team member.");
     const lead = await crm().createLead(data, user, assignee);
     revalidateTag("leads");
+    revalidatePath("/leads");
     revalidateTag("users");
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
   });

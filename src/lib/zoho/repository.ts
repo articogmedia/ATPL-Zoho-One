@@ -84,7 +84,7 @@ const leads = cache(async function leads(): Promise<Lead[]> {
       const lead = mapLead(z, assignable);
       const followUp = followUps.get(lead.id);
       return followUp ? { ...lead, followUp: followUp.date, followUpTime: followUp.time } : lead;
-    });
+    }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
   });
 });
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));

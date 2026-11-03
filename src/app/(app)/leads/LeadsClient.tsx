@@ -40,6 +40,8 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
+  const [pendingAddedId, setPendingAddedId] = useState<string | null>(null);
+  const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Lead | null>(null);
   const [action, setAction] = useState<LeadAction>(null);
   const router = useRouter();
@@ -50,6 +52,26 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
   }, [search]);
 
   useEffect(() => setPage(1), [tab, debouncedSearch, source, filters]);
+  useEffect(() => {
+    if (!pendingAddedId || !leads.some((lead) => lead.id === pendingAddedId)) return;
+    const added = leads.find((lead) => lead.id === pendingAddedId);
+    if (!added) return;
+    setAdding(false);
+    setPendingAddedId(null);
+    setTab(user.role === "Manager" ? "all" : isExec ? "mine" : "fresh");
+    setHighlightedLeadId(added.id);
+    window.setTimeout(() => setHighlightedLeadId(null), 4000);
+    window.requestAnimationFrame(() => (document.getElementById("leads-list-mobile") ?? document.getElementById("leads-list"))?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    toast.success("Lead added", {
+      action: {
+        label: "View lead",
+        onClick: () => {
+          setSelected(added);
+          setTab(user.role === "Manager" ? "all" : isExec ? "mine" : "fresh");
+        },
+      },
+    });
+  }, [isExec, leads, pendingAddedId, user.role]);
 
   const filtered = useMemo(
     () => leadsForTab(user, leads, tab, debouncedSearch, source, filters),
@@ -112,13 +134,13 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
         onClose={() => setFiltersOpen(false)}
       />
 
-      {adding && <AddLead onDone={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
+      {adding && <AddLead onAdded={(id) => { setPendingAddedId(id); router.refresh(); }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
         <EmptyState filtered={filtered.length !== leads.length || !!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
-          <div className="hidden overflow-hidden rounded-xl border border-border bg-card shadow-sm md:block">
+          <div id="leads-list" className="hidden overflow-hidden rounded-xl border border-border bg-card shadow-sm md:block">
             <table className="w-full text-left">
               <thead className="bg-secondary text-xs uppercase tracking-wide text-secondary-foreground">
                 <tr>
@@ -128,12 +150,12 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {visible.map((lead) => <DesktopRow key={lead.id} lead={lead} manager={user.role === "Manager"} onOpen={() => setSelected(lead)} onAction={(type) => setAction({ type, lead })} />)}
+                {visible.map((lead) => <DesktopRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} onOpen={() => setSelected(lead)} onAction={(type) => setAction({ type, lead })} />)}
               </tbody>
             </table>
           </div>
-          <div className="space-y-2 max-[480px]:space-y-1.5 md:hidden">
-            {visible.map((lead) => <MobileRow key={lead.id} lead={lead} manager={user.role === "Manager"} onOpen={() => setSelected(lead)} onAction={(type) => setAction({ type, lead })} />)}
+          <div id="leads-list-mobile" className="space-y-2 max-[480px]:space-y-1.5 md:hidden">
+            {visible.map((lead) => <MobileRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} onOpen={() => setSelected(lead)} onAction={(type) => setAction({ type, lead })} />)}
           </div>
           <Pagination page={page} pageCount={pageCount} total={filtered.length} onChange={setPage} />
         </>
@@ -176,9 +198,9 @@ function DesktopActionButtons({ lead, manager, onAction }: { lead: Lead; manager
   </div>;
 }
 
-function DesktopRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+function DesktopRow({ lead, manager, highlighted, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   return (
-    <tr className="group cursor-pointer hover:bg-secondary/50" onClick={onOpen}>
+    <tr className={`group cursor-pointer hover:bg-secondary/50 ${highlighted ? "bg-emerald-50" : ""}`} onClick={onOpen}>
       <td className="max-w-56 px-4 py-3"><div className="truncate font-semibold">{lead.name}</div>{lead.company && <div className="truncate text-xs text-muted-foreground">{lead.company}</div>}</td>
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.phone || "—"}</td>
       <td className="whitespace-nowrap px-3 py-3">{lead.source}</td>
@@ -190,10 +212,10 @@ function DesktopRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: 
   );
 }
 
-function MobileRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+function MobileRow({ lead, manager, highlighted, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   const wa = whatsappUrl(lead.phone);
   return (
-    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }} className="rounded-xl border border-border bg-card p-3 shadow-sm max-[480px]:p-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }} className={`rounded-xl border border-border bg-card p-3 shadow-sm max-[480px]:p-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${highlighted ? "bg-emerald-50" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0"><div className="truncate font-semibold">{lead.name}</div><div className="truncate text-xs text-muted-foreground">{lead.company || "No company"}</div></div>
         <StatusBadge status={lead.status} />
@@ -425,14 +447,14 @@ function ScheduleForm({ lead, onDone }: { lead: Lead; onDone: () => void }) {
   </div>;
 }
 
-function AddLead({ onDone, executives, canAssign, canForceDuplicate }: { onDone: () => void; executives: string[]; canAssign: boolean; canForceDuplicate: boolean }) {
+function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }: { onAdded: (id: string) => void; onCancel: () => void; executives: string[]; canAssign: boolean; canForceDuplicate: boolean }) {
   const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedTo: "" });
   const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
   const [pending, start] = useTransition();
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [key]: event.target.value });
-  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onDone} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok) { const zohoUrl = result.data?.zohoUrl; toast.success("Lead added", zohoUrl ? { action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") } } : undefined); onDone(); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
-    <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onDone}><X /></Button></div>
+  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok) { onAdded(result.data?.id ?? ""); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
+    <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onCancel}><X /></Button></div>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" required pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" />
@@ -441,6 +463,6 @@ function AddLead({ onDone, executives, canAssign, canForceDuplicate }: { onDone:
     {canAssign && <select className={`${fieldClass} h-10 text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select>}
     <input className={`${fieldClass} h-10 text-sm sm:col-span-2`} placeholder="Remarks" value={f.remarks} onChange={set("remarks")} maxLength={500} />
     {duplicate && <div className="text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Owner: {duplicate.owner} · Status: {duplicate.status}</p>{canForceDuplicate && <Button type="button" variant="outline" className="mt-2 h-10" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
-    <Button type="button" variant="outline" className="h-10 md:hidden" onClick={onDone}>Cancel</Button><Button type="submit" className="h-10 sm:col-span-2" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
+    <Button type="button" variant="outline" className="h-10 md:hidden" onClick={onCancel}>Cancel</Button><Button type="submit" className="h-10 sm:col-span-2" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
   </form></>;
 }

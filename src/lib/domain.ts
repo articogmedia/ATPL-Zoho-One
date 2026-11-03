@@ -292,7 +292,7 @@ export function leadsForTab(
     if (filters.to && l.createdOn > filters.to) return false;
     if (q && ![l.name, l.company, l.phone.replace(/\s/g, ""), l.phone, l.id].some((f) => f.toLowerCase().includes(q))) return false;
     return true;
-  });
+  }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
 }
 
 export const canAssignLeads = (role: Role) => role === "Manager";

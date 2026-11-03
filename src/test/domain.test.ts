@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAccess, formatINR, isAssignable, visibleFor, ACCESS } from "@/lib/domain";
+import { canAccess, formatINR, isAssignable, leadsForTab, visibleFor, ACCESS } from "@/lib/domain";
 import { MOCK_LEADS as SAMPLE_LEADS, MOCK_USERS as USERS, MOCK_QUOTES as SAMPLE_QUOTES, MOCK_VISITS as SAMPLE_VISITS } from "@/lib/crm/mock-data";
 
 const u = (id: string) => USERS.find((x) => x.id === id)!;
@@ -33,6 +33,13 @@ describe("access rules", () => {
     expect(visibleFor(u("anil"), SAMPLE_LEADS).every((l) => l.assignedTo === "Anil")).toBe(true);
     expect(visibleFor(u("pavan"), SAMPLE_LEADS)).toHaveLength(SAMPLE_LEADS.length);
   });
+  it("shows a newly added Manager lead in both table and card views", () => {
+    const manager = u("pavan");
+    const added = { ...SAMPLE_LEADS[0], id: "new-lead", name: "New Lead", status: "Fresh Lead" as const, assignedTo: null, assignedToId: undefined, createdOn: "2026-11-03" } as Lead;
+    const leads = [...SAMPLE_LEADS, added];
+    expect(leadsForTab(manager, leads, "all")[0]?.id).toBe("new-lead");
+    expect(leadsForTab(manager, leads, "fresh")[0]?.id).toBe("new-lead");
+  });
   it("assigns to executives and managers but not the queue owner", () => {
     expect(isAssignable(u("anil"), "queue-owner")).toBe(true);
     expect(isAssignable(u("pavan"), "queue-owner")).toBe(true);
@@ -40,7 +47,7 @@ describe("access rules", () => {
   });
 });
 
-import { leadsForTab, canAssignLeads } from "@/lib/domain";
+import { canAssignLeads } from "@/lib/domain";
 describe("manage leads", () => {
   it("fresh tab shows only unassigned Fresh Leads", () => {
     const r = leadsForTab(u("divya"), SAMPLE_LEADS, "fresh");
