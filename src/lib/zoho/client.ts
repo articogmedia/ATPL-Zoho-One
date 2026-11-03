@@ -33,6 +33,7 @@ const g = globalThis as unknown as {
 };
 
 async function requestAccessToken(): Promise<{ value: string; exp: number }> {
+  const started = Date.now();
   const e = env();
   const body = new URLSearchParams({
     refresh_token: e.ZOHO_REFRESH_TOKEN!, client_id: e.ZOHO_CLIENT_ID!,
@@ -42,6 +43,7 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
     method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(15_000),
   });
   const json = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error?: string };
+  console.info(`[zoho] token ${res.status} ${Date.now() - started}ms`);
   if (!res.ok || !json.access_token) throw new ZohoError(`Zoho token refresh failed: ${json.error ?? res.status}`, res.status);
   const lifetimeMs = Math.max(60_000, ((json.expires_in ?? 3600) - 120) * 1000);
   return { value: json.access_token, exp: Date.now() + lifetimeMs };
@@ -74,6 +76,10 @@ async function accessToken(force = false): Promise<string> {
     return refreshAccessToken();
   })().finally(() => { g.__atplZohoRefresh = undefined; });
   return g.__atplZohoRefresh;
+}
+
+export async function warmZohoToken(): Promise<void> {
+  await accessToken();
 }
 
 type Query = Record<string, string | number | undefined>;

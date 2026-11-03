@@ -1,7 +1,7 @@
 "use client";
 
 import { Eye, EyeOff, LoaderCircle } from "lucide-react";
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { loginAction } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
 
@@ -11,6 +11,27 @@ export function LoginForm() {
   const [username, setUsername] = useState("");
   const [rememberUsername, setRememberUsername] = useState(false);
   const [capsLockOn, setCapsLockOn] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const [retried, setRetried] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    void fetch("/api/warm", { method: "GET", cache: "no-store" }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!pending) return;
+    setTimedOut(false);
+    const timer = window.setTimeout(() => {
+      if (!retried && formRef.current) {
+        setRetried(true);
+        action(new FormData(formRef.current));
+      } else {
+        setTimedOut(true);
+      }
+    }, 20_000);
+    return () => window.clearTimeout(timer);
+  }, [action, pending, retried]);
 
   useEffect(() => {
     try {
@@ -25,6 +46,8 @@ export function LoginForm() {
   }, []);
 
   function handleSubmit() {
+    setTimedOut(false);
+    setRetried(false);
     if (rememberUsername) {
       try {
         window.localStorage.setItem("atpl-remembered-username", username.trim());
@@ -41,7 +64,7 @@ export function LoginForm() {
   }
 
   return (
-    <form action={action} onSubmit={handleSubmit} className="space-y-4" noValidate>
+    <form ref={formRef} action={action} onSubmit={handleSubmit} className="space-y-4" noValidate>
       <label htmlFor="login-username" className="block text-sm font-medium text-slate-700">
         Username
         <input id="login-username" name="username" value={username} onChange={(event) => setUsername(event.target.value)} required placeholder="Enter your username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} className="mt-1 h-12 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-base focus:bg-white focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" />
@@ -61,6 +84,7 @@ export function LoginForm() {
         Remember my username
       </label>
       {state?.error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{state.error}</p>}
+      {timedOut && <div role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">Sign-in is taking too long. Check your connection and try again.<Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={() => { setTimedOut(false); setRetried(true); if (formRef.current) action(new FormData(formRef.current)); }}>Retry</Button></div>}
       <Button type="submit" disabled={pending} className="min-h-12 w-full rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Signing in..." : "Sign in"}</Button>
       <p className="text-center text-[13px] text-slate-500">Forgot your password? Contact your manager.</p>
     </form>

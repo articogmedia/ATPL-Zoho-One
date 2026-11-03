@@ -28,4 +28,23 @@ describe("static login lockout", () => {
     await expect(loginAction(null, form())).resolves.toEqual({ error: "Too many attempts, try again in a few minutes" });
     await expect(loginAction(null, form())).resolves.toEqual({ error: "Too many attempts, try again in a few minutes" });
   });
+
+  it("resets failed attempts and redirects after a valid login", async () => {
+    const users = await import("@/lib/auth/users");
+    const navigation = await import("next/navigation");
+    vi.mocked(users.verifyStaticCredentials).mockImplementation((_username, password) => password === "correct" ? {
+      username: "pavan", name: "Pavan", role: "Sales", passwordEnv: "ATPL_PAVAN_PASSWORD",
+    } : null);
+    const { loginAction } = await import("@/app/actions/auth");
+    const form = (password: string) => {
+      const data = new FormData();
+      data.set("username", "reset-pavan");
+      data.set("password", password);
+      return data;
+    };
+    await expect(loginAction(null, form("wrong"))).resolves.toEqual({ error: "Invalid username or password" });
+    await expect(loginAction(null, form("correct"))).resolves.toBeUndefined();
+    expect(navigation.redirect).toHaveBeenCalledWith("/leads");
+    await expect(loginAction(null, form("wrong"))).resolves.toEqual({ error: "Invalid username or password" });
+  });
 });
