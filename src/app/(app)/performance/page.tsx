@@ -2,7 +2,7 @@ import Link from "next/link";
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
 import { perfStats, todayIST, type PerfRange } from "@/lib/domain";
-import { portalRole, STATIC_USERS } from "@/lib/auth/users";
+import { matchPortalUserToZohoUser, missingPortalUsers, portalRole, STATIC_USERS } from "@/lib/auth/users";
 
 export const metadata = { title: "Performance" };
 export const dynamic = "force-dynamic";
@@ -21,15 +21,15 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
   const range: PerfRange = RANGES.some((r) => r.id === raw) ? (raw as PerfRange) : "month";
 
   const repo = crm();
-  const [leads, quotes, visits] = await Promise.all([repo.listLeads(), repo.listQuotes(), repo.listVisits()]);
+  const [leads, quotes, visits, liveUsers] = await Promise.all([repo.listLeads(), repo.listQuotes(), repo.listVisits(), repo.listUsers()]);
   console.info(`[page] performance ${Date.now() - started}ms`);
   const executives = STATIC_USERS.map((user) => ({
-    id: user.zohoUserId.trim(),
+    id: (matchPortalUserToZohoUser(user, liveUsers)?.id ?? user.zohoUserId ?? "").trim(),
     name: user.role === "Manager" ? `${user.name} (Manager)` : user.name,
     role: portalRole(user.role),
   }));
   const s = perfStats(leads, quotes, visits, range, todayIST(), executives, viewer);
-  const unsetIds = STATIC_USERS.filter((user) => user.zohoUserId.trim().startsWith("REPLACE_")).map((user) => user.name);
+  const unsetIds = missingPortalUsers(STATIC_USERS, liveUsers).map((user) => user.name);
 
   const cards = [
     { k: "Total Leads", v: String(s.totalLeads), sub: `${s.won} won` },
@@ -45,7 +45,7 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
       <h1 className="text-2xl font-bold">Performance</h1>
       {viewer.role === "Manager" && unsetIds.length > 0 && (
         <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          {unsetIds.map((name) => <div key={name}>Zoho user ID not set for {name}</div>)}
+          {unsetIds.map((name) => <div key={name}>No Zoho user found for {name}</div>)}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">

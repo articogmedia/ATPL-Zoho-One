@@ -3,8 +3,9 @@ import { currentUser } from "@/lib/auth/guard";
 import { env } from "@/lib/env";
 import { LEAD_SOURCES } from "@/lib/domain";
 import { FIELD, ROLE_BY_ZOHO_NAME, WRITE_LEAD_STATUS } from "@/lib/zoho/fields";
-import { hosts, zoho } from "@/lib/zoho/client";
-import { mapRole, parseRoleOverrides, type ZUser } from "@/lib/zoho/mappers";
+import { hosts, zoho, zohoList } from "@/lib/zoho/client";
+import { mapRole, parseRoleOverrides, type ZLead, type ZUser } from "@/lib/zoho/mappers";
+import { STATIC_USERS } from "@/lib/auth/users";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,15 @@ export async function GET() {
       const response = await zoho<{ users?: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
       return response?.users ?? [];
     });
+    const leadCounts = await check(async () => {
+      const leads = await zohoList<ZLead>("Leads", ["Owner"], env().ZOHO_MAX_LEADS);
+      const counts = new Map<string, number>();
+      for (const lead of leads) {
+        const id = String(lead.Owner?.id ?? "").trim() || "unassigned";
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+      return Object.fromEntries(counts);
+    });
     const normalizedQueueOwnerId = configuredQueueOwnerId?.trim();
     const queueOwner = isError(rawUsers) ? undefined : rawUsers.find((u) => String(u.id).trim() === normalizedQueueOwnerId);
     const queueOwnerRole = queueOwner ? mapRole(queueOwner, overrides) : null;
@@ -54,12 +64,17 @@ export async function GET() {
       ? rawUsers
       : {
           users: rawUsers.map((u) => ({
+            id: String(u.id).trim(),
             name: u.full_name,
             email: u.email ?? "",
             role: { name: u.role?.name ?? "" },
             profile: { name: u.profile?.name ?? "" },
             portalRole: mapRole(u, overrides) ?? "NOT MAPPED",
+            matchedPortalUser: STATIC_USERS.find((portalUser) =>
+              portalUser.email?.trim().toLowerCase() === u.email?.trim().toLowerCase(),
+            )?.name ?? null,
           })),
+          leadsPerOwnerId: leadCounts,
           salesExecutives: rawUsers.filter((u) => mapRole(u, overrides) === "Sales Executive").length,
           mappedExecutiveNames: rawUsers
             .filter((u) => mapRole(u, overrides) === "Sales Executive")

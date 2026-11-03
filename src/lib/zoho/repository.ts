@@ -46,16 +46,15 @@ const listAssignableUsers = async () => {
   const queueOwnerId = env().ZOHO_QUEUE_OWNER_ID;
   return (await users()).filter((u) => isAssignable(u, queueOwnerId));
 };
-const assignableNames = async () => new Set((await listAssignableUsers()).map((u) => u.name));
+const assignableIds = async () => new Set((await listAssignableUsers()).map((u) => String(u.id).trim()));
 const userByName = async (name: string) => {
   const u = (await users()).find((x) => x.name === name);
   if (!u) throw new ZohoError(`No active Zoho user named "${name}"`);
   return u;
 };
 const activeUserById = async (id: string) => {
-  const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
   const expected = String(id).trim();
-  return (json?.users ?? []).find((u) => String(u.id).trim() === expected);
+  return (await users()).find((u) => String(u.id).trim() === expected);
 };
 const queueOwnerId = async () => {
   const configured = env().ZOHO_QUEUE_OWNER_ID;
@@ -70,7 +69,7 @@ const leads = cache(async function leads(): Promise<Lead[]> {
   return cached("leads", SHORT, async () => {
     const [raw, assignable, tasks] = await Promise.all([
       zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS),
-      assignableNames(),
+      assignableIds(),
       taskRows(),
     ]);
     const followUps = new Map<string, { date: string; time: string }>();
@@ -100,7 +99,8 @@ export const zohoRepository: CrmRepository = {
   listUsers: users,
   listAssignableUsers,
   async findUserByEmail(email) {
-    return (await users()).find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null;
+    const normalized = email.trim().toLowerCase();
+    return (await users()).find((u) => u.email?.trim().toLowerCase() === normalized) ?? null;
   },
 
   listLeads: leads,

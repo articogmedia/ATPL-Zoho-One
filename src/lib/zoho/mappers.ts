@@ -71,6 +71,8 @@ export function normalizeStatus(raw?: string): LeadStatus {
 
 export function mapLead(z: ZLead, executives: ReadonlySet<string>): Lead {
   const ownerName = z.Owner?.name ?? "";
+  const zohoOwnerId = ownerId(z.Owner?.id);
+  const isExecutiveOwner = !!zohoOwnerId && executives.has(zohoOwnerId);
   return {
     id: String(z.id).trim(),
     name: [z.First_Name, z.Last_Name].filter(Boolean).join(" ").trim() || "(no name)",
@@ -81,9 +83,9 @@ export function mapLead(z: ZLead, executives: ReadonlySet<string>): Lead {
     source: normalizeSource(z.Lead_Source),
     status: normalizeStatus(z.Lead_Status),
     // Ownership is the assignment: an executive owner means "assigned", anyone else means the fresh queue.
-    assignedTo: executives.has(ownerName) ? ownerName : null,
-    assignedToId: executives.has(ownerName) ? ownerId(z.Owner?.id) : undefined,
-    ownerId: ownerId(z.Owner?.id),
+    assignedTo: isExecutiveOwner ? ownerName : null,
+    assignedToId: isExecutiveOwner ? zohoOwnerId : undefined,
+    ownerId: zohoOwnerId,
     remarks: z.Description ?? "",
     createdOn: day(z.Created_Time),
     touchedBy: [z.Created_By?.name, z.Modified_By?.name].filter((n): n is string => !!n),

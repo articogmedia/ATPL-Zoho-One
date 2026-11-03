@@ -148,7 +148,7 @@ export function rangeDates(range: PerfRange, today: string): { from: string; to:
 export type PerfExecutive = { id: string; name: string; role: Role };
 export type PerfRow = { name: string; leads: number; visits: number; quotes: number; won: number; conversion: number };
 
-const normalizeOwnerId = (id: unknown) => String(id ?? "").trim();
+export const normalizeOwnerId = (id: unknown) => String(id ?? "").trim();
 
 /** Everything the dashboard shows, for one date range. */
 export function perfStats(
@@ -240,7 +240,7 @@ export function perfStats(
     scheduled: vs.length,
     completed: vs.filter((v) => v.status === "Completed").length,
     calls: scopedCalls.length,
-    quotesSent: qs.length,
+    quotesSent: scopedQuotes.length,
     rows: viewer?.role === "Manager" || !viewer ? [...rows, totalRow] : rows,
     totalRow,
   };
@@ -259,10 +259,10 @@ export function canAccess(role: Role, s: Section) {
 }
 
 /** Records a user may see: managers & calling team see all leads; executives only their own. */
-export function visibleFor<T extends { assignedTo?: string | null; assignedToId?: string; executive?: string; executiveId?: string }>(user: User, rows: T[]): T[] {
+export function visibleFor<T extends { assignedTo?: string | null; assignedToId?: string; ownerId?: string; executive?: string; executiveId?: string }>(user: User, rows: T[]): T[] {
   if (user.role !== "Sales Executive") return rows;
-  return rows.filter((r) => normalizeOwnerId(r.assignedToId) === normalizeOwnerId(user.id) || normalizeOwnerId(r.executiveId) === normalizeOwnerId(user.id) ||
-    (!r.assignedToId && !r.executiveId && (r.assignedTo ?? r.executive) === user.name));
+  return rows.filter((r) => normalizeOwnerId(r.ownerId) === normalizeOwnerId(user.id) || normalizeOwnerId(r.assignedToId) === normalizeOwnerId(user.id) || normalizeOwnerId(r.executiveId) === normalizeOwnerId(user.id) ||
+    (!r.ownerId && !r.assignedToId && !r.executiveId && (r.assignedTo ?? r.executive) === user.name));
 }
 
 export type LeadTab = "fresh" | "assigned" | "callback" | "mine" | "all";

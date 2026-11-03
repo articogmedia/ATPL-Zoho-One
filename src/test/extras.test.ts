@@ -3,7 +3,7 @@ import { financialYear, isAssignable, nextOfferNo, normalizePhone, todayIST } fr
 import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
-import { STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
+import { matchPortalUserToZohoUser, missingPortalUsers, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
 
 describe("offer numbering", () => {
   it("derives the Indian financial year", () => {
@@ -24,7 +24,7 @@ describe("offer numbering", () => {
 });
 
 describe("zoho mapping", () => {
-  const execs = new Set(["Anil Kumar"]);
+  const execs = new Set(["u1", "manager-1"]);
   it("folds free-form lead sources into ATPL's three", () => {
     expect(normalizeSource("Facebook")).toBe("Meta Ads");
     expect(normalizeSource("Instagram Lead Ads")).toBe("Meta Ads");
@@ -69,12 +69,23 @@ describe("zoho mapping", () => {
   });
   it("treats assignable owners as assigned and the queue owner as the fresh queue", () => {
     const base = { id: "1", Last_Name: "Rao", Created_Time: "2026-10-25T10:15:00+05:30", Lead_Status: "Not Contacted" };
-    const assignable = new Set(["Anil Kumar", "Manager"]);
+    const assignable = new Set(["u1", "manager-1"]);
     expect(mapLead({ ...base, Owner: { id: "u1", name: "Anil Kumar" } }, assignable).assignedTo).toBe("Anil Kumar");
     expect(mapLead({ ...base, Owner: { id: "manager-1", name: "Manager" } }, assignable).assignedTo).toBe("Manager");
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).assignedTo).toBeNull();
     expect(mapLead({ ...base, Owner: { id: "queue-1", name: "Queue Owner" } }, assignable).assignedTo).toBeNull();
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).createdOn).toBe("2026-10-25");
+  });
+  it("matches portal users to Zoho users by normalized email", () => {
+    const portal = { username: "pavan", name: "Pavan", role: "Sales" as const, email: " PAVAN@ATPL.COM ", zohoUserId: "fallback", passwordEnv: "P" };
+    const match = matchPortalUserToZohoUser(portal, [{ id: " live-1 ", name: "Pavan", role: "Sales Executive", email: "pavan@atpl.com" }]);
+    expect(match?.id.trim()).toBe("live-1");
+    expect(matchPortalUserToZohoUser({ ...portal, email: "missing@atpl.com" }, [{ id: "live-1", name: "Pavan", role: "Sales Executive", email: "pavan@atpl.com" }])).toBeNull();
+  });
+  it("reports portal users without a matching Zoho email", () => {
+    const portal = [{ username: "pavan", name: "Pavan", role: "Sales" as const, email: "pavan@atpl.com", zohoUserId: "fallback", passwordEnv: "P" }];
+    expect(missingPortalUsers(portal, [])).toHaveLength(1);
+    expect(missingPortalUsers(portal, [{ id: "live-1", name: "Pavan", role: "Sales Executive", email: "PAVAN@ATPL.COM" }])).toHaveLength(0);
   });
   it("excludes the queue owner from assignable users", () => {
     expect(isAssignable({ id: "manager-1", name: "Manager", role: "Manager" }, "queue-1")).toBe(true);
