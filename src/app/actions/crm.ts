@@ -39,7 +39,7 @@ async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
     return {
       ok: false,
       error: err instanceof ZohoError
-        ? `${err.message}${err.code ? ` (code: ${err.code})` : ""}`
+        ? `${err.message}${err.field ? ` (field: ${err.field})` : ""}${err.code ? ` (code: ${err.code})` : ""}${err.operation ? ` [${err.operation}]` : ""}`
         : "Something went wrong. Please try again.",
     };
   }

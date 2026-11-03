@@ -91,7 +91,7 @@ const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));
 
 async function addNote(leadId: string, title: string, content: string) {
   await zohoWrite("POST", "/Notes", {
-    Note_Title: title, Note_Content: content, Parent_Id: { module: { api_name: "Leads" }, id: leadId },
+    Note_Title: title, Note_Content: content, Parent_Id: { id: leadId, module: { api_name: "Leads" } },
   });
 }
 
@@ -121,40 +121,43 @@ export const zohoRepository: CrmRepository = {
       ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner } }),
     };
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
-    await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
-    if (owner) {
-      await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
-      await zohoWrite("POST", "/Tasks", {
-        Subject: "Call new lead",
-        Status: TASK_STATUS_WRITE.Assigned,
-        Due_Date: todayIST(),
-        Owner: { id: owner.id },
-        Who_Id: { id },
+    try {
+      await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
+    } catch (error) {
+      console.error("[zoho] secondary lead-created note failed", {
+        leadId: id, operation: "POST /Notes",
+        status: error instanceof ZohoError ? error.status : undefined,
+        code: error instanceof ZohoError ? error.code : undefined,
+        field: error instanceof ZohoError ? error.field : undefined,
       });
+    }
+    if (owner) {
+      try {
+        await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
+        await zohoWrite("POST", "/Tasks", {
+          Subject: "Call new lead",
+          Status: TASK_STATUS_WRITE.Assigned,
+          Due_Date: todayIST(),
+          Owner: { id: owner.id },
+          Who_Id: { id },
+        });
+      } catch (error) {
+        console.error("[zoho] secondary lead assignment work failed", {
+          leadId: id, operation: "POST /Notes or POST /Tasks",
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+          field: error instanceof ZohoError ? error.field : undefined,
+        });
+      }
     }
     invalidate("leads", "users");
     const assignable = await assignableIds();
     const created = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${id}`, {
       query: { fields: LEAD_FIELDS.join(",") },
-    }).catch(() => null);
+    });
     const createdRecord = created?.data?.[0];
     if (createdRecord) return mapLead(createdRecord, assignable);
-    return {
-      id,
-      name: input.name,
-      company: input.company,
-      phone: input.phone,
-      area: input.area,
-      source: input.source,
-      status,
-      assignedTo: owner?.name ?? null,
-      assignedToId: owner?.id,
-      ownerId: String(owner?.id ?? queueOwner ?? ""),
-      remarks: input.remarks,
-      createdOn: new Date().toISOString().slice(0, 10),
-      address: "",
-      touchedBy: [actor.name],
-    };
+    throw new ZohoError(`Lead ${id} was created but could not be verified by GET /Leads/${id}`, 200, "CREATED_RECORD_NOT_FOUND", undefined, undefined, `GET /Leads/${id}`);
   },
 
   async assignLead(id, assignee, actor) {

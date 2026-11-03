@@ -186,7 +186,9 @@ describe("Zoho lead owner fallbacks", () => {
 
       vi.doMock("@/lib/zoho/client", () => ({
         ZohoError: class extends Error {},
-        zoho: vi.fn(async () => ({ users: [{ id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } }] })),
+        zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
+          ? { data: [{ id: "lead-1", Full_Name: "New lead", Mobile: "9999999999", Lead_Source: "Direct Call", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
+          : { users: [{ id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } }] }),
         zohoList: vi.fn(async () => []),
         zohoWrite: write,
       }));
@@ -216,10 +218,12 @@ describe("Zoho lead owner fallbacks", () => {
       });
       vi.doMock("@/lib/zoho/client", () => ({
         ZohoError: class extends Error {},
-        zoho: vi.fn(async () => ({ users: [
-          { id: "queue-1", full_name: "Queue Owner", role: { name: "Calling Team" } },
-          { id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } },
-        ] })),
+        zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
+          ? { data: [{ id: "lead-1", Full_Name: "New lead", Mobile: "9999999999", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue Owner" } }] }
+          : { users: [
+              { id: "queue-1", full_name: "Queue Owner", role: { name: "Calling Team" } },
+              { id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } },
+            ] }),
         zohoList: vi.fn(async () => []),
         zohoWrite: write,
       }));

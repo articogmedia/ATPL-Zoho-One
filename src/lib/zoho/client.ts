@@ -10,6 +10,7 @@ export class ZohoError extends Error {
     readonly code?: string,
     readonly field?: string,
     readonly invalidValue?: unknown,
+    readonly operation?: string,
   ) {
     super(message);
     this.name = "ZohoError";
@@ -118,6 +119,7 @@ export async function zoho<T = unknown>(
     code?: string;
     message?: string;
     details?: { api_name?: string; field?: string; expected_data_type?: string; value?: unknown };
+    data?: { code?: string; message?: string; details?: { api_name?: string; field?: string; value?: unknown } }[];
   }) | null;
   if (res.status === 429 && rateLimitAttempt < 2) {
     const retryAfter = Number(res.headers.get("retry-after"));
@@ -126,11 +128,17 @@ export async function zoho<T = unknown>(
     return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1);
   }
   if (!res.ok) {
-    const detail = json?.details;
+    const recordError = json?.data?.[0];
+    const detail = recordError?.details ?? json?.details;
     const field = detail?.api_name ?? detail?.field;
+    console.error("[zoho] request rejected", {
+      method, path, status: res.status,
+      code: recordError?.code ?? json?.code,
+      field, message: recordError?.message ?? json?.message,
+    });
     throw new ZohoError(
-      res.status === 429 ? "Zoho API rate limit reached. Please retry shortly." : json?.message ?? `Zoho request failed (${res.status})`,
-      res.status, json?.code, field, detail?.value,
+      res.status === 429 ? "Zoho API rate limit reached. Please retry shortly." : recordError?.message ?? json?.message ?? `Zoho request failed (${res.status})`,
+      res.status, recordError?.code ?? json?.code, field, detail?.value, `${method} ${path}`,
     );
   }
   return json;
@@ -154,7 +162,14 @@ export async function zohoWrite(
   if (!first || first.code !== "SUCCESS") {
     const message = first?.message ?? "Zoho rejected the change";
     const apiName = first?.details?.api_name;
-    throw new ZohoError(apiName ? `${message} (field: ${apiName})` : message, undefined, first?.code, apiName, first?.details?.value);
+    throw new ZohoError(
+      apiName ? `${message} (field: ${apiName})` : message,
+      undefined,
+      first?.code,
+      apiName,
+      first?.details?.value,
+      `${method} ${path}`,
+    );
   }
   return first.details?.id ?? "";
 }

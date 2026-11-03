@@ -70,7 +70,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
     if (!added) return;
     setAdding(false);
     setPendingAddedId(null);
-    setTab(leadBucketForTab(added));
+    setTab(user.role === "Manager" ? "all" : leadBucketForTab(added));
     setHighlightedLeadId(added.id);
     window.setTimeout(() => setHighlightedLeadId(null), 4000);
     window.requestAnimationFrame(() => (document.getElementById("leads-list-mobile") ?? document.getElementById("leads-list"))?.scrollIntoView({ behavior: "smooth", block: "start" }));
