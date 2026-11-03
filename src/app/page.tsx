@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
-import { ArrowRight, CheckCircle2, Snowflake } from "lucide-react";
+import Image from "next/image";
+import { ArrowRight, CheckCircle2, ClipboardList, FileText, MapPin } from "lucide-react";
 import { crm } from "@/lib/crm";
 import { env } from "@/lib/env";
 import { demoLoginAllowed } from "@/lib/auth/demo";
@@ -59,33 +60,33 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
   return (
     <div className="grid min-h-screen place-items-center bg-slate-50 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-6">
       <div className="flex min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] md:max-h-[calc(100vh-2rem)] md:grid md:grid-cols-[0.9fr_1.1fr]">
-        <aside className="hidden shrink-0 bg-slate-900 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:min-h-[560px] md:flex-col md:justify-between">
+        <aside className="hidden shrink-0 bg-gradient-to-br from-slate-900 to-slate-800 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:min-h-[560px] md:flex-col md:justify-between">
           <div className="flex flex-col justify-center md:flex-1">
-            <div className="flex items-center gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white ring-1 ring-white/15">
-                <Snowflake className="h-6 w-6" aria-hidden="true" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold tracking-tight">ATPL Sales Portal</h1>
-                <p className="text-xs text-slate-300">Air Trendz Pvt Ltd · Hyderabad</p>
+            <div>
+              <div className="w-fit rounded-2xl bg-white p-4 shadow-lg">
+                <Image src="/brand/atpl-logo.png" width={240} height={72} priority alt="ATPL - Air Trendz Private Limited" className="h-auto w-[240px]" />
               </div>
             </div>
             <p className="mt-8 max-w-xs text-xl font-medium leading-8 text-slate-200 md:mt-12">
               Leads, quotations and site visits in one place
             </p>
+            <ul className="mt-6 space-y-3 text-sm text-slate-200">
+              <li className="flex items-center gap-3"><ClipboardList className="h-5 w-5 text-slate-300" aria-hidden="true" />Manage leads and follow-ups</li>
+              <li className="flex items-center gap-3"><FileText className="h-5 w-5 text-slate-300" aria-hidden="true" />Create quotations in minutes</li>
+              <li className="flex items-center gap-3"><MapPin className="h-5 w-5 text-slate-300" aria-hidden="true" />Track site visits and performance</li>
+            </ul>
           </div>
           <p className="mt-6 text-xs text-slate-400">© Air Trendz Pvt Ltd</p>
         </aside>
 
-        <main className="flex min-h-0 flex-1 flex-col px-5 py-5 sm:px-8 sm:py-7">
-          <div className="mb-6 flex items-center gap-3 md:hidden">
-            <div className="grid h-11 w-11 place-items-center rounded-lg bg-slate-900 text-white"><Snowflake className="h-6 w-6" aria-hidden="true" /></div>
-            <div><div className="font-bold text-slate-900">ATPL Sales Portal</div><div className="text-xs text-slate-600">Air Trendz Pvt Ltd</div></div>
+        <main className="flex min-h-0 flex-1 flex-col justify-center px-5 py-6 sm:px-8 sm:py-7">
+          <div className="mb-6 flex justify-center md:hidden">
+            <Image src="/brand/atpl-logo.png" width={240} height={72} priority alt="ATPL - Air Trendz Private Limited" className="h-auto w-[180px]" />
           </div>
-          <div className="mb-5 flex items-start justify-between gap-4">
+          <div className="mx-auto mb-5 w-full max-w-[380px] flex items-start justify-between gap-4">
             <div>
-              <h2 className="text-2xl font-bold tracking-tight text-slate-900">Sign in</h2>
-              <p className="mt-1 text-sm text-slate-600">Sign in to your account</p>
+              <h2 className="text-2xl font-bold tracking-tight text-slate-900">Welcome back</h2>
+              <p className="mt-1 text-sm text-slate-600">Sign in to the ATPL Sales Portal</p>
             </div>
             {demo && (
               <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
@@ -95,10 +96,10 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
             )}
           </div>
 
-          {error && <p role="alert" className="mb-4 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{ERRORS[error] ?? ERRORS.server}</p>}
+          {error && <p role="alert" className="mx-auto mb-4 w-full max-w-[380px] rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{ERRORS[error] ?? ERRORS.server}</p>}
 
           {env().AUTH_MODE === "zoho" && (
-            <Button asChild size="lg" className="h-12 w-full justify-between rounded-lg bg-slate-900 px-4 text-sm text-white hover:bg-slate-800">
+            <Button asChild size="lg" className="mx-auto h-12 w-full max-w-[380px] justify-between rounded-lg bg-slate-900 px-4 text-sm text-white hover:bg-slate-800">
               <a href="/api/auth/zoho/start" aria-label="Sign in with Zoho">
                 <span>Sign in with Zoho</span>
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -106,7 +107,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
             </Button>
           )}
 
-          <div className="mb-5">
+          <div className="mx-auto mb-5 w-full max-w-[380px]">
             <LoginForm />
           </div>
 
@@ -129,7 +130,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
                           <button
                             type="submit"
                             aria-label={`Continue as ${u.name}, ${u.role}`}
-                            className="group flex h-14 w-full items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 text-left motion-safe:transition-colors motion-reduce:transition-none hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2 sm:px-3.5"
+                            className="group flex h-14 w-full items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 text-left hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2 sm:px-3.5"
                           >
                             <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${ROLE_STYLES[u.role].avatar}`} aria-hidden="true">
                               {initials(u.name)}
@@ -138,7 +139,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
                             <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold leading-tight ring-1 ring-inset ${ROLE_STYLES[u.role].badge}`}>
                                 {u.role}
                             </span>
-                            <ArrowRight className="h-4 w-4 shrink-0 text-slate-500 opacity-0 motion-safe:transition-all motion-reduce:transition-none group-hover:translate-x-0.5 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />
+                            <ArrowRight className="h-4 w-4 shrink-0 text-slate-500 opacity-0 group-hover:translate-x-0.5 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />
                           </button>
                         </form>
                       ))}

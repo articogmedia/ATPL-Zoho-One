@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
-import { BarChart3, ClipboardList, FileText, LogOut, MapPin, Snowflake } from "lucide-react";
+import { BarChart3, ClipboardList, FileText, LogOut, MapPin } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
@@ -38,7 +39,9 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
     <div className="flex min-h-screen w-full bg-muted">
       <aside className="hidden w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground md:flex">
         <Link href="/home" className="flex items-center gap-2 px-6 py-6">
-          <Snowflake className="h-7 w-7" />
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
+            <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" priority />
+          </span>
           <div>
             <div className="text-lg font-bold leading-tight">ATPL Sales Portal</div>
             <div className="text-xs opacity-75">Air Trendz Pvt Ltd</div>
@@ -57,7 +60,12 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b bg-card px-4 py-3 md:px-8">
           <div className="flex min-w-0 items-center gap-3">
-            <Snowflake className="h-6 w-6 shrink-0 text-primary md:hidden" />
+            <div className="flex shrink-0 items-center gap-2 md:hidden">
+              <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
+                <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" />
+              </span>
+              <span className="font-semibold">ATPL Sales Portal</span>
+            </div>
             <div className="min-w-0">
               <div className="truncate font-semibold">{user.name}</div>
               <div className="truncate text-xs text-muted-foreground">{user.role}</div>
