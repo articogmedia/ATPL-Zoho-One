@@ -96,7 +96,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
           <p className="mt-1 truncate text-sm text-slate-500 sm:text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
           {!isExec && <p className="mt-1 text-[13px] text-slate-500 sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
         </div>
-        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0 max-[480px]:hidden" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && <span className="max-[480px]:hidden"><FixAssignedLeads count={fixableCount} /></span>}</div>}
+        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0 max-[480px]:hidden" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads count={fixableCount} /></span>}</div>}
       </div>
 
       {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads count={fixableCount} compact /></div>}
@@ -249,7 +249,7 @@ function FixAssignedLeads({ count, compact = false }: { count: number; compact?:
       else toast.error(result.error);
     });
   };
-  return <Button variant={compact ? "ghost" : "outline"} className={compact ? "h-11 min-w-11 px-2 font-medium underline" : "h-10 max-[480px]:h-11 max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>;
+  return <Button title="Moves leads that have a sales executive but are still in Fresh Lead to Assigned to Sales." variant={compact ? "ghost" : "outline"} className={compact ? "h-11 min-w-11 px-2 font-medium underline" : "h-10 max-[480px]:h-11 max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>;
 }
 
 function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceChange, onClose }: {

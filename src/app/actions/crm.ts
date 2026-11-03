@@ -205,6 +205,7 @@ export async function fixAssignedLeadsAction() {
     if (user.role !== "Manager") throw new ForbiddenError("Only managers can fix assigned leads.");
     const changed = await crm().fixAssignedLeads(user);
     revalidateTag("leads");
+    revalidatePath("/leads");
     return { changed };
   });
 }

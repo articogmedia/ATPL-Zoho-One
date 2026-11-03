@@ -109,16 +109,27 @@ export const zohoRepository: CrmRepository = {
   async createLead(input, actor, assignTo) {
     const owner = assignTo ? await userByName(assignTo) : null;
     const queueOwner = !owner ? await queueOwnerId() : undefined;
+    const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
     const record: Record<string, unknown> = {
       Last_Name: input.name, Company: input.company || "-", Mobile: input.phone, City: input.area,
-      Lead_Source: input.source, Lead_Status: WRITE_LEAD_STATUS["Fresh Lead"], Description: input.remarks || undefined,
+      Lead_Source: input.source, Lead_Status: WRITE_LEAD_STATUS[status], Description: input.remarks || undefined,
       ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner } }),
     };
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
     await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
+    if (owner) {
+      await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
+      await zohoWrite("POST", "/Tasks", {
+        Subject: "Call new lead",
+        Status: TASK_STATUS_WRITE.Assigned,
+        Due_Date: todayIST(),
+        Owner: { id: owner.id },
+        Who_Id: { id },
+      });
+    }
     invalidate("leads", "users");
     return (await leadMap()).get(id) ?? {
-      id, ...input, status: "Fresh Lead", assignedTo: assignTo, createdOn: new Date().toISOString().slice(0, 10),
+      id, ...input, status, assignedTo: assignTo, createdOn: new Date().toISOString().slice(0, 10),
       address: "", touchedBy: [actor.name],
     };
   },

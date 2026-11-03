@@ -177,7 +177,10 @@ describe("Zoho hosts", () => {
 describe("Zoho lead owner fallbacks", () => {
     it("uses an explicitly assigned executive as owner", async () => {
       const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
-        if (path === "/Leads") expect(record.Owner).toEqual({ id: "exec-1" });
+        if (path === "/Leads") {
+          expect(record.Owner).toEqual({ id: "exec-1" });
+          expect(record.Lead_Status).toBe("Assigned to Sales");
+        }
         return "lead-1";
       });
 
@@ -198,12 +201,17 @@ describe("Zoho lead owner fallbacks", () => {
       );
 
       expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.anything(), { trigger: ["workflow"] });
+      expect(write).toHaveBeenCalledWith("POST", "/Notes", expect.objectContaining({ Note_Title: "Lead assigned" }));
+      expect(write).toHaveBeenCalledWith("POST", "/Tasks", expect.objectContaining({ Subject: "Call new lead", Owner: { id: "exec-1" } }));
     });
 
     it("uses the active queue owner when creating without an assignee", async () => {
       process.env.ZOHO_QUEUE_OWNER_ID = "queue-1";
       const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
-        if (path === "/Leads") expect(record.Owner).toEqual({ id: "queue-1" });
+        if (path === "/Leads") {
+          expect(record.Owner).toEqual({ id: "queue-1" });
+          expect(record.Lead_Status).toBe("Fresh Lead");
+        }
         return "lead-1";
       });
       vi.doMock("@/lib/zoho/client", () => ({
@@ -226,6 +234,7 @@ describe("Zoho lead owner fallbacks", () => {
       );
 
       expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.anything(), { trigger: ["workflow"] });
+      expect(write.mock.calls.some(([, path]) => path === "/Tasks")).toBe(false);
     });
 
     it("uses the active queue owner when un-assigning", async () => {
