@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
@@ -16,6 +16,11 @@ import {
 type Props = { user: User; leads: Lead[]; executives: string[]; owners: string[]; canAssign: boolean };
 type DrawerMode = "edit" | "history" | "schedule";
 type LeadAction = { type: "call" | "edit" | "reassign" | "delete"; lead: Lead } | null;
+
+function whatsappUrl(phone: string): string | null {
+  const digits = phone.replace(/\D/g, "").slice(-10);
+  return digits.length === 10 ? `https://wa.me/91${digits}` : null;
+}
 
 const TABS: { id: LeadTab; label: string }[] = [
   { id: "fresh", label: "Fresh Leads to Call" },
@@ -161,6 +166,16 @@ function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boole
   </div>;
 }
 
+function DesktopActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+  const whatsapp = whatsappUrl(lead.phone);
+  return <div className="flex justify-end gap-1">
+    <Button size="sm" variant="outline" className="h-11" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`}><Phone /> Call</Button>
+    {whatsapp && <a className="grid h-9 w-9 place-items-center rounded-md hover:bg-secondary" href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><MessageCircle className="text-[#128C7E]" /></a>}
+    <Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
+    {manager && <><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Reassign ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+  </div>;
+}
+
 function DesktopRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   return (
     <tr className="group cursor-pointer hover:bg-secondary/50" onClick={onOpen}>
@@ -170,13 +185,13 @@ function DesktopRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: 
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.createdOn || "—"}</td>
       <td className="px-3 py-3"><StatusBadge status={lead.status} />{lead.followUp && lead.followUp <= todayIST() && <div className="mt-1 text-xs font-semibold text-destructive">Overdue</div>}</td>
       <td className="max-w-36 truncate px-3 py-3">{lead.assignedTo ?? "Unassigned"}</td>
-      <td className="px-4 py-3 text-right" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={onAction} /></td>
+      <td className="px-4 py-3 text-right" onClick={(event) => event.stopPropagation()}><DesktopActionButtons lead={lead} manager={manager} onAction={onAction} /></td>
     </tr>
   );
 }
 
 function MobileRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
-  const wa = lead.phone.replace(/\D/g, "").slice(-10);
+  const wa = whatsappUrl(lead.phone);
   return (
     <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }} className="rounded-xl border border-border bg-card p-3 shadow-sm max-[480px]:p-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <div className="flex items-start justify-between gap-3">
@@ -184,7 +199,7 @@ function MobileRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: b
         <StatusBadge status={lead.status} />
       </div>
       <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2">{lead.phone ? <a className="inline-flex min-h-11 items-center truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone}</a> : <span>No phone</span>}<span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
-      {wa.length === 10 && <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={`https://wa.me/91${wa}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>}
+      {wa && <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={wa} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>}
       <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={onAction} /></div>
     </div>
   );
