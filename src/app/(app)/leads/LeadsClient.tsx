@@ -165,7 +165,8 @@ function MobileRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: b
         <div className="min-w-0"><div className="truncate font-semibold">{lead.name}</div><div className="truncate text-xs text-muted-foreground">{lead.company || "No company"}</div></div>
         <StatusBadge status={lead.status} />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground"><a className="truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`}>{lead.phone || "No phone"}</a><span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
+      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground"><a className="truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone || "No phone"}</a><span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
+      <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E]" href={`https://wa.me/${lead.phone.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>
       <div className="mt-3" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={onAction} /></div>
     </div>
   );

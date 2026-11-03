@@ -260,7 +260,7 @@ export type LeadTab = "fresh" | "callback" | "mine" | "all";
 export function leadsForTab(user: User, leads: Lead[], tab: LeadTab, search = "", source: LeadSource | "All" = "All"): Lead[] {
   const q = search.trim().toLowerCase();
   return visibleFor(user, leads).filter((l) => {
-    if (tab === "fresh" && !(l.status === "Fresh Lead" && !l.assignedTo)) return false;
+    if (tab === "fresh" && !(l.status === "Fresh Lead" && !l.assignedTo && !l.assignedToId)) return false;
     if (tab === "callback" && !(l.status === "Callback in Future" && !!l.followUp && l.followUp <= todayIST())) return false;
     if (tab === "mine" && !(l.assignedTo === user.name || l.touchedBy.includes(user.name))) return false;
     if (source !== "All" && l.source !== source) return false;

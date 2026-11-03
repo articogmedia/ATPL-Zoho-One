@@ -9,6 +9,8 @@ export const metadata: Metadata = {
   title: { default: "ATPL Sales Portal", template: "%s | ATPL Sales Portal" },
   description: "Air Trendz Pvt Ltd sales portal for leads, quotations and site visits.",
   robots: { index: false, follow: false },
+  manifest: "/manifest.webmanifest",
+  icons: { icon: "/icons/icon.svg", apple: "/icons/icon.svg" },
 };
 export const viewport: Viewport = { width: "device-width", initialScale: 1 };
 

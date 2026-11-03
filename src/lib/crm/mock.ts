@@ -36,6 +36,14 @@ export const mockRepository: CrmRepository = {
     note(lead.id, actor.name, `Lead created from ${input.source}`);
     return lead;
   },
+  async assignLead(id, assignee, actor) {
+    const lead = state.leads.find((item) => item.id === id);
+    if (!lead) throw new Error("Lead not found");
+    lead.assignedTo = assignee;
+    if (lead.status === "Fresh Lead") lead.status = "Attempted to Contact";
+    if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
+    note(id, actor.name, `Assigned to ${assignee} by ${actor.name}`);
+  },
   async updateLead(id, p, actor) {
     const l = state.leads.find((x) => x.id === id);
     if (!l) throw new Error("Lead not found");

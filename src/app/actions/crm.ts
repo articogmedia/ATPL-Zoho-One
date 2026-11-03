@@ -130,7 +130,7 @@ export async function reassignLeadAction(input: unknown) {
     const p = reassignLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
     if (!(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
-    await crm().updateLead(p.id, { assignedTo: p.assignedTo }, user);
+    await crm().assignLead(p.id, p.assignedTo, user);
     revalidateTag("leads");
     revalidateTag("users");
     return { zohoUrl: zohoLeadUrl(p.id) };

@@ -23,8 +23,10 @@ describe("Zoho lead actions", () => {
       if (path === "/Leads/lead-1") expect(record).toMatchObject({
         Last_Name: "Updated Lead", Company: "Updated Co", Mobile: "9999999999", Lead_Source: "Google Ads",
       });
+
       return "ok";
     });
+
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
       zoho: vi.fn(async () => ({ data: [] })),
@@ -40,6 +42,38 @@ describe("Zoho lead actions", () => {
     expect(write).toHaveBeenCalledWith("PUT", "/Leads/lead-1", expect.objectContaining({
       Last_Name: "Updated Lead", Company: "Updated Co", Mobile: "9999999999", Lead_Source: "Google Ads",
     }), { trigger: ["workflow"] });
+  });
+
+  it("assigns a lead, advances Fresh Lead, notes it, and creates a call task", async () => {
+    const writes: { method: string; path: string; record: Record<string, unknown> }[] = [];
+    const write = vi.fn(async (method: string, path: string, record: Record<string, unknown>) => {
+      writes.push({ method, path, record });
+      return path === "/Leads/lead-1" ? "ok" : "created";
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho: vi.fn(async () => ({ users: [{ id: "1394515000001147001", full_name: "Pavan", role: { name: "Sales Executive" } }] })),
+      zohoList: vi.fn(async (module: string) => module === "Leads"
+        ? [{ id: "lead-1", Last_Name: "Lead", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }]
+        : []),
+      zohoWrite: write,
+    }));
+    const { invalidate } = await import("@/lib/cache");
+    invalidate("users", "leads", "visits");
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.assignLead("lead-1", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
+
+    expect(writes[0]).toMatchObject({
+      method: "PUT", path: "/Leads/lead-1",
+      record: { Owner: { id: "1394515000001147001" }, Lead_Status: "Attempted to Contact" },
+    });
+    expect(writes[1]).toMatchObject({ method: "POST", path: "/Notes", record: { Note_Title: "Lead assigned" } });
+    expect(writes[1]?.record.Note_Content).toMatch(/Assigned to Pavan by Reshma on \d{4}-\d{2}-\d{2}/);
+    expect(writes[2]).toMatchObject({
+      method: "POST", path: "/Tasks",
+      record: { Subject: "Call new lead", Due_Date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), Owner: { id: "1394515000001147001" } },
+    });
   });
 
   it("deletes a lead through the Zoho recycle-bin endpoint", async () => {

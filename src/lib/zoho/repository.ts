@@ -1,5 +1,5 @@
 import "server-only";
-import { isAssignable, quoteTotals, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
+import { isAssignable, quoteTotals, todayIST, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -17,6 +17,7 @@ const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total
 
 const SHORT = 20_000;   // transactional lists
 const LONG = 300_000;   // users, products
+export const ASSIGNMENT_CONTACTED_STATUS = "Attempted to Contact" as const;
 
 const taskRows = () => cached("visits:tasks", SHORT, () =>
   zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
@@ -121,6 +122,44 @@ export const zohoRepository: CrmRepository = {
       id, ...input, status: "Fresh Lead", assignedTo: assignTo, createdOn: new Date().toISOString().slice(0, 10),
       address: "", touchedBy: [actor.name],
     };
+  },
+
+  async assignLead(id, assignee, actor) {
+    if (actor.role !== "Manager") throw new ZohoError("Only managers can assign leads.");
+    const current = await this.getLead(id);
+    if (!current) throw new ZohoError("Lead not found", 404);
+    const owner = await userByName(assignee);
+    const previousOwnerId = current.ownerId;
+    const previousStatus = current.status;
+    const nextStatus = current.status === "Fresh Lead" ? ASSIGNMENT_CONTACTED_STATUS : current.status;
+    const record = {
+      Owner: { id: owner.id },
+      ...(nextStatus !== current.status ? { Lead_Status: WRITE_LEAD_STATUS[nextStatus] } : {}),
+    };
+    try {
+      await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
+      await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${todayIST()}`);
+      await zohoWrite("POST", "/Tasks", {
+        Subject: "Call new lead",
+        Status: TASK_STATUS_WRITE.Assigned,
+        Due_Date: todayIST(),
+        Owner: { id: owner.id },
+        Who_Id: { id },
+      });
+    } catch (error) {
+      try {
+        await zohoWrite("PUT", `/Leads/${id}`, {
+          Owner: previousOwnerId ? { id: previousOwnerId } : undefined,
+          Lead_Status: WRITE_LEAD_STATUS[previousStatus],
+        }, { trigger: ["workflow"] });
+      } catch (rollbackError) {
+        throw new ZohoError(
+          `${error instanceof Error ? error.message : "Lead assignment failed"}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : "unknown error"}`,
+        );
+      }
+      throw error;
+    }
+    invalidate("leads", "users", "visits");
   },
 
   async updateLead(id, p, actor) {

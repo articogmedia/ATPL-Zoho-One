@@ -149,6 +149,11 @@
     color: var(--color-foreground);
     overflow-x: hidden;
   }
+
+  :where(a, button, input, select, textarea):focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
 }
 
 @media (max-width: 767px) {

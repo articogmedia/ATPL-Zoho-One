@@ -1,0 +1,12 @@
+{
+  "name": "ATPL Sales Portal",
+  "short_name": "ATPL Portal",
+  "description": "Air Trendz Pvt Ltd sales portal",
+  "start_url": "/home",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#2454c5",
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

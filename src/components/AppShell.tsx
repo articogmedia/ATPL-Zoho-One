@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { BarChart3, ClipboardList, FileText, LogOut, MapPin, Snowflake } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout } from "@/app/actions/auth";
@@ -18,6 +18,21 @@ const NAV = [
 export function AppShell({ user, children }: { user: { name: string; role: Role }; children: ReactNode }) {
   const path = usePathname();
   const items = NAV.filter((n) => canAccess(user.role, n.s));
+
+  useEffect(() => {
+    let timer: number | undefined;
+    const resetTimer = () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      timer = window.setTimeout(() => { void logout(); }, 30 * 60 * 1000);
+    };
+    const events = ["pointerdown", "keydown", "touchstart", "scroll"] as const;
+    events.forEach((event) => window.addEventListener(event, resetTimer, { passive: true }));
+    resetTimer();
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      events.forEach((event) => window.removeEventListener(event, resetTimer));
+    };
+  }, []);
 
   return (
     <div className="flex min-h-screen w-full bg-muted">
@@ -55,7 +70,7 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
         <main className="min-w-0 flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">{children}</main>
       </div>
 
-      {items.length > 1 && (
+      {items.length > 0 && (
         <nav className="fixed inset-x-0 bottom-0 z-30 grid border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0,1fr))` }}>
           {items.map((n) => (
             <Link key={n.to} href={n.to}

@@ -47,6 +47,10 @@ describe("manage leads", () => {
     expect(r.length).toBeGreaterThan(0);
     expect(r.every((l) => l.status === "Fresh Lead" && !l.assignedTo)).toBe(true);
   });
+  it("fresh tab excludes leads with an assigned owner id even without a display name", () => {
+    const leads = [{ ...SAMPLE_LEADS[0], status: "Fresh Lead" as const, assignedTo: null, assignedToId: "owner-1" }] as typeof SAMPLE_LEADS;
+    expect(leadsForTab(u("divya"), leads, "fresh")).toHaveLength(0);
+  });
   it("assigned lead leaves Fresh but stays in All", () => {
     const leads = SAMPLE_LEADS.map((l) => (l.id === "L105" ? { ...l, assignedTo: "Ravi" } : l));
     expect(leadsForTab(u("divya"), leads, "fresh").some((l) => l.id === "L105")).toBe(false);
