@@ -12,7 +12,7 @@ describe("access rules", () => {
     expect(canAccess("Calling Team", "visits")).toBe(false);
   });
   it("only managers see performance", () => {
-    expect(canAccess("Sales Executive", "performance")).toBe(false);
+    expect(canAccess("Sales Executive", "performance")).toBe(true);
     expect(canAccess("Manager", "performance")).toBe(true);
   });
   it("every role lands on home", () => {
@@ -27,7 +27,7 @@ describe("access rules", () => {
   it("managers get the performance card on home", () => {
     expect(canAccess("Manager", "home")).toBe(true);
     expect(canAccess("Manager", "performance")).toBe(true);
-    expect(canAccess("Sales Executive", "performance")).toBe(false);
+    expect(canAccess("Sales Executive", "performance")).toBe(true);
   });
   it("executives see only their own leads", () => {
     expect(visibleFor(u("anil"), SAMPLE_LEADS).every((l) => l.assignedTo === "Anil")).toBe(true);
@@ -158,6 +158,29 @@ describe("performance dashboard", () => {
     const s = perfStats(leads, [], [], "month", "2026-10-29", roster, sales);
     expect(s.rows.map((row) => row.name)).toEqual(["Pavan"]);
     expect(s.totalLeads).toBe(1);
+    expect(s.rows.map((row) => row.name)).not.toContain("Sai Kiran");
+  });
+  it("scopes every Sales metric, including source, visits and quotations", () => {
+    const sales = { id: "pavan-id", name: "Pavan", role: "Sales Executive" as const };
+    const other = { id: "sai-id", name: "Sai Kiran", role: "Sales Executive" as const };
+    const leads = [
+      { ...SAMPLE_LEADS[0], ownerId: "pavan-id", source: "Meta Ads", createdOn: "2026-10-10" },
+      { ...SAMPLE_LEADS[1], ownerId: "sai-id", source: "Google Ads", createdOn: "2026-10-10" },
+    ] as Lead[];
+    const quotes = [
+      { ...SAMPLE_QUOTES[0], ownerId: "pavan-id", date: "2026-10-10" },
+      { ...SAMPLE_QUOTES[1], ownerId: "sai-id", date: "2026-10-10" },
+    ] as Quotation[];
+    const visits = [
+      { ...SAMPLE_VISITS[0], executiveId: "pavan-id", date: "2026-10-10", isVisit: true, status: "Completed" },
+      { ...SAMPLE_VISITS[1], executiveId: "sai-id", date: "2026-10-10", isVisit: true, status: "Completed" },
+    ] as Visit[];
+    const stats = perfStats(leads, quotes, visits, "month", "2026-10-29", [sales, other], sales);
+    expect(stats.totalLeads).toBe(1);
+    expect(stats.bySource.map((item) => item.count)).toEqual([1, 0, 0]);
+    expect(stats.quotesSent).toBe(1);
+    expect(stats.scheduled).toBe(1);
+    expect(stats.completed).toBe(1);
   });
   it("scopes Sales call counts to the logged-in owner", () => {
     const sales = { id: "1394515000001147001", name: "Pavan", role: "Sales Executive" as const };

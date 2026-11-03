@@ -31,18 +31,27 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
   const s = perfStats(leads, quotes, visits, range, todayIST(), executives, viewer);
   const unsetIds = missingPortalUsers(STATIC_USERS, liveUsers).map((user) => user.name);
 
-  const cards = [
-    { k: "Total Leads", v: String(s.totalLeads), sub: `${s.won} won` },
-    { k: "Conversion Rate", v: `${s.conversion}%`, sub: "Won ÷ total leads" },
-    { k: "Visits Completed", v: `${s.completed}/${s.scheduled}`, sub: "of scheduled visits" },
-    { k: "Quotations Sent", v: String(s.quotesSent), sub: "in this period" },
-  ];
+  const cards = viewer.role === "Sales Executive"
+    ? [
+        { k: "Leads Assigned", v: String(s.totalLeads), sub: "in this period" },
+        { k: "Calls Made", v: String(s.calls), sub: "in this period" },
+        { k: "Visits Completed", v: String(s.completed), sub: `${s.scheduled} scheduled` },
+        { k: "Quotations Sent", v: String(s.quotesSent), sub: "in this period" },
+        { k: "Won", v: String(s.won), sub: "in this period" },
+        { k: "Conversion %", v: `${s.conversion}%`, sub: "Won ÷ leads assigned" },
+      ]
+    : [
+        { k: "Total Leads", v: String(s.totalLeads), sub: `${s.won} won` },
+        { k: "Conversion Rate", v: `${s.conversion}%`, sub: "Won ÷ total leads" },
+        { k: "Visits Completed", v: `${s.completed}/${s.scheduled}`, sub: "of scheduled visits" },
+        { k: "Quotations Sent", v: String(s.quotesSent), sub: "in this period" },
+      ];
   const maxSource = Math.max(1, ...s.bySource.map((b) => b.count));
   const visitPct = s.scheduled ? Math.round((s.completed / s.scheduled) * 100) : 0;
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-bold">Performance</h1>
+      <h1 className="text-2xl font-bold">{viewer.role === "Sales Executive" ? "My Performance" : "Performance"}</h1>
       {viewer.role === "Manager" && unsetIds.length > 0 && (
         <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {unsetIds.map((name) => <div key={name}>No Zoho user found for {name}</div>)}
@@ -94,7 +103,7 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
         </div>
       </div>
 
-      <div className="rounded-xl bg-card p-5 shadow-sm">
+      {viewer.role === "Manager" && <div className="rounded-xl bg-card p-5 shadow-sm">
         <h2 className="mb-4 text-base font-semibold">Executive-wise Performance</h2>
         <div className="overflow-x-auto">
           <table className="min-w-[700px] w-full text-sm">
@@ -122,7 +131,7 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

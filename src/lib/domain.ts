@@ -184,7 +184,7 @@ export function perfStats(
   const scopedCalls = viewer?.role === "Sales Executive"
     ? cs.filter((call) => normalizeOwnerId(call.ownerId) === viewerId)
     : cs;
-  const bySource = LEAD_SOURCES.map((source) => ({ source, count: ls.filter((l) => l.source === source).length }));
+  const bySource = LEAD_SOURCES.map((source) => ({ source, count: scopedLeads.filter((l) => l.source === source).length }));
   const roster = executives.map((executive) =>
     typeof executive === "string" ? { id: "", name: executive, role: "Sales Executive" as const } : executive,
   );
@@ -237,8 +237,8 @@ export function perfStats(
     won: scopedLeads.filter((lead) => lead.status === "Won").length,
     conversion: scopedLeads.length ? Math.round((scopedLeads.filter((lead) => lead.status === "Won").length / scopedLeads.length) * 100) : 0,
     bySource,
-    scheduled: vs.length,
-    completed: vs.filter((v) => v.status === "Completed").length,
+    scheduled: scopedVisits.length,
+    completed: scopedVisits.filter((v) => v.status === "Completed").length,
     calls: scopedCalls.length,
     quotesSent: scopedQuotes.length,
     rows: viewer?.role === "Manager" || !viewer ? [...rows, totalRow] : rows,
@@ -249,7 +249,7 @@ export function perfStats(
 export type Section = "home" | "leads" | "quotations" | "visits" | "performance";
 export const ACCESS: Record<Role, Section[]> = {
   "Calling Team": ["leads"],
-  "Sales Executive": ["leads", "quotations", "visits"],
+  "Sales Executive": ["leads", "quotations", "visits", "performance"],
   Manager: ["leads", "quotations", "visits", "performance"],
 };
 
