@@ -146,12 +146,29 @@ type Page<R> = { data?: R[]; info?: { more_records?: boolean } };
 /** Fetch up to `max` records of a module, 200 per page, newest first. */
 export async function zohoList<R>(module: string, fields: string[], max: number, extra: Query = {}): Promise<R[]> {
   const out: R[] = [];
-  for (let page = 1; out.length < max; page++) {
-    const json = await zoho<Page<R>>("GET", `/${module}`, {
+  if (max <= 0) return out;
+
+  const fetchPage = (page: number) => zoho<Page<R>>("GET", `/${module}`, {
       query: { fields: fields.join(","), per_page: 200, page, sort_by: "Created_Time", sort_order: "desc", ...extra },
     });
-    out.push(...(json?.data ?? []));
-    if (!json?.info?.more_records) break;
+
+  const first = await fetchPage(1);
+  out.push(...(first?.data ?? []));
+  let moreRecords = first?.info?.more_records === true;
+  let page = 2;
+  while (moreRecords && out.length < max) {
+    const batchSize = Math.min(3, Math.ceil((max - out.length) / 200));
+    const pages = await Promise.all(
+      Array.from({ length: batchSize }, (_, index) => fetchPage(page + index)),
+    );
+    for (const json of pages) {
+      out.push(...(json?.data ?? []));
+      if (json?.info?.more_records !== true) {
+        moreRecords = false;
+        break;
+      }
+    }
+    page += batchSize;
   }
   return out.slice(0, max);
 }

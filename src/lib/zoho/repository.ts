@@ -16,7 +16,7 @@ const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "Descri
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result"];
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
 
-const SHORT = 20_000;   // transactional lists
+const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products
 const taskRows = cache(() => cached("visits:tasks", SHORT, () =>
   zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
