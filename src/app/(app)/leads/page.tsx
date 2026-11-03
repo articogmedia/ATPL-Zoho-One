@@ -18,7 +18,7 @@ export default async function LeadsPage() {
       leads={visibleFor(user, all)}
       executives={assignableUsers.map((u) => u.name)}
       owners={assignableUsers.map((u) => u.name)}
-      canAssign={user.role === "Manager"}
+      canAssign={user.role === "Manager" || user.role === "Calling Team"}
     />
   );
 }

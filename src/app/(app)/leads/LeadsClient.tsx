@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -51,7 +50,6 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
   const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Lead | null>(null);
   const [action, setAction] = useState<LeadAction>(null);
-  const router = useRouter();
 
   useEffect(() => {
     setLeadRows(leads);
@@ -202,7 +200,19 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
         />
       )}
-      {action && <LeadActionModal action={action} executives={executives} onClose={() => setAction(null)} onDone={() => { setAction(null); router.refresh(); }} onAssigned={(name) => { setAction(null); setTab("assigned"); toast.success(`Assigned to ${name}. Moved to Assigned to Sales`, { action: { label: "Open tab", onClick: () => setTab("assigned") } }); router.refresh(); }} />}
+      {action && <LeadActionModal action={action} executives={executives} onClose={() => setAction(null)} onDone={(patch) => {
+        setLeadRows((current) => action.type === "delete"
+          ? current.filter((lead) => lead.id !== action.lead.id)
+          : current.map((lead) => lead.id === action.lead.id ? { ...lead, ...patch } : lead));
+        setAction(null);
+      }} onAssigned={(name) => {
+        setLeadRows((current) => current.map((lead) => lead.id === action.lead.id
+          ? { ...lead, assignedTo: name, assignedToId: executives.includes(name) ? lead.assignedToId : lead.assignedToId, status: lead.status === "Fresh Lead" ? "Assigned to Sales" : lead.status }
+          : lead));
+        setAction(null);
+        setTab("assigned");
+        toast.success(`Assigned to ${name}. Moved to Assigned to Sales`, { action: { label: "Open tab", onClick: () => setTab("assigned") } });
+      }} />}
     </div>
   );
 }
@@ -298,7 +308,7 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
 }
 
 function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
-  action: Exclude<LeadAction, null>; executives: string[]; onClose: () => void; onDone: () => void; onAssigned: (name: string) => void;
+  action: Exclude<LeadAction, null>; executives: string[]; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (name: string) => void;
 }) {
   const [pending, start] = useTransition();
   const [name, setName] = useState(action.lead.name);
@@ -325,7 +335,14 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
       if (action.type === "reassign") onAssigned(assignee);
       else {
         toast.success(action.type === "delete" ? "Lead deleted" : "Lead updated");
-        onDone();
+        const status: LeadStatus = outcome === "Connected" ? "Contacted"
+          : outcome === "Call Back Later" ? "Callback in Future"
+          : outcome === "Wrong Number" ? "Not Responsive" : "Attempted to Contact";
+        onDone(action.type === "edit"
+          ? { name, company, phone, source }
+          : action.type === "call"
+            ? { status, ...(followUp ? { followUp, followUpTime } : {}) }
+            : {});
       }
     });
   };
