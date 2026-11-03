@@ -59,14 +59,16 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
   const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
 
   return (
-    <div className="space-y-4 text-sm max-[480px]:space-y-3">
+    <div className="space-y-4 text-sm max-[480px]:space-y-3 max-[480px]:pt-10">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="w-full">
           <h1 className="text-xl font-bold sm:text-2xl">Manage Leads</h1>
           <p className="mt-1 text-muted-foreground">Review enquiries, assign ownership, and track follow-ups.</p>
         </div>
-        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && <FixAssignedLeads count={fixableCount} />}</div>}
+        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && <span className="max-[480px]:hidden"><FixAssignedLeads count={fixableCount} /></span>}</div>}
       </div>
+
+      {user.role === "Manager" && fixableCount > 0 && <div className="hidden items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900 max-[480px]:flex"><span>Some assigned leads still show as Fresh Lead.</span><FixAssignedLeads count={fixableCount} /></div>}
 
       <div className="flex gap-2 overflow-x-auto border-b pb-2 max-[480px]:-mx-1 max-[480px]:px-1" role="tablist" aria-label="Lead views">
         {availableTabs.map((item) => (
@@ -75,9 +77,9 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
             role="tab"
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
-            className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:min-w-[calc(50vw-1.5rem)] max-[480px]:flex-1 ${tab === item.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+            className={`h-11 shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:w-[calc(50vw-1.5rem)] max-[480px]:min-w-[calc(50vw-1.5rem)] ${tab === item.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
           >
-            {item.label} <span className="ml-1 opacity-75">({count(item.id)})</span>
+            <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>
         ))}
       </div>
