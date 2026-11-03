@@ -9,14 +9,14 @@ import { ZohoError } from "@/lib/zoho/client";
 import { env } from "@/lib/env";
 import {
   LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
-  type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
+  normalizePhone, type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
 } from "@/lib/domain";
 
-export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; duplicate?: { id: string; name: string } };
+export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; duplicate?: { id: string; name: string; owner: string; status: string } };
 
 class DuplicateLeadError extends Error {
-  constructor(readonly lead: { id: string; name: string }) {
-    super(`Lead already exists: ${lead.name}`);
+  constructor(readonly lead: { id: string; name: string; owner: string; status: string }) {
+    super("A lead with this number already exists");
   }
 }
 
@@ -45,8 +45,7 @@ const text = (max: number) => z.string().trim().max(max);
 const status = z.string().refine((s): s is LeadStatus => (LEAD_STATUSES as string[]).includes(s));
 const source = z.string().refine((s): s is LeadSource => (LEAD_SOURCES as string[]).includes(s));
 const phone = z.string().trim().transform((value, ctx) => {
-  const digits = value.replace(/\D/g, "");
-  const normalized = digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits;
+  const normalized = normalizePhone(value);
   if (!/^\d{10}$/.test(normalized)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Enter a valid 10-digit Indian mobile number" });
     return z.NEVER;
@@ -77,18 +76,20 @@ async function ownLeadOrThrow(user: User, leadId: string) {
 
 const newLeadSchema = z.object({
   name: text(120).min(1), company: text(160), phone, area: text(120), source, remarks: text(500),
-  assignedTo: text(120).nullable().optional(),
+  assignedTo: text(120).nullable().optional(), forceCreate: z.boolean().optional(),
 });
 
 export async function addLeadAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
-    const duplicate = (await crm().listLeads()).find((lead) => lead.phone.replace(/\D/g, "").slice(-10) === data.phone);
-    if (duplicate) throw new DuplicateLeadError({ id: duplicate.id, name: duplicate.name });
+    const duplicate = (await crm().listLeads()).find((lead) => normalizePhone(lead.phone) === data.phone);
+    if (duplicate && !(user.role === "Manager" && data.forceCreate)) {
+      throw new DuplicateLeadError({ id: duplicate.id, name: duplicate.name, owner: duplicate.assignedTo ?? "Unassigned", status: duplicate.status });
+    }
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
     const assignee = isExecutive(user) ? user.name : data.assignedTo ?? null;
-    if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers and the calling team can assign leads.");
+    if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     if (assignee && !(await assignableNames()).includes(assignee)) throw new ForbiddenError("Choose a team member.");
     const lead = await crm().createLead(data, user, assignee);
     revalidateTag("leads");
@@ -157,7 +158,7 @@ export async function saveLeadUpdateAction(input: unknown) {
     const p = updateLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
     if (p.assignedTo !== undefined) {
-      if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers and the calling team can assign leads.");
+      if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
       if (p.assignedTo && !(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     }
     await crm().updateLead(p.id, { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo }, user);
@@ -188,10 +189,22 @@ export async function logCallAction(input: unknown) {
     const user = await requireActionUser("leads");
     const data = callSchema.parse(input);
     await ownLeadOrThrow(user, data.leadId);
-    if (data.followUp && !data.followUpTime) throw new ForbiddenError("Choose a follow-up time.");
+    if ((data.followUp && !data.followUpTime) || (data.outcome === "Call Back Later" && (!data.followUp || !data.followUpTime))) {
+      throw new ForbiddenError("Call Back Later requires a follow-up date and time.");
+    }
     await crm().logCall(data, user);
     revalidateTag("leads");
     revalidateTag("visits");
+  });
+}
+
+export async function fixAssignedLeadsAction() {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    if (user.role !== "Manager") throw new ForbiddenError("Only managers can fix assigned leads.");
+    const changed = await crm().fixAssignedLeads(user);
+    revalidateTag("leads");
+    return { changed };
   });
 }
 

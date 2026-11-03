@@ -4,7 +4,7 @@ import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
 import { zoho, zohoList, zohoWrite, ZohoError } from "./client";
-import { FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS } from "./fields";
+import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
   type ZCall, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
@@ -17,8 +17,6 @@ const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total
 
 const SHORT = 20_000;   // transactional lists
 const LONG = 300_000;   // users, products
-export const ASSIGNMENT_CONTACTED_STATUS = "Attempted to Contact" as const;
-
 const taskRows = () => cached("visits:tasks", SHORT, () =>
   zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
 );
@@ -131,21 +129,33 @@ export const zohoRepository: CrmRepository = {
     const owner = await userByName(assignee);
     const previousOwnerId = current.ownerId;
     const previousStatus = current.status;
-    const nextStatus = current.status === "Fresh Lead" ? ASSIGNMENT_CONTACTED_STATUS : current.status;
+    const nextStatus = current.status === "Fresh Lead" ? ASSIGNED_STAGE : current.status;
     const record = {
       Owner: { id: owner.id },
       ...(nextStatus !== current.status ? { Lead_Status: WRITE_LEAD_STATUS[nextStatus] } : {}),
     };
     try {
-      await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
-      await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${todayIST()}`);
-      await zohoWrite("POST", "/Tasks", {
-        Subject: "Call new lead",
-        Status: TASK_STATUS_WRITE.Assigned,
-        Due_Date: todayIST(),
-        Owner: { id: owner.id },
-        Who_Id: { id },
-      });
+      try {
+        await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
+      } catch (error) {
+        throw new ZohoError(`Lead assignment failed while updating owner/status: ${error instanceof Error ? error.message : "Zoho rejected the update"}`);
+      }
+      try {
+        await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
+      } catch (error) {
+        throw new ZohoError(`Lead assignment failed while adding the note: ${error instanceof Error ? error.message : "Zoho rejected the note"}`);
+      }
+      try {
+        await zohoWrite("POST", "/Tasks", {
+          Subject: "Call new lead",
+          Status: TASK_STATUS_WRITE.Assigned,
+          Due_Date: todayIST(),
+          Owner: { id: owner.id },
+          Who_Id: { id },
+        });
+      } catch (error) {
+        throw new ZohoError(`Lead assignment failed while creating the task: ${error instanceof Error ? error.message : "Zoho rejected the task"}`);
+      }
     } catch (error) {
       try {
         await zohoWrite("PUT", `/Leads/${id}`, {
@@ -160,6 +170,22 @@ export const zohoRepository: CrmRepository = {
       throw error;
     }
     invalidate("leads", "users", "visits");
+  },
+
+  async fixAssignedLeads(actor) {
+    if (actor.role !== "Manager") throw new ZohoError("Only managers can fix assigned leads.");
+    const [allLeads, allUsers] = await Promise.all([leads(), users()]);
+    const salesIds = new Set(allUsers.filter((user) => user.role === "Sales Executive").map((user) => String(user.id).trim()));
+    const stale = allLeads.filter((lead) => lead.status === "Fresh Lead" && salesIds.has(String(lead.ownerId ?? "").trim()));
+    for (const lead of stale) {
+      try {
+        await zohoWrite("PUT", `/Leads/${lead.id}`, { Lead_Status: WRITE_LEAD_STATUS[ASSIGNED_STAGE] }, { trigger: ["workflow"] });
+      } catch (error) {
+        throw new ZohoError(`Fix assigned leads failed for ${lead.name}: ${error instanceof Error ? error.message : "Zoho rejected the update"}`);
+      }
+    }
+    invalidate("leads");
+    return stale.length;
   },
 
   async updateLead(id, p, actor) {
@@ -227,10 +253,7 @@ export const zohoRepository: CrmRepository = {
   async logCall(input, actor) {
     const lead = await this.getLead(input.leadId);
     if (!lead) throw new ZohoError("Lead not found", 404);
-    const status = input.outcome === "Connected" ? "Contacted"
-      : input.outcome === "Call Back Later" ? "Callback in Future"
-      : input.outcome === "Wrong Number" ? "Lost"
-      : "Attempted to Contact";
+    const status = CALL_STATUS_BY_OUTCOME[input.outcome];
     await zohoWrite("POST", "/Calls", {
       Subject: `${input.outcome} - ${lead.name}`,
       What_Id: { id: lead.id }, Call_Type: "Outbound",
@@ -239,7 +262,7 @@ export const zohoRepository: CrmRepository = {
       Description: input.remarks || undefined, Owner: { id: actor.id },
     });
     await zohoWrite("PUT", `/Leads/${lead.id}`, { Lead_Status: WRITE_LEAD_STATUS[status] }, { trigger: ["workflow"] });
-    await addNote(lead.id, "Call logged", `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name})`);
+    await addNote(lead.id, "Call logged", `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name} at ${new Date().toISOString()})`);
     if (input.followUp) {
       const owner = lead.assignedTo ? await userByName(lead.assignedTo) : actor;
       await zohoWrite("POST", "/Tasks", {

@@ -4,7 +4,7 @@ export const fieldClass =
 export function StatusBadge({ status }: { status: string }) {
   const tone =
     status === "Won" ? "bg-success text-success-foreground"
-    : status === "Lost" ? "bg-destructive text-destructive-foreground"
+    : ["Lost Lead", "Junk Lead"].includes(status) ? "bg-destructive text-destructive-foreground"
     : status === "Fresh Lead" ? "bg-accent text-accent-foreground"
     : "bg-secondary text-secondary-foreground";
   return <span className={`inline-block rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span>;

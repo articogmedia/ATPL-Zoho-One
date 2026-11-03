@@ -201,7 +201,7 @@ export const MOCK_LEADS: Lead[] = [
     "phone": "96660 77889",
     "area": "Miyapur",
     "source": "Google Ads",
-    "status": "Lost",
+    "status": "Lost Lead",
     "assignedTo": "Anil",
     "remarks": "12 classroom ACs, went with competitor",
     "createdOn": "2026-09-15",

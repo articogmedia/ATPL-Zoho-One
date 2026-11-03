@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { financialYear, isAssignable, nextOfferNo, todayIST } from "@/lib/domain";
+import { financialYear, isAssignable, nextOfferNo, normalizePhone, todayIST } from "@/lib/domain";
+import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
 import { STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
@@ -55,9 +56,16 @@ describe("zoho mapping", () => {
   it("maps Zoho's stock statuses to portal statuses", () => {
     expect(normalizeStatus("Not Contacted")).toBe("Fresh Lead");
     expect(normalizeStatus("Contact in Future")).toBe("Callback in Future");
-    expect(normalizeStatus("Junk Lead")).toBe("Lost");
+    expect(normalizeStatus("Junk Lead")).toBe("Junk Lead");
     expect(normalizeStatus("Won")).toBe("Won");
     expect(normalizeStatus("something custom")).toBe("Fresh Lead");
+  });
+  it("normalizes duplicate phone numbers and maps every call outcome", () => {
+    expect(normalizePhone("+91 98765 43210")).toBe("9876543210");
+    expect(CALL_STATUS_BY_OUTCOME).toMatchObject({
+      Connected: "Contacted", "No Answer": "Attempted to Contact", Busy: "Attempted to Contact",
+      "Call Back Later": "Callback in Future", "Wrong Number": "Junk Lead",
+    });
   });
   it("treats assignable owners as assigned and the queue owner as the fresh queue", () => {
     const base = { id: "1", Last_Name: "Rao", Created_Time: "2026-10-25T10:15:00+05:30", Lead_Status: "Not Contacted" };

@@ -7,10 +7,13 @@ export type User = { id: string; name: string; role: Role; email?: string };
 
 export type LeadStatus =
   | "Fresh Lead" | "Attempted to Contact" | "Callback in Future" | "Contacted"
-  | "Site Visit Scheduled" | "Quotation Sent" | "Won" | "Lost";
+  | "Junk Lead" | "Lost Lead" | "Not Contacted" | "Pre-Qualified"
+  | "Not Qualified" | "Not Responsive" | "Assigned to Sales"
+  | "Site Visit Scheduled" | "Quotation Sent" | "Won";
 export const LEAD_STATUSES: LeadStatus[] = [
   "Fresh Lead", "Attempted to Contact", "Callback in Future", "Contacted",
-  "Site Visit Scheduled", "Quotation Sent", "Won", "Lost",
+  "Junk Lead", "Lost Lead", "Not Contacted", "Pre-Qualified", "Not Qualified",
+  "Not Responsive", "Assigned to Sales", "Site Visit Scheduled", "Quotation Sent", "Won",
 ];
 export type LeadSource = "Meta Ads" | "Google Ads" | "Direct Call";
 export const LEAD_SOURCES: LeadSource[] = ["Meta Ads", "Google Ads", "Direct Call"];
@@ -43,6 +46,7 @@ export type Lead = {
 };
 
 export const leadLabel = (l: Lead) => (l.company ? `${l.name} (${l.company})` : l.name);
+export const normalizePhone = (value: string): string => value.replace(/\D/g, "").slice(-10);
 
 export type QuoteItem = { model: string; unit: string; qty: number; price: number; discount?: number };
 export type Quotation = {
@@ -269,7 +273,7 @@ export function leadsForTab(user: User, leads: Lead[], tab: LeadTab, search = ""
   });
 }
 
-export const canAssignLeads = (role: Role) => role === "Manager" || role === "Calling Team";
+export const canAssignLeads = (role: Role) => role === "Manager";
 export function isAssignable(u: User, queueOwnerId?: string): boolean {
   return (u.role === "Sales Executive" || u.role === "Manager") &&
     normalizeOwnerId(u.id) !== normalizeOwnerId(queueOwnerId);

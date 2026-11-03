@@ -1,4 +1,5 @@
 import { quoteTotals, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
+import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import type { CrmRepository, LogCallInput } from "./repository";
 import { isAssignable } from "@/lib/domain";
 import { env } from "@/lib/env";
@@ -40,9 +41,15 @@ export const mockRepository: CrmRepository = {
     const lead = state.leads.find((item) => item.id === id);
     if (!lead) throw new Error("Lead not found");
     lead.assignedTo = assignee;
-    if (lead.status === "Fresh Lead") lead.status = "Attempted to Contact";
+    if (lead.status === "Fresh Lead") lead.status = ASSIGNED_STAGE;
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
     note(id, actor.name, `Assigned to ${assignee} by ${actor.name}`);
+  },
+  async fixAssignedLeads(actor) {
+    if (actor.role !== "Manager") throw new Error("Only managers can fix assigned leads.");
+    const stale = state.leads.filter((lead) => lead.status === "Fresh Lead" && !!lead.assignedTo);
+    stale.forEach((lead) => { lead.status = ASSIGNED_STAGE; });
+    return stale.length;
   },
   async updateLead(id, p, actor) {
     const l = state.leads.find((x) => x.id === id);
@@ -75,10 +82,7 @@ export const mockRepository: CrmRepository = {
   async logCall(input: LogCallInput, actor) {
     const lead = state.leads.find((item) => item.id === input.leadId);
     if (!lead) throw new Error("Lead not found");
-    lead.status = input.outcome === "Connected" ? "Contacted"
-      : input.outcome === "Call Back Later" ? "Callback in Future"
-      : input.outcome === "Wrong Number" ? "Lost"
-      : "Attempted to Contact";
+    lead.status = CALL_STATUS_BY_OUTCOME[input.outcome];
     lead.followUp = input.followUp;
     lead.followUpTime = input.followUpTime;
     note(lead.id, actor.name, `Call: ${input.outcome}${input.remarks ? ` · ${input.remarks}` : ""}`);

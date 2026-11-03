@@ -7,7 +7,7 @@ import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, Pencil, Phone
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
-import { addLeadAction, deleteLeadAction, getLeadTimelineAction, logCallAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
+import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getLeadTimelineAction, logCallAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
   LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, leadsForTab, todayIST,
   type CallOutcome, type Lead, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
@@ -50,6 +50,8 @@ export function LeadsClient({ user, leads, executives, canAssign }: Props) {
   const pageCount = Math.max(1, Math.ceil(filtered.length / 25));
   const visible = filtered.slice((page - 1) * 25, page * 25);
   const count = (id: LeadTab) => leadsForTab(user, leads, id, debouncedSearch, source).length;
+  const todaysFollowUps = leadsForTab(user, leads, "callback").filter((lead) => lead.followUp === todayIST()).length;
+  const fixableCount = leads.filter((lead) => lead.status === "Fresh Lead" && (!!lead.assignedToId || !!lead.assignedTo)).length;
 
   return (
     <div className="space-y-4 text-sm">
@@ -58,7 +60,7 @@ export function LeadsClient({ user, leads, executives, canAssign }: Props) {
           <h1 className="text-xl font-bold sm:text-2xl">Manage Leads</h1>
           <p className="mt-1 text-muted-foreground">Review enquiries, assign ownership, and track follow-ups.</p>
         </div>
-        {!isExec && <Button className="h-10 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button>}
+        {!isExec && <div className="flex flex-wrap justify-end gap-2"><span className="self-center text-xs text-muted-foreground">Today&apos;s follow-ups: {todaysFollowUps}</span><Button className="h-10 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button>{user.role === "Manager" && <FixAssignedLeads count={fixableCount} />}</div>}
       </div>
 
       <div className="flex gap-2 overflow-x-auto border-b pb-2" role="tablist" aria-label="Lead views">
@@ -90,7 +92,7 @@ export function LeadsClient({ user, leads, executives, canAssign }: Props) {
         </label>
       </div>
 
-      {adding && <AddLead onDone={() => setAdding(false)} executives={executives} canAssign={canAssign} />}
+      {adding && <AddLead onDone={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
         <EmptyState filtered={filtered.length !== leads.length || !!debouncedSearch || source !== "All"} onClear={() => { setSearch(""); setSource("All"); }} />
@@ -182,6 +184,19 @@ function Pagination({ page, pageCount, total, onChange }: { page: number; pageCo
 
 function EmptyState({ filtered, onClear }: { filtered: boolean; onClear: () => void }) {
   return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{filtered ? "No leads match your filters" : "No leads in this view"}</div><p className="mt-1 text-muted-foreground">{filtered ? "Try a different search or source." : "New enquiries will appear here."}</p>{filtered && <Button variant="outline" className="mt-4 h-10" onClick={onClear}>Clear filters</Button>}</div>;
+}
+
+function FixAssignedLeads({ count }: { count: number }) {
+  const [pending, start] = useTransition();
+  const fix = () => {
+    if (!window.confirm(`Move ${count} Sales-owned lead${count === 1 ? "" : "s"} from Fresh Lead to Assigned to Sales?`)) return;
+    start(async () => {
+      const result = await fixAssignedLeadsAction();
+      if (result.ok) toast.success(`${result.data?.changed ?? 0} assigned leads fixed`);
+      else toast.error(result.error);
+    });
+  };
+  return <Button variant="outline" className="h-10" onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : `Fix assigned leads (${count})`}</Button>;
 }
 
 function LeadActionModal({ action, executives, onClose, onDone }: {
@@ -360,12 +375,13 @@ function ScheduleForm({ lead, onDone }: { lead: Lead; onDone: () => void }) {
   </div>;
 }
 
-function AddLead({ onDone, executives, canAssign }: { onDone: () => void; executives: string[]; canAssign: boolean }) {
+function AddLead({ onDone, executives, canAssign, canForceDuplicate }: { onDone: () => void; executives: string[]; canAssign: boolean; canForceDuplicate: boolean }) {
   const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedTo: "" });
-  const [duplicate, setDuplicate] = useState<{ id: string; name: string } | null>(null);
+  const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string } | null>(null);
+  const [forceCreate, setForceCreate] = useState(false);
   const [pending, start] = useTransition();
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [key]: event.target.value });
-  return <form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90vh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null }); if (result.ok) { const zohoUrl = result.data?.zohoUrl; toast.success("Lead added", zohoUrl ? { action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") } } : undefined); onDone(); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
+  return <form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90vh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok) { const zohoUrl = result.data?.zohoUrl; toast.success("Lead added", zohoUrl ? { action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") } } : undefined); onDone(); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" />
@@ -373,7 +389,7 @@ function AddLead({ onDone, executives, canAssign }: { onDone: () => void; execut
     <select className={`${fieldClass} h-10 text-sm`} value={f.source} onChange={set("source")}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
     {canAssign && <select className={`${fieldClass} h-10 text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select>}
     <input className={`${fieldClass} h-10 text-sm sm:col-span-2`} placeholder="Remarks" value={f.remarks} onChange={set("remarks")} maxLength={500} />
-    {duplicate && <p className="text-sm text-destructive sm:col-span-2">Lead already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p>}
+    {duplicate && <div className="text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Owner: {duplicate.owner} · Status: {duplicate.status}</p>{canForceDuplicate && <Button type="button" variant="outline" className="mt-2 h-10" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
     <Button type="submit" className="h-10 sm:col-span-2" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
   </form>;
 }

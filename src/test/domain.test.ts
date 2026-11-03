@@ -58,7 +58,7 @@ describe("manage leads", () => {
   });
   it("only managers and calling team can assign", () => {
     expect(canAssignLeads("Manager")).toBe(true);
-    expect(canAssignLeads("Calling Team")).toBe(true);
+    expect(canAssignLeads("Calling Team")).toBe(false);
     expect(canAssignLeads("Sales Executive")).toBe(false);
   });
   it("executives see only their own leads in All", () => {

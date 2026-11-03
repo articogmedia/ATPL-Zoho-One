@@ -1,4 +1,4 @@
-import type { LeadStatus, Role, VisitStatus } from "@/lib/domain";
+import type { CallOutcome, LeadStatus, Role, VisitStatus } from "@/lib/domain";
 
 /**
  * Everything that depends on how ATPL's Zoho org is configured lives in this one file.
@@ -44,10 +44,25 @@ export const WRITE_LEAD_STATUS: Record<LeadStatus, string> = {
   "Attempted to Contact": "Attempted to Contact",
   "Callback in Future": "Callback in Future",
   Contacted: "Contacted",
+  "Junk Lead": "Junk Lead",
+  "Lost Lead": "Lost Lead",
+  "Not Contacted": "Not Contacted",
+  "Pre-Qualified": "Pre-Qualified",
+  "Not Qualified": "Not Qualified",
+  "Not Responsive": "Not Responsive",
+  "Assigned to Sales": "Assigned to Sales",
   "Site Visit Scheduled": "Site Visit Scheduled",
   "Quotation Sent": "Quotation Sent",
   Won: "Won",
-  Lost: "Lost Lead",
+};
+
+export const ASSIGNED_STAGE = "Assigned to Sales" as const;
+export const CALL_STATUS_BY_OUTCOME: Record<CallOutcome, LeadStatus> = {
+  Connected: "Contacted",
+  "No Answer": "Attempted to Contact",
+  Busy: "Attempted to Contact",
+  "Call Back Later": "Callback in Future",
+  "Wrong Number": "Junk Lead",
 };
 
 /** Tolerant READ mapping, so Zoho's stock statuses still land in a sensible bucket. */
@@ -56,9 +71,9 @@ export const READ_LEAD_STATUS: Record<string, LeadStatus> = {
   "not contacted": "Fresh Lead",
   "contact in future": "Callback in Future",
   "pre-qualified": "Contacted",
-  "lost lead": "Lost",
-  "junk lead": "Lost",
-  "not qualified": "Lost",
+  "lost lead": "Lost Lead",
+  "junk lead": "Junk Lead",
+  "not qualified": "Not Qualified",
 };
 
 export const TASK_STATUS_WRITE: Record<VisitStatus, string> = {
