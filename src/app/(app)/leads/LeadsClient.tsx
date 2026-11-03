@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, Pencil, Phone, Plus, Search, Trash2, UserRound, X } from "lucide-react";
+import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
@@ -56,38 +56,39 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
   const count = (id: LeadTab) => leadsForTab(user, leads, id, debouncedSearch, source, filters).length;
   const todaysFollowUps = leadsForTab(user, leads, "callback").filter((lead) => lead.followUp === todayIST()).length;
   const fixableCount = leads.filter((lead) => lead.status === "Fresh Lead" && (!!lead.assignedToId || !!lead.assignedTo)).length;
+  const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
 
   return (
-    <div className="space-y-4 text-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+    <div className="space-y-4 text-sm max-[480px]:space-y-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="w-full">
           <h1 className="text-xl font-bold sm:text-2xl">Manage Leads</h1>
           <p className="mt-1 text-muted-foreground">Review enquiries, assign ownership, and track follow-ups.</p>
         </div>
-        {!isExec && <div className="flex flex-wrap justify-end gap-2"><span className="self-center text-xs text-muted-foreground">Today&apos;s follow-ups: {todaysFollowUps}</span><Button className="h-10 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button>{user.role === "Manager" && <FixAssignedLeads count={fixableCount} />}</div>}
+        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && <FixAssignedLeads count={fixableCount} />}</div>}
       </div>
 
-      <div className="flex gap-2 overflow-x-auto border-b pb-2" role="tablist" aria-label="Lead views">
+      <div className="flex gap-2 overflow-x-auto border-b pb-2 max-[480px]:-mx-1 max-[480px]:px-1" role="tablist" aria-label="Lead views">
         {availableTabs.map((item) => (
           <button
             key={item.id}
             role="tab"
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
-            className={`shrink-0 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+            className={`min-h-11 shrink-0 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:min-w-[calc(50vw-1.5rem)] max-[480px]:flex-1 ${tab === item.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
           >
             {item.label} <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>
         ))}
       </div>
 
-      <div className="flex flex-col gap-2 sm:flex-row">
+      <div className="flex flex-row gap-2">
         <label className="relative min-w-0 flex-1">
           <span className="sr-only">Search leads</span>
           <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-          <input className={`${fieldClass} h-10 pl-9 text-sm`} placeholder="Search name, company or phone" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <input className={`${fieldClass} h-11 pl-9 text-sm`} placeholder="Search name, company or phone" value={search} onChange={(event) => setSearch(event.target.value)} />
         </label>
-        <Button type="button" variant="outline" className="h-12 sm:hidden" onClick={() => setFiltersOpen(true)}>Filters</Button>
+        <Button type="button" variant="outline" size="icon" className="relative h-11 w-11 shrink-0 sm:hidden" onClick={() => setFiltersOpen(true)} aria-label={`Filters${activeFilterCount ? `, ${activeFilterCount} active` : ""}`}><SlidersHorizontal />{activeFilterCount > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{activeFilterCount}</span>}</Button>
       </div>
 
       <LeadFiltersPanel
@@ -120,7 +121,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
               </tbody>
             </table>
           </div>
-          <div className="space-y-2 md:hidden">
+          <div className="space-y-2 max-[480px]:space-y-1.5 md:hidden">
             {visible.map((lead) => <MobileRow key={lead.id} lead={lead} manager={user.role === "Manager"} onOpen={() => setSelected(lead)} onAction={(type) => setAction({ type, lead })} />)}
           </div>
           <Pagination page={page} pageCount={pageCount} total={filtered.length} onChange={setPage} />
@@ -170,14 +171,14 @@ function DesktopRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: 
 
 function MobileRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   return (
-    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }} className="rounded-xl border border-border bg-card p-3 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }} className="rounded-xl border border-border bg-card p-3 shadow-sm max-[480px]:p-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0"><div className="truncate font-semibold">{lead.name}</div><div className="truncate text-xs text-muted-foreground">{lead.company || "No company"}</div></div>
         <StatusBadge status={lead.status} />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground"><a className="truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone || "No phone"}</a><span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
-      <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E]" href={`https://wa.me/${lead.phone.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>
-      <div className="mt-3" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={onAction} /></div>
+      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2"><a className="truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone || "No phone"}</a><span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
+      <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={`https://wa.me/${lead.phone.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>
+      <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={onAction} /></div>
     </div>
   );
 }
@@ -204,7 +205,7 @@ function FixAssignedLeads({ count }: { count: number }) {
       else toast.error(result.error);
     });
   };
-  return <Button variant="outline" className="h-10" onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : `Fix assigned leads (${count})`}</Button>;
+  return <Button variant="outline" className="h-10 max-[480px]:h-11 max-[480px]:text-xs" onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : `Fix assigned leads (${count})`}</Button>;
 }
 
 function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceChange, onClose }: {

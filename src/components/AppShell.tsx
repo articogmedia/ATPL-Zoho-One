@@ -61,19 +61,19 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b bg-card px-4 py-3 md:px-8">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex shrink-0 items-center gap-2 md:hidden">
+            <div className="flex min-w-max shrink-0 items-center gap-2 md:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
                 <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" />
               </span>
-              <span className="font-semibold">ATPL Sales Portal</span>
+              <span className="whitespace-nowrap text-sm font-semibold">ATPL Sales Portal</span>
             </div>
-            <div className="min-w-0">
-              <div className="truncate font-semibold">{user.name}</div>
-              <div className="truncate text-xs text-muted-foreground">{user.role}</div>
+            <div className="min-w-0 text-right">
+              <div className="truncate text-sm font-semibold">{user.name}</div>
+              <div className="truncate text-[11px] text-muted-foreground">{user.role}</div>
             </div>
           </div>
           <form action={logout}>
-            <Button type="submit" variant="outline" size="lg"><LogOut className="h-4 w-4" /> Logout</Button>
+            <Button type="submit" variant="outline" size="lg" className="max-[480px]:h-11 max-[480px]:w-11 max-[480px]:px-0" aria-label="Logout"><LogOut className="h-4 w-4" /><span className="max-[480px]:hidden">Logout</span></Button>
           </form>
         </header>
         <main className="min-w-0 flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">
