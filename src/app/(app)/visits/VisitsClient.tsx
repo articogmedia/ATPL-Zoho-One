@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { updateVisitAction } from "@/app/actions/crm";
 import { workForTab, type User, type Visit, type WorkTab } from "@/lib/domain";
+import type { PerfRange } from "@/lib/domain";
 
 const TABS: { id: WorkTab; label: string }[] = [
   { id: "assigned", label: "Tasks" },
@@ -16,16 +17,34 @@ const TABS: { id: WorkTab; label: string }[] = [
   { id: "completed", label: "Completed" },
 ];
 
-export function VisitsClient({ user, visits, executives, today }: { user: User; visits: Visit[]; executives: string[]; today: string }) {
+type Summary = { leads: number; calls: number; visits: number; quotes: number; won: number; conversion: number };
+export function VisitsClient({ user, visits, executives, today, performance }: { user: User; visits: Visit[]; executives: string[]; today: string; performance?: { week: Summary; month: Summary } }) {
   const [tab, setTab] = useState<WorkTab>("assigned");
   const [exec, setExec] = useState("all");
   const isManager = user.role === "Manager";
   const open = [...workForTab(user, visits, "assigned", today, exec), ...workForTab(user, visits, "progress", today, exec)];
   const todays = open.filter((v) => v.isVisit && v.date === today);
   const list = workForTab(user, visits, tab, today, exec);
+  const [range, setRange] = useState<PerfRange>("week");
+  const summary = performance?.[range === "week" ? "week" : "month"];
 
   return (
     <div className="space-y-6">
+      {performance && summary && <section aria-label="My Performance" className="rounded-xl border bg-card p-3 shadow-sm">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="font-semibold">My Performance</h2>
+          <div className="flex gap-1" role="group" aria-label="Performance period">
+            <Button size="sm" variant={range === "week" ? "default" : "outline"} onClick={() => setRange("week")}>This Week</Button>
+            <Button size="sm" variant={range === "month" ? "default" : "outline"} onClick={() => setRange("month")}>This Month</Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {[
+            ["Leads Assigned", summary.leads], ["Calls Made", summary.calls], ["Visits Completed", summary.visits],
+            ["Quotations Sent", summary.quotes], ["Won", summary.won], ["Conversion %", `${summary.conversion}%`],
+          ].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-secondary p-2.5"><div className="text-xs text-muted-foreground">{label}</div><div className="mt-1 text-lg font-bold">{value}</div></div>)}
+        </div>
+      </section>}
       {isManager && (
         <label className="flex max-w-sm flex-col gap-1 text-sm font-medium">Executive
           <select className={fieldClass} value={exec} onChange={(e) => setExec(e.target.value)}>

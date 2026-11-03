@@ -54,7 +54,24 @@ describe("manage leads", () => {
   it("assigned lead leaves Fresh but stays in All", () => {
     const leads = SAMPLE_LEADS.map((l) => (l.id === "L105" ? { ...l, assignedTo: "Ravi" } : l));
     expect(leadsForTab(u("divya"), leads, "fresh").some((l) => l.id === "L105")).toBe(false);
-    expect(leadsForTab(u("divya"), leads, "all", "Arjun").map((l) => l.id)).toEqual(["L105"]);
+    expect(leadsForTab(u("divya"), leads, "mine", "Arjun").map((l) => l.id)).toEqual(["L105"]);
+  });
+  it("filters Assigned to Sales by role and owner", () => {
+    const assigned = [
+      { ...SAMPLE_LEADS[0]!, status: "Assigned to Sales" as const, assignedTo: "Ravi", assignedToId: "ravi-id" },
+      { ...SAMPLE_LEADS[1]!, status: "Assigned to Sales" as const, assignedTo: "Anil", assignedToId: "anil-id" },
+    ];
+    expect(leadsForTab(u("pavan"), assigned, "assigned")).toHaveLength(2);
+    expect(leadsForTab({ id: "ravi-id", name: "Ravi", role: "Sales Executive" }, assigned, "assigned").map((lead) => lead.assignedTo)).toEqual(["Ravi"]);
+    expect(leadsForTab({ id: "ravi-id", name: "Ravi", role: "Sales Executive" }, assigned, "all")).toHaveLength(0);
+    expect(leadsForTab({ id: "caller-id", name: "Caller", role: "Calling Team" }, assigned, "fresh")).toHaveLength(0);
+  });
+  it("applies owner, stage and date filters used by All Leads", () => {
+    const lead = { ...SAMPLE_LEADS[0]!, assignedTo: "Ravi", status: "Contacted" as const, createdOn: "2026-10-20" };
+    expect(leadsForTab(u("pavan"), [lead], "all", "", "All", {
+      owner: "Ravi", stage: "Contacted", from: "2026-10-01", to: "2026-10-31",
+    })).toHaveLength(1);
+    expect(leadsForTab(u("pavan"), [lead], "all", "", "All", { owner: "Anil" })).toHaveLength(0);
   });
   it("only managers and calling team can assign", () => {
     expect(canAssignLeads("Manager")).toBe(true);
@@ -141,5 +158,13 @@ describe("performance dashboard", () => {
     const s = perfStats(leads, [], [], "month", "2026-10-29", roster, sales);
     expect(s.rows.map((row) => row.name)).toEqual(["Pavan"]);
     expect(s.totalLeads).toBe(1);
+  });
+  it("scopes Sales call counts to the logged-in owner", () => {
+    const sales = { id: "1394515000001147001", name: "Pavan", role: "Sales Executive" as const };
+    const stats = perfStats([], [], [], "month", "2026-10-29", [sales], sales, [
+      { id: "c1", leadId: "l1", ownerId: "1394515000001147001", date: "2026-10-10" },
+      { id: "c2", leadId: "l2", ownerId: "other", date: "2026-10-10" },
+    ]);
+    expect(stats.calls).toBe(1);
   });
 });

@@ -10,26 +10,29 @@ import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getLeadTimelineAction, logCallAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
   LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, leadsForTab, todayIST,
-  type CallOutcome, type Lead, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
+  type CallOutcome, type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
 } from "@/lib/domain";
 
-type Props = { user: User; leads: Lead[]; executives: string[]; canAssign: boolean };
+type Props = { user: User; leads: Lead[]; executives: string[]; owners: string[]; canAssign: boolean };
 type DrawerMode = "edit" | "history" | "schedule";
 type LeadAction = { type: "call" | "edit" | "reassign" | "delete"; lead: Lead } | null;
 
 const TABS: { id: LeadTab; label: string }[] = [
   { id: "fresh", label: "Fresh Leads to Call" },
+  { id: "assigned", label: "Assigned to Sales" },
   { id: "callback", label: "Call Back" },
   { id: "mine", label: "My Leads" },
   { id: "all", label: "All Leads" },
 ];
 
-export function LeadsClient({ user, leads, executives, canAssign }: Props) {
+export function LeadsClient({ user, leads, executives, owners, canAssign }: Props) {
   const isExec = user.role === "Sales Executive";
   const [tab, setTab] = useState<LeadTab>(isExec ? "mine" : "fresh");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [source, setSource] = useState<LeadSource | "All">("All");
+  const [filters, setFilters] = useState<LeadFilters>({ stage: "All", owner: "All" });
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState<Lead | null>(null);
@@ -41,15 +44,16 @@ export function LeadsClient({ user, leads, executives, canAssign }: Props) {
     return () => window.clearTimeout(timer);
   }, [search]);
 
-  useEffect(() => setPage(1), [tab, debouncedSearch, source]);
+  useEffect(() => setPage(1), [tab, debouncedSearch, source, filters]);
 
   const filtered = useMemo(
-    () => leadsForTab(user, leads, tab, debouncedSearch, source),
-    [user, leads, tab, debouncedSearch, source],
+    () => leadsForTab(user, leads, tab, debouncedSearch, source, filters),
+    [user, leads, tab, debouncedSearch, source, filters],
   );
   const pageCount = Math.max(1, Math.ceil(filtered.length / 25));
   const visible = filtered.slice((page - 1) * 25, page * 25);
-  const count = (id: LeadTab) => leadsForTab(user, leads, id, debouncedSearch, source).length;
+  const availableTabs = TABS.filter((item) => !(item.id === "fresh" && isExec) && !(item.id === "all" && user.role !== "Manager"));
+  const count = (id: LeadTab) => leadsForTab(user, leads, id, debouncedSearch, source, filters).length;
   const todaysFollowUps = leadsForTab(user, leads, "callback").filter((lead) => lead.followUp === todayIST()).length;
   const fixableCount = leads.filter((lead) => lead.status === "Fresh Lead" && (!!lead.assignedToId || !!lead.assignedTo)).length;
 
@@ -64,7 +68,7 @@ export function LeadsClient({ user, leads, executives, canAssign }: Props) {
       </div>
 
       <div className="flex gap-2 overflow-x-auto border-b pb-2" role="tablist" aria-label="Lead views">
-        {TABS.map((item) => (
+        {availableTabs.map((item) => (
           <button
             key={item.id}
             role="tab"
@@ -83,19 +87,23 @@ export function LeadsClient({ user, leads, executives, canAssign }: Props) {
           <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
           <input className={`${fieldClass} h-10 pl-9 text-sm`} placeholder="Search name, company or phone" value={search} onChange={(event) => setSearch(event.target.value)} />
         </label>
-        <label className="sm:w-44">
-          <span className="sr-only">Filter by source</span>
-          <select aria-label="Filter by source" className={`${fieldClass} h-10 text-sm`} value={source} onChange={(event) => setSource(event.target.value as LeadSource | "All")}>
-            <option value="All">All sources</option>
-            {LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
+        <Button type="button" variant="outline" className="h-12 sm:hidden" onClick={() => setFiltersOpen(true)}>Filters</Button>
       </div>
+
+      <LeadFiltersPanel
+        open={filtersOpen}
+        owners={owners}
+        filters={filters}
+        source={source}
+        onChange={setFilters}
+        onSourceChange={setSource}
+        onClose={() => setFiltersOpen(false)}
+      />
 
       {adding && <AddLead onDone={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
-        <EmptyState filtered={filtered.length !== leads.length || !!debouncedSearch || source !== "All"} onClear={() => { setSearch(""); setSource("All"); }} />
+        <EmptyState filtered={filtered.length !== leads.length || !!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
           <div className="hidden overflow-hidden rounded-xl border border-border bg-card shadow-sm md:block">
@@ -133,7 +141,7 @@ export function LeadsClient({ user, leads, executives, canAssign }: Props) {
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
         />
       )}
-      {action && <LeadActionModal action={action} executives={executives} onClose={() => setAction(null)} onDone={() => { setAction(null); router.refresh(); }} />}
+      {action && <LeadActionModal action={action} executives={executives} onClose={() => setAction(null)} onDone={() => { setAction(null); router.refresh(); }} onAssigned={(name) => { setAction(null); setTab("assigned"); toast.success(`Assigned to ${name}. Moved to Assigned to Sales`, { action: { label: "Open tab", onClick: () => setTab("assigned") } }); router.refresh(); }} />}
     </div>
   );
 }
@@ -199,8 +207,24 @@ function FixAssignedLeads({ count }: { count: number }) {
   return <Button variant="outline" className="h-10" onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : `Fix assigned leads (${count})`}</Button>;
 }
 
-function LeadActionModal({ action, executives, onClose, onDone }: {
-  action: Exclude<LeadAction, null>; executives: string[]; onClose: () => void; onDone: () => void;
+function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceChange, onClose }: {
+  open: boolean; owners: string[]; filters: LeadFilters; source: LeadSource | "All";
+  onChange: (filters: LeadFilters) => void; onSourceChange: (source: LeadSource | "All") => void; onClose: () => void;
+}) {
+  const content = <div className="grid gap-2 sm:grid-cols-4">
+    <label className="text-xs font-semibold">Owner<select className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.owner ?? "All"} onChange={(e) => onChange({ ...filters, owner: e.target.value })}><option value="All">All owners</option>{owners.map((owner) => <option key={owner}>{owner}</option>)}</select></label>
+    <label className="text-xs font-semibold">Stage<select className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.stage ?? "All"} onChange={(e) => onChange({ ...filters, stage: e.target.value as LeadStatus | "All" })}><option value="All">All stages</option>{LEAD_STATUSES.map((stage) => <option key={stage}>{stage}</option>)}</select></label>
+    <label className="text-xs font-semibold">Source<select className={`${fieldClass} mt-1 h-10 text-sm`} value={source} onChange={(e) => onSourceChange(e.target.value as LeadSource | "All")}><option value="All">All sources</option>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select></label>
+    <div className="grid grid-cols-2 gap-2"><label className="text-xs font-semibold">From<input type="date" className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.from ?? ""} onChange={(e) => onChange({ ...filters, from: e.target.value })} /></label><label className="text-xs font-semibold">To<input type="date" className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.to ?? ""} onChange={(e) => onChange({ ...filters, to: e.target.value })} /></label></div>
+  </div>;
+  return <>
+    <div className="hidden rounded-lg border bg-card p-3 sm:block">{content}</div>
+    {open && <div className="fixed inset-0 z-50 flex items-end bg-black/40 sm:hidden"><button className="absolute inset-0" aria-label="Close filters" onClick={onClose} /><div className="relative w-full rounded-t-2xl bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Filter leads</h2><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close filters"><X /></Button></div>{content}<Button className="mt-4 w-full" onClick={onClose}>Apply filters</Button></div></div>}
+  </>;
+}
+
+function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
+  action: Exclude<LeadAction, null>; executives: string[]; onClose: () => void; onDone: () => void; onAssigned: (name: string) => void;
 }) {
   const [pending, start] = useTransition();
   const [name, setName] = useState(action.lead.name);
@@ -224,8 +248,11 @@ function LeadActionModal({ action, executives, onClose, onDone }: {
             ? await deleteLeadAction({ id: action.lead.id })
             : await logCallAction({ leadId: action.lead.id, outcome, remarks, ...(followUp ? { followUp, followUpTime } : {}) });
       if (!result.ok) { toast.error(result.error); return; }
-      toast.success(action.type === "delete" ? "Lead deleted" : action.type === "reassign" ? "Lead reassigned" : "Lead updated");
-      onDone();
+      if (action.type === "reassign") onAssigned(assignee);
+      else {
+        toast.success(action.type === "delete" ? "Lead deleted" : "Lead updated");
+        onDone();
+      }
     });
   };
 

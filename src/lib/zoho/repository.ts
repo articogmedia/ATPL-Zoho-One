@@ -1,5 +1,5 @@
 import "server-only";
-import { isAssignable, quoteTotals, todayIST, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
+import { isAssignable, quoteTotals, todayIST, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -273,6 +273,16 @@ export const zohoRepository: CrmRepository = {
       });
     }
     invalidate("leads", "users", "visits");
+  },
+
+  async listCalls(): Promise<CallActivity[]> {
+    const raw = await zohoList<ZCall>("Calls", CALL_FIELDS, env().ZOHO_MAX_LEADS);
+    return raw.map((call) => ({
+      id: String(call.id).trim(),
+      leadId: String(call.What_Id?.id ?? "").trim(),
+      ownerId: String(call.Owner?.id ?? "").trim(),
+      date: call.Call_Start_Time?.slice(0, 10) ?? "",
+    }));
   },
 
   async listProducts() {

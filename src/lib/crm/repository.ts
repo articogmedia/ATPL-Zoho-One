@@ -1,5 +1,5 @@
 import type {
-  CallOutcome, Lead, LeadSource, LeadStatus, LeadTimelineItem, LeadUpdate, NewVisit, Product, Quotation, User, Visit, VisitStatus,
+  CallActivity, CallOutcome, Lead, LeadSource, LeadStatus, LeadTimelineItem, LeadUpdate, NewVisit, Product, Quotation, User, Visit, VisitStatus,
 } from "@/lib/domain";
 
 export type NewLead = { name: string; company: string; phone: string; area: string; source: LeadSource; remarks: string };
@@ -31,6 +31,7 @@ export interface CrmRepository {
   getLeadHistory(id: string): Promise<LeadUpdate[]>;
   getLeadTimeline(id: string): Promise<LeadTimelineItem[]>;
   logCall(input: LogCallInput, actor: User): Promise<void>;
+  listCalls(): Promise<CallActivity[]>;
 
   listProducts(): Promise<Product[]>;
   listQuotes(): Promise<Quotation[]>;

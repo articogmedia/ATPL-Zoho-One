@@ -57,9 +57,9 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
   const users = demo ? await crm().listUsers() : [];
 
   return (
-    <div className="grid min-h-screen place-items-center bg-slate-50 px-3 py-4 sm:px-6 sm:py-6">
-      <div className="flex max-h-[calc(100vh-2rem)] min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] md:grid md:grid-cols-[0.9fr_1.1fr]">
-        <aside className="shrink-0 bg-slate-900 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:min-h-[560px] md:flex-col md:justify-between">
+    <div className="grid min-h-screen place-items-center bg-slate-50 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-6">
+      <div className="flex min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] md:max-h-[calc(100vh-2rem)] md:grid md:grid-cols-[0.9fr_1.1fr]">
+        <aside className="hidden shrink-0 bg-slate-900 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:min-h-[560px] md:flex-col md:justify-between">
           <div className="flex flex-col justify-center md:flex-1">
             <div className="flex items-center gap-3">
               <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white/10 text-white ring-1 ring-white/15">
@@ -78,10 +78,14 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
         </aside>
 
         <main className="flex min-h-0 flex-1 flex-col px-5 py-5 sm:px-8 sm:py-7">
+          <div className="mb-6 flex items-center gap-3 md:hidden">
+            <div className="grid h-11 w-11 place-items-center rounded-lg bg-slate-900 text-white"><Snowflake className="h-6 w-6" aria-hidden="true" /></div>
+            <div><div className="font-bold text-slate-900">ATPL Sales Portal</div><div className="text-xs text-slate-600">Air Trendz Pvt Ltd</div></div>
+          </div>
           <div className="mb-5 flex items-start justify-between gap-4">
             <div>
               <h2 className="text-2xl font-bold tracking-tight text-slate-900">Sign in</h2>
-              <p className="mt-1 text-sm text-slate-600">Select your profile to continue</p>
+              <p className="mt-1 text-sm text-slate-600">Sign in to your account</p>
             </div>
             {demo && (
               <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">

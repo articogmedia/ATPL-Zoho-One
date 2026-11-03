@@ -1,4 +1,4 @@
-import { quoteTotals, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
+import { quoteTotals, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import type { CrmRepository, LogCallInput } from "./repository";
 import { isAssignable } from "@/lib/domain";
@@ -88,6 +88,7 @@ export const mockRepository: CrmRepository = {
     note(lead.id, actor.name, `Call: ${input.outcome}${input.remarks ? ` · ${input.remarks}` : ""}`);
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
   },
+  async listCalls(): Promise<CallActivity[]> { return []; },
 
   async listProducts() { return MOCK_PRODUCTS; },
   async listQuotes() { return [...state.quotes].sort((a, b) => b.date.localeCompare(a.date)); },

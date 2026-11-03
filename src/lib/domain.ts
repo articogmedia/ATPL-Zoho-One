@@ -20,6 +20,7 @@ export const LEAD_SOURCES: LeadSource[] = ["Meta Ads", "Google Ads", "Direct Cal
 
 export type LeadUpdate = { date: string; user: string; note: string };
 export type CallOutcome = "Connected" | "No Answer" | "Busy" | "Wrong Number" | "Call Back Later";
+export type CallActivity = { id: string; leadId: string; ownerId: string; date: string };
 export type LeadTimelineItem = {
   date: string; user: string; kind: "Call" | "Note" | "Task"; title: string; detail: string;
 };
@@ -158,12 +159,14 @@ export function perfStats(
   today: string,
   executives: (PerfExecutive | string)[],
   viewer?: User,
+  calls: CallActivity[] = [],
 ) {
   const { from, to } = rangeDates(range, today);
   const inR = (date: string) => date >= from && date <= to;
   const ls = leads.filter((l) => inR(l.createdOn));
   const qs = quotes.filter((q) => inR(q.date));
   const vs = visits.filter((v) => v.isVisit && inR(v.date));
+  const cs = calls.filter((call) => inR(call.date));
   const viewerId = normalizeOwnerId(viewer?.id);
   const viewerName = viewer?.name.trim();
   const scopedLeads = viewer?.role === "Sales Executive"
@@ -178,6 +181,9 @@ export function perfStats(
     ? vs.filter((visit) => normalizeOwnerId(visit.executiveId) === viewerId ||
       (!visit.executiveId && visit.executive === viewerName))
     : vs;
+  const scopedCalls = viewer?.role === "Sales Executive"
+    ? cs.filter((call) => normalizeOwnerId(call.ownerId) === viewerId)
+    : cs;
   const bySource = LEAD_SOURCES.map((source) => ({ source, count: ls.filter((l) => l.source === source).length }));
   const roster = executives.map((executive) =>
     typeof executive === "string" ? { id: "", name: executive, role: "Sales Executive" as const } : executive,
@@ -233,6 +239,7 @@ export function perfStats(
     bySource,
     scheduled: vs.length,
     completed: vs.filter((v) => v.status === "Completed").length,
+    calls: scopedCalls.length,
     quotesSent: qs.length,
     rows: viewer?.role === "Manager" || !viewer ? [...rows, totalRow] : rows,
     totalRow,
@@ -258,16 +265,31 @@ export function visibleFor<T extends { assignedTo?: string | null; assignedToId?
     (!r.assignedToId && !r.executiveId && (r.assignedTo ?? r.executive) === user.name));
 }
 
-export type LeadTab = "fresh" | "callback" | "mine" | "all";
+export type LeadTab = "fresh" | "assigned" | "callback" | "mine" | "all";
+export type LeadFilters = {
+  owner?: string;
+  stage?: LeadStatus | "All";
+  from?: string;
+  to?: string;
+};
 
 /** Leads for a tab, after role visibility, search and source filter. */
-export function leadsForTab(user: User, leads: Lead[], tab: LeadTab, search = "", source: LeadSource | "All" = "All"): Lead[] {
+export function leadsForTab(
+  user: User, leads: Lead[], tab: LeadTab, search = "", source: LeadSource | "All" = "All", filters: LeadFilters = {},
+): Lead[] {
+  if (tab === "fresh" && user.role === "Sales Executive") return [];
+  if (tab === "all" && user.role !== "Manager") return [];
   const q = search.trim().toLowerCase();
   return visibleFor(user, leads).filter((l) => {
     if (tab === "fresh" && !(l.status === "Fresh Lead" && !l.assignedTo && !l.assignedToId)) return false;
+    if (tab === "assigned" && l.status !== "Assigned to Sales") return false;
     if (tab === "callback" && !(l.status === "Callback in Future" && !!l.followUp && l.followUp <= todayIST())) return false;
     if (tab === "mine" && !(l.assignedTo === user.name || l.touchedBy.includes(user.name))) return false;
     if (source !== "All" && l.source !== source) return false;
+    if (filters.owner && filters.owner !== "All" && (l.assignedTo ?? "Unassigned") !== filters.owner) return false;
+    if (filters.stage && filters.stage !== "All" && l.status !== filters.stage) return false;
+    if (filters.from && l.createdOn < filters.from) return false;
+    if (filters.to && l.createdOn > filters.to) return false;
     if (q && ![l.name, l.company, l.phone.replace(/\s/g, ""), l.phone, l.id].some((f) => f.toLowerCase().includes(q))) return false;
     return true;
   });
