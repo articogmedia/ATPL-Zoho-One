@@ -24,8 +24,8 @@ export function LoginForm() {
         </div>
       </label>
       {state?.error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{state.error}</p>}
-      <Button type="submit" disabled={pending} className="min-h-12 w-full">{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Signing in..." : "Sign in"}</Button>
-      <p className="text-center text-xs text-slate-500">Forgot your password? Contact your manager.</p>
+      <Button type="submit" disabled={pending} className="min-h-12 w-full rounded-lg bg-[#2454c5] hover:bg-[#1d46a5]">{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Signing in..." : "Sign in"}</Button>
+      <p className="text-center text-[13px] text-slate-500">Forgot your password? Contact your manager.</p>
     </form>
   );
 }

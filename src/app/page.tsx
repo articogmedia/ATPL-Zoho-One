@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Image from "next/image";
-import { ArrowRight, CheckCircle2, ClipboardList, FileText, MapPin } from "lucide-react";
+import { ArrowRight, CheckCircle2 } from "lucide-react";
 import { crm } from "@/lib/crm";
 import { env } from "@/lib/env";
 import { demoLoginAllowed } from "@/lib/auth/demo";
@@ -58,48 +58,32 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
   const users = demo ? await crm().listUsers() : [];
 
   return (
-    <div className="grid min-h-screen place-items-center bg-slate-50 px-3 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-6">
-      <div className="flex min-h-0 w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] md:max-h-[calc(100vh-2rem)] md:grid md:grid-cols-[0.9fr_1.1fr]">
-        <aside className="hidden shrink-0 bg-gradient-to-br from-slate-900 to-slate-800 px-5 py-5 text-white sm:px-8 sm:py-7 md:flex md:min-h-[560px] md:flex-col md:justify-between">
-          <div className="flex flex-col justify-center md:flex-1">
-            <div>
-              <div className="w-fit rounded-2xl bg-white p-4 shadow-lg">
-                <Image src="/brand/atpl-logo.png" width={240} height={72} priority alt="ATPL - Air Trendz Private Limited" className="h-auto w-[240px]" />
+    <div className="flex min-h-screen items-center justify-center bg-[#F3F6FA] px-4 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="w-full max-w-[420px]">
+        <main className="relative overflow-hidden rounded-2xl border border-[#E5EAF1] bg-white p-7 shadow-lg sm:p-10">
+          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#F5A623] via-[#1E7FD0] to-[#4CAF50]" />
+          <div className="mb-6 flex justify-center">
+            <Image src="/brand/atpl-logo.png" width={240} height={100} priority alt="ATPL - Air Trendz Private Limited" className="h-auto w-[200px] object-contain sm:w-[240px]" />
+          </div>
+          <div className="mb-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-semibold tracking-tight text-[#172554]">Sign in</h1>
+                <p className="mt-1 text-sm text-slate-600">Access the ATPL Sales Portal</p>
               </div>
+              {demo && (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
+                  <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                  Demo mode
+                </span>
+              )}
             </div>
-            <p className="mt-8 max-w-xs text-xl font-medium leading-8 text-slate-200 md:mt-12">
-              Leads, quotations and site visits in one place
-            </p>
-            <ul className="mt-6 space-y-3 text-sm text-slate-200">
-              <li className="flex items-center gap-3"><ClipboardList className="h-5 w-5 text-slate-300" aria-hidden="true" />Manage leads and follow-ups</li>
-              <li className="flex items-center gap-3"><FileText className="h-5 w-5 text-slate-300" aria-hidden="true" />Create quotations in minutes</li>
-              <li className="flex items-center gap-3"><MapPin className="h-5 w-5 text-slate-300" aria-hidden="true" />Track site visits and performance</li>
-            </ul>
-          </div>
-          <p className="mt-6 text-xs text-slate-400">© Air Trendz Pvt Ltd</p>
-        </aside>
-
-        <main className="flex min-h-0 flex-1 flex-col justify-center px-5 py-6 sm:px-8 sm:py-7">
-          <div className="mb-6 flex justify-center md:hidden">
-            <Image src="/brand/atpl-logo.png" width={240} height={72} priority alt="ATPL - Air Trendz Private Limited" className="h-auto w-[180px]" />
-          </div>
-          <div className="mx-auto mb-5 w-full max-w-[380px] flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-bold tracking-tight text-slate-900">Welcome back</h2>
-              <p className="mt-1 text-sm text-slate-600">Sign in to the ATPL Sales Portal</p>
-            </div>
-            {demo && (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 ring-1 ring-inset ring-slate-200">
-                <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-                Demo mode
-              </span>
-            )}
           </div>
 
-          {error && <p role="alert" className="mx-auto mb-4 w-full max-w-[380px] rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{ERRORS[error] ?? ERRORS.server}</p>}
+          {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{ERRORS[error] ?? ERRORS.server}</p>}
 
           {env().AUTH_MODE === "zoho" && (
-            <Button asChild size="lg" className="mx-auto h-12 w-full max-w-[380px] justify-between rounded-lg bg-slate-900 px-4 text-sm text-white hover:bg-slate-800">
+            <Button asChild size="lg" className="mb-4 h-12 w-full justify-between rounded-lg bg-[#2454c5] px-4 text-sm text-white hover:bg-[#1d46a5]">
               <a href="/api/auth/zoho/start" aria-label="Sign in with Zoho">
                 <span>Sign in with Zoho</span>
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -107,14 +91,11 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
             </Button>
           )}
 
-          <div className="mx-auto mb-5 w-full max-w-[380px]">
-            <LoginForm />
-          </div>
+          <LoginForm />
 
           {demo && (
             <>
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                <div className="space-y-4">
+              <div className="mt-6 space-y-4 border-t border-slate-100 pt-5">
               {ROLE_GROUPS.map(({ heading, role }) => {
                 const groupUsers = users.filter((user) => user.role === role);
                 if (groupUsers.length === 0) return null;
@@ -148,11 +129,11 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
                 );
               })}
                 </div>
-              </div>
-              <p className="mt-4 shrink-0 text-center text-xs text-slate-500">Sample data only · No real accounts are affected</p>
+                <p className="mt-4 text-center text-xs text-slate-500">Sample data only · No real accounts are affected</p>
             </>
           )}
         </main>
+        <p className="mt-3 text-center text-xs text-slate-500">© 2026 Air Trendz Pvt Ltd · Hyderabad</p>
       </div>
     </div>
   );
