@@ -93,7 +93,7 @@ export type WorkTab = "assigned" | "progress" | "upcoming" | "completed";
 /** Items for a My Work tab. Executives only ever get their own; managers filter by executive ("all" = everyone). */
 export function workForTab(user: User, visits: Visit[], tab: WorkTab, today: string, executive = "all"): Visit[] {
   const pool = user.role === "Sales Executive"
-    ? visits.filter((v) => v.executiveId === user.id || (!v.executiveId && v.executive === user.name))
+    ? visits.filter((v) => normalizeOwnerId(v.executiveId) === normalizeOwnerId(user.id) || (!v.executiveId && v.executive === user.name))
     : visits.filter((v) => executive === "all" || v.executive === executive);
   return pool.filter((v) =>
     tab === "assigned" ? v.status === "Assigned"
@@ -250,7 +250,7 @@ export function canAccess(role: Role, s: Section) {
 /** Records a user may see: managers & calling team see all leads; executives only their own. */
 export function visibleFor<T extends { assignedTo?: string | null; assignedToId?: string; executive?: string; executiveId?: string }>(user: User, rows: T[]): T[] {
   if (user.role !== "Sales Executive") return rows;
-  return rows.filter((r) => r.assignedToId === user.id || r.executiveId === user.id ||
+  return rows.filter((r) => normalizeOwnerId(r.assignedToId) === normalizeOwnerId(user.id) || normalizeOwnerId(r.executiveId) === normalizeOwnerId(user.id) ||
     (!r.assignedToId && !r.executiveId && (r.assignedTo ?? r.executive) === user.name));
 }
 
@@ -271,7 +271,8 @@ export function leadsForTab(user: User, leads: Lead[], tab: LeadTab, search = ""
 
 export const canAssignLeads = (role: Role) => role === "Manager" || role === "Calling Team";
 export function isAssignable(u: User, queueOwnerId?: string): boolean {
-  return (u.role === "Sales Executive" || u.role === "Manager") && u.id !== queueOwnerId;
+  return (u.role === "Sales Executive" || u.role === "Manager") &&
+    normalizeOwnerId(u.id) !== normalizeOwnerId(queueOwnerId);
 }
 
 // ---------- Time and numbering helpers ----------

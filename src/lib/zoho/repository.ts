@@ -54,7 +54,8 @@ const userByName = async (name: string) => {
 };
 const activeUserById = async (id: string) => {
   const json = await zoho<{ users: ZUser[] }>("GET", "/users", { query: { type: "ActiveUsers" } });
-  return (json?.users ?? []).find((u) => u.id === id);
+  const expected = String(id).trim();
+  return (json?.users ?? []).find((u) => String(u.id).trim() === expected);
 };
 const queueOwnerId = async () => {
   const configured = env().ZOHO_QUEUE_OWNER_ID;
@@ -62,7 +63,7 @@ const queueOwnerId = async () => {
   if (!(await activeUserById(configured))) {
     throw new ZohoError(`ZOHO_QUEUE_OWNER_ID "${configured}" is not an active Zoho user`);
   }
-  return configured;
+  return configured.trim();
 };
 
 async function leads(): Promise<Lead[]> {

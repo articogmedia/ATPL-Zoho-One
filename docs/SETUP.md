@@ -45,8 +45,8 @@ Set `DATA_SOURCE`, `AUTH_MODE`, `SESSION_SECRET`, `ALLOW_DEMO_LOGIN`, `ZOHO_DC`,
 the **Open in Zoho** link after lead create/assignment.
 
 For static portal login, set `ATPL_RESHMA_PASSWORD`, `ATPL_PAVAN_PASSWORD`, and
-`ATPL_SAIKIRAN_PASSWORD`. Replace the placeholder Zoho user ids in
-`src/lib/auth/users.ts` with the matching active CRM user ids. The static login
+`ATPL_SAIKIRAN_PASSWORD`. The static users in `src/lib/auth/users.ts` use the
+matching active CRM user ids. The static login
 uses the same signed session and server-side role checks as Zoho login.
 `ALLOW_DEMO_LOGIN=true` is required to show the sandbox demo-user buttons.
 

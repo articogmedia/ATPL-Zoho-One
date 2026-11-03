@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { financialYear, isAssignable, nextOfferNo, todayIST } from "@/lib/domain";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
-import { verifyStaticCredentials } from "@/lib/auth/users";
+import { STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
 
 describe("offer numbering", () => {
   it("derives the Indian financial year", () => {
@@ -33,6 +33,13 @@ describe("zoho mapping", () => {
   });
 
   describe("static login", () => {
+    it("uses the configured Zoho IDs for the static users", () => {
+      expect(STATIC_USERS.map((user) => user.zohoUserId)).toEqual([
+        "1394515000000464001",
+        "1394515000001147001",
+        "1394515000001126001",
+      ]);
+    });
     it("accepts a configured password and rejects invalid credentials", () => {
       process.env.ATPL_PAVAN_PASSWORD = "correct-password";
       expect(verifyStaticCredentials("pavan", "correct-password")?.username).toBe("pavan");

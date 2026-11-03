@@ -5,10 +5,11 @@ import { FIELD, READ_LEAD_STATUS, ROLE_BY_ZOHO_NAME, ROLE_KEYWORDS } from "./fie
 
 type Ref = { id: string; name?: string } | null | undefined;
 const day = (iso?: string | null) => (iso ? iso.slice(0, 10) : "");
+const ownerId = (id?: string | number) => (id === undefined || id === null ? undefined : String(id).trim());
 
-export type ZUser = { id: string; full_name: string; email?: string; role?: { name?: string }; profile?: { name?: string } };
+export type ZUser = { id: string | number; full_name: string; email?: string; role?: { name?: string }; profile?: { name?: string } };
 export type ZLead = {
-  id: string; Last_Name?: string; First_Name?: string; Company?: string; Mobile?: string; Phone?: string;
+  id: string | number; Last_Name?: string; First_Name?: string; Company?: string; Mobile?: string; Phone?: string;
   City?: string; Street?: string; Lead_Source?: string; Lead_Status?: string; Owner?: Ref; Description?: string;
   Created_Time?: string; Created_By?: Ref; Modified_By?: Ref;
 };
@@ -53,7 +54,7 @@ export function mapRole(u: ZUser, overrides?: ReadonlyMap<string, Role>): Role |
 
 export function mapUser(u: ZUser, overrides?: ReadonlyMap<string, Role>): User | null {
   const role = mapRole(u, overrides);
-  return role ? { id: u.id, name: u.full_name, role, email: u.email } : null;
+  return role ? { id: ownerId(u.id)!, name: u.full_name, role, email: u.email } : null;
 }
 
 /** Zoho lead sources are free-form (Facebook, Google AdWords, ...). Fold them into ATPL's three. */
@@ -71,7 +72,7 @@ export function normalizeStatus(raw?: string): LeadStatus {
 export function mapLead(z: ZLead, executives: ReadonlySet<string>): Lead {
   const ownerName = z.Owner?.name ?? "";
   return {
-    id: z.id,
+    id: String(z.id).trim(),
     name: [z.First_Name, z.Last_Name].filter(Boolean).join(" ").trim() || "(no name)",
     company: z.Company && z.Company !== "-" ? z.Company : "",
     phone: z.Mobile || z.Phone || "",
@@ -81,8 +82,8 @@ export function mapLead(z: ZLead, executives: ReadonlySet<string>): Lead {
     status: normalizeStatus(z.Lead_Status),
     // Ownership is the assignment: an executive owner means "assigned", anyone else means the fresh queue.
     assignedTo: executives.has(ownerName) ? ownerName : null,
-    assignedToId: executives.has(ownerName) ? z.Owner?.id : undefined,
-    ownerId: z.Owner?.id,
+    assignedToId: executives.has(ownerName) ? ownerId(z.Owner?.id) : undefined,
+    ownerId: ownerId(z.Owner?.id),
     remarks: z.Description ?? "",
     createdOn: day(z.Created_Time),
     touchedBy: [z.Created_By?.name, z.Modified_By?.name].filter((n): n is string => !!n),
@@ -97,12 +98,12 @@ export function mapQuote(z: ZQuote, leadsById: ReadonlyMap<string, Lead>): Quota
   const ref = z[FIELD.quote.lead] as Ref;
   const lead = ref ? leadsById.get(ref.id) : undefined;
   return {
-    id: z.id,
+    id: String(z.id).trim(),
     offerNo: String(z[FIELD.quote.offerNo] ?? ""),
     leadId: ref?.id ?? "",
     customer: lead ? lead.company || lead.name : ref?.name ?? "",
     executive: z.Owner?.name ?? "",
-    ownerId: z.Owner?.id,
+    ownerId: ownerId(z.Owner?.id),
     total: z.Grand_Total ?? 0,
     date: day(z.Created_Time),
     status: String(z.Status ?? "Draft"),
@@ -118,13 +119,13 @@ export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
   const lead = z.Who_Id ? leadsById.get(z.Who_Id.id) : undefined;
   const status = mapTaskStatus(z.Status);
   return {
-    id: z.id,
+    id: String(z.id).trim(),
     leadId: z.Who_Id?.id ?? "",
     customer: lead ? lead.company || lead.name : z.Who_Id?.name ?? "",
     address: lead?.address ?? "",
     area: lead?.area ?? "",
     executive: z.Owner?.name ?? "",
-    executiveId: z.Owner?.id,
+    executiveId: ownerId(z.Owner?.id),
     type: String(z[FIELD.task.type] || z.Subject || "Work"),
     isVisit: z[FIELD.task.isSiteVisit] === true,
     date: z.Due_Date ?? "",

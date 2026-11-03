@@ -27,7 +27,7 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
     role: portalRole(user.role),
   }));
   const s = perfStats(leads, quotes, visits, range, todayIST(), executives, viewer);
-  const unsetIds = STATIC_USERS.filter((user) => user.zohoUserId.startsWith("REPLACE_")).map((user) => user.name);
+  const unsetIds = STATIC_USERS.filter((user) => user.zohoUserId.trim().startsWith("REPLACE_")).map((user) => user.name);
 
   const cards = [
     { k: "Total Leads", v: String(s.totalLeads), sub: `${s.won} won` },

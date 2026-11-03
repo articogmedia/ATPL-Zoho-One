@@ -110,15 +110,15 @@ describe("performance dashboard", () => {
   });
   it("keeps the full roster, puts unknown owners in Other, and totals match cards", () => {
     const roster: PerfExecutive[] = [
-      { id: "reshma-id", name: "Reshma (Manager)", role: "Manager" },
-      { id: "pavan-id", name: "Pavan", role: "Sales Executive" },
-      { id: "saikiran-id", name: "Sai Kiran", role: "Sales Executive" },
+      { id: "1394515000000464001", name: "Reshma (Manager)", role: "Manager" },
+      { id: "1394515000001147001", name: "Pavan", role: "Sales Executive" },
+      { id: "1394515000001126001", name: "Sai Kiran", role: "Sales Executive" },
     ];
     const lead = (id: string, ownerId?: string, status: Lead["status"] = "Fresh Lead") =>
       ({ ...SAMPLE_LEADS[0], id, createdOn: "2026-10-10", ownerId, assignedTo: ownerId ? "Pavan" : null, status }) as Lead;
-    const quote = { ...SAMPLE_QUOTES[0], id: "q-perf", date: "2026-10-10", ownerId: "pavan-id" } as Quotation;
-    const visit = { ...SAMPLE_VISITS[0], id: "v-perf", date: "2026-10-10", isVisit: true, status: "Completed", executiveId: "pavan-id" } as Visit;
-    const s = perfStats([lead("pavan-lead", "pavan-id", "Won"), lead("unknown-lead", "unknown-id")], [quote], [visit], "month", "2026-10-29", roster);
+    const quote = { ...SAMPLE_QUOTES[0], id: "q-perf", date: "2026-10-10", ownerId: "1394515000001147001" } as Quotation;
+    const visit = { ...SAMPLE_VISITS[0], id: "v-perf", date: "2026-10-10", isVisit: true, status: "Completed", executiveId: "1394515000001147001" } as Visit;
+    const s = perfStats([lead("pavan-lead", " 1394515000001147001 ", "Won"), lead("unknown-lead", "unknown-id")], [quote], [visit], "month", "2026-10-29", roster);
     expect(s.rows.map((row) => row.name)).toEqual(["Reshma (Manager)", "Pavan", "Sai Kiran", "Other / Unassigned", "Total"]);
     expect(s.rows.find((row) => row.name === "Reshma (Manager)")?.leads).toBe(0);
     expect(s.totalLeads).toBe(s.totalRow.leads);
@@ -126,13 +126,13 @@ describe("performance dashboard", () => {
   });
   it("scopes performance totals and rows to a Sales user", () => {
     const roster: PerfExecutive[] = [
-      { id: "pavan-id", name: "Pavan", role: "Sales Executive" },
-      { id: "saikiran-id", name: "Sai Kiran", role: "Sales Executive" },
+      { id: "1394515000001147001", name: "Pavan", role: "Sales Executive" },
+      { id: "1394515000001126001", name: "Sai Kiran", role: "Sales Executive" },
     ];
-    const sales: User = { id: "pavan-id", name: "Pavan", role: "Sales Executive" };
+    const sales: User = { id: " 1394515000001147001 ", name: "Pavan", role: "Sales Executive" };
     const leads = [
-      { ...SAMPLE_LEADS[0], createdOn: "2026-10-10", ownerId: "pavan-id" },
-      { ...SAMPLE_LEADS[1], createdOn: "2026-10-10", ownerId: "saikiran-id" },
+      { ...SAMPLE_LEADS[0], createdOn: "2026-10-10", ownerId: "1394515000001147001" },
+      { ...SAMPLE_LEADS[1], createdOn: "2026-10-10", ownerId: "1394515000001126001" },
     ] as Lead[];
     const s = perfStats(leads, [], [], "month", "2026-10-29", roster, sales);
     expect(s.rows.map((row) => row.name)).toEqual(["Pavan"]);
