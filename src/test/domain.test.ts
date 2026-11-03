@@ -47,8 +47,16 @@ describe("access rules", () => {
   });
 });
 
-import { canAssignLeads } from "@/lib/domain";
+import { canAssignLeads, leadBucket } from "@/lib/domain";
 describe("manage leads", () => {
+  it("buckets manager-owned and executive-owned Fresh Leads as assigned", () => {
+    const base = SAMPLE_LEADS[0];
+    expect(leadBucket({ ...base, status: "Fresh Lead", assignedTo: "Reshma", assignedToId: "manager-id" } as Lead)).toBe("assigned");
+    expect(leadBucket({ ...base, status: "Fresh Lead", assignedTo: "Anil", assignedToId: "executive-id" } as Lead)).toBe("assigned");
+  });
+  it("puts Contacted leads in other", () => {
+    expect(leadBucket({ ...SAMPLE_LEADS[0], status: "Contacted" } as Lead)).toBe("other");
+  });
   it("fresh tab shows only unassigned Fresh Leads", () => {
     const r = leadsForTab(u("divya"), SAMPLE_LEADS, "fresh");
     expect(r.length).toBeGreaterThan(0);
@@ -82,7 +90,7 @@ describe("manage leads", () => {
   });
   it("only managers and calling team can assign", () => {
     expect(canAssignLeads("Manager")).toBe(true);
-    expect(canAssignLeads("Calling Team")).toBe(false);
+    expect(canAssignLeads("Calling Team")).toBe(true);
     expect(canAssignLeads("Sales Executive")).toBe(false);
   });
   it("executives see only their own leads in All", () => {

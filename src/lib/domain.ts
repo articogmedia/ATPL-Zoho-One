@@ -266,6 +266,17 @@ export function visibleFor<T extends { assignedTo?: string | null; assignedToId?
 }
 
 export type LeadTab = "fresh" | "assigned" | "callback" | "mine" | "all";
+export type LeadBucket = "fresh" | "assigned" | "callback" | "other";
+
+export function leadBucket(lead: Lead): LeadBucket {
+  const hasAssignee = !!lead.assignedTo?.trim() || !!lead.assignedToId?.trim();
+  if (lead.status === "Fresh Lead" && !hasAssignee) return "fresh";
+  if (lead.status === "Fresh Lead" && hasAssignee) return "assigned";
+  if (lead.status === "Assigned to Sales") return "assigned";
+  if (lead.status === "Callback in Future" && !!lead.followUp && lead.followUp <= todayIST()) return "callback";
+  return "other";
+}
+
 export type LeadFilters = {
   owner?: string;
   stage?: LeadStatus | "All";
@@ -281,9 +292,7 @@ export function leadsForTab(
   if (tab === "all" && user.role !== "Manager") return [];
   const q = search.trim().toLowerCase();
   return visibleFor(user, leads).filter((l) => {
-    if (tab === "fresh" && !(l.status === "Fresh Lead" && !l.assignedTo && !l.assignedToId)) return false;
-    if (tab === "assigned" && l.status !== "Assigned to Sales") return false;
-    if (tab === "callback" && !(l.status === "Callback in Future" && !!l.followUp && l.followUp <= todayIST())) return false;
+    if (tab !== "all" && tab !== "mine" && leadBucket(l) !== tab) return false;
     if (tab === "mine" && !(l.assignedTo === user.name || l.touchedBy.includes(user.name))) return false;
     if (source !== "All" && l.source !== source) return false;
     if (filters.owner && filters.owner !== "All" && (l.assignedTo ?? "Unassigned") !== filters.owner) return false;
@@ -295,7 +304,7 @@ export function leadsForTab(
   }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
 }
 
-export const canAssignLeads = (role: Role) => role === "Manager";
+export const canAssignLeads = (role: Role) => role === "Manager" || role === "Calling Team";
 export function isAssignable(u: User, queueOwnerId?: string): boolean {
   return (u.role === "Sales Executive" || u.role === "Manager") &&
     normalizeOwnerId(u.id) !== normalizeOwnerId(queueOwnerId);

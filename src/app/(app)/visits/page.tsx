@@ -10,9 +10,21 @@ export default async function VisitsPage() {
   const started = Date.now();
   const user = await requireSection("visits");
   const repo = crm();
-  const [visits, assignableUsers, leads, quotes, calls] = await Promise.all([
+  const results = await Promise.allSettled([
     repo.listVisits(), repo.listAssignableUsers(), repo.listLeads(), repo.listQuotes(), repo.listCalls(),
   ]);
+  const failedIndex = results.findIndex((result) => result.status === "rejected");
+  if (failedIndex >= 0 && failedIndex !== 4) {
+    const errors = results.map((result, index) => result.status === "rejected" ? `request ${index + 1}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}` : null).filter(Boolean);
+    console.error("[page] visits data load failed", errors.join("; "));
+  }
+  const callsResult = results[4];
+  if (callsResult.status === "rejected") console.error("[page] Calls list failed", callsResult.reason);
+  const visits = results[0].status === "fulfilled" ? results[0].value : [];
+  const assignableUsers = results[1].status === "fulfilled" ? results[1].value : [];
+  const leads = results[2].status === "fulfilled" ? results[2].value : [];
+  const quotes = results[3].status === "fulfilled" ? results[3].value : [];
+  const calls = callsResult.status === "fulfilled" ? callsResult.value : [];
   console.info(`[page] visits ${Date.now() - started}ms`);
   const performance = (range: PerfRange) => {
     const stats = perfStats(leads, quotes, visits, range, todayIST(), [{ id: user.id, name: user.name, role: user.role }], user, calls);
@@ -24,6 +36,7 @@ export default async function VisitsPage() {
   return (
     <>
       <h1 className="mb-5 text-2xl font-bold">My Work &amp; Site Visits</h1>
+      {callsResult.status === "rejected" && <div role="status" className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Call history is temporarily unavailable. Visits are still shown.</div>}
       <VisitsClient
         user={{ id: user.id, name: user.name, role: user.role }}
         visits={visibleFor(user, visits)}

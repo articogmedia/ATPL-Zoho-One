@@ -128,14 +128,32 @@ export const zohoRepository: CrmRepository = {
       });
     }
     invalidate("leads", "users");
-    return (await leadMap()).get(id) ?? {
-      id, ...input, status, assignedTo: assignTo, createdOn: new Date().toISOString().slice(0, 10),
-      address: "", touchedBy: [actor.name],
+    const assignable = await assignableIds();
+    const created = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${id}`, {
+      query: { fields: LEAD_FIELDS.join(",") },
+    }).catch(() => null);
+    const createdRecord = created?.data?.[0];
+    if (createdRecord) return mapLead(createdRecord, assignable);
+    return {
+      id,
+      name: input.name,
+      company: input.company,
+      phone: input.phone,
+      area: input.area,
+      source: input.source,
+      status,
+      assignedTo: owner?.name ?? null,
+      assignedToId: owner?.id,
+      ownerId: String(owner?.id ?? queueOwner ?? ""),
+      remarks: input.remarks,
+      createdOn: new Date().toISOString().slice(0, 10),
+      address: "",
+      touchedBy: [actor.name],
     };
   },
 
   async assignLead(id, assignee, actor) {
-    if (actor.role !== "Manager") throw new ZohoError("Only managers can assign leads.");
+    if (actor.role !== "Manager" && actor.role !== "Calling Team") throw new ZohoError("Only managers and the calling team can assign leads.");
     const current = await this.getLead(id);
     if (!current) throw new ZohoError("Lead not found", 404);
     const owner = await userByName(assignee);

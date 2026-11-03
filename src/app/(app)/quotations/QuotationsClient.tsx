@@ -195,7 +195,11 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
     <div className="space-y-4">
       <div className="no-print flex flex-wrap gap-2">
         <Button variant="outline" className="h-12" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
-        <Button className="h-12" onClick={() => window.print()}><Printer className="h-5 w-5" /> Download PDF</Button>
+        <Button className="h-12" onClick={() => {
+          const params = new URLSearchParams({ offerNo, customer, leadName: lead.name, leadPhone: lead.phone, address: lead.address || lead.area, date });
+          items.forEach((item, index) => params.set(`item${index}`, JSON.stringify(item)));
+          window.open(`/api/quotations/pdf?${params.toString()}`, "_blank", "noopener,noreferrer");
+        }}><Printer className="h-5 w-5" /> Download PDF</Button>
         <Button asChild variant="secondary" className="h-12"><a href={wa} target="_blank" rel="noreferrer"><MessageCircle className="h-5 w-5" /> Share on WhatsApp</a></Button>
         <Button variant="outline" className="h-12" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
       </div>

@@ -22,6 +22,11 @@ function whatsappUrl(phone: string): string | null {
   return digits.length === 10 ? `https://wa.me/91${digits}` : null;
 }
 
+function leadBucketForTab(lead: Lead): LeadTab {
+  if (lead.status === "Fresh Lead") return lead.assignedToId || lead.assignedTo ? "assigned" : "fresh";
+  return lead.status === "Assigned to Sales" ? "assigned" : "all";
+}
+
 const TABS: { id: LeadTab; label: string }[] = [
   { id: "fresh", label: "Fresh Leads to Call" },
   { id: "assigned", label: "Assigned to Sales" },
@@ -31,8 +36,10 @@ const TABS: { id: LeadTab; label: string }[] = [
 ];
 
 export function LeadsClient({ user, leads, executives, owners, canAssign }: Props) {
+  const [leadRows, setLeadRows] = useState(leads);
   const isExec = user.role === "Sales Executive";
-  const [tab, setTab] = useState<LeadTab>(isExec ? "mine" : "fresh");
+  const [tab, setTab] = useState<LeadTab>(user.role === "Manager" && leadsForTab(user, leads, "fresh").length === 0 ? "all" : isExec ? "mine" : "fresh");
+  const tabListRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [source, setSource] = useState<LeadSource | "All">("All");
@@ -47,18 +54,25 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
   const router = useRouter();
 
   useEffect(() => {
+    setLeadRows(leads);
+  }, [leads]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
     return () => window.clearTimeout(timer);
   }, [search]);
 
   useEffect(() => setPage(1), [tab, debouncedSearch, source, filters]);
   useEffect(() => {
-    if (!pendingAddedId || !leads.some((lead) => lead.id === pendingAddedId)) return;
-    const added = leads.find((lead) => lead.id === pendingAddedId);
+    tabListRef.current?.querySelector<HTMLButtonElement>(`[data-tab="${tab}"]`)?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [tab]);
+  useEffect(() => {
+    if (!pendingAddedId || !leadRows.some((lead) => lead.id === pendingAddedId)) return;
+    const added = leadRows.find((lead) => lead.id === pendingAddedId);
     if (!added) return;
     setAdding(false);
     setPendingAddedId(null);
-    setTab(user.role === "Manager" ? "all" : isExec ? "mine" : "fresh");
+    setTab(leadBucketForTab(added));
     setHighlightedLeadId(added.id);
     window.setTimeout(() => setHighlightedLeadId(null), 4000);
     window.requestAnimationFrame(() => (document.getElementById("leads-list-mobile") ?? document.getElementById("leads-list"))?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -67,22 +81,24 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
         label: "View lead",
         onClick: () => {
           setSelected(added);
-          setTab(user.role === "Manager" ? "all" : isExec ? "mine" : "fresh");
+          setTab(leadBucketForTab(added));
         },
       },
     });
-  }, [isExec, leads, pendingAddedId, user.role]);
+  }, [isExec, leadRows, pendingAddedId, user.role]);
 
   const filtered = useMemo(
-    () => leadsForTab(user, leads, tab, debouncedSearch, source, filters),
-    [user, leads, tab, debouncedSearch, source, filters],
+    () => leadsForTab(user, leadRows, tab, debouncedSearch, source, filters),
+    [user, leadRows, tab, debouncedSearch, source, filters],
   );
   const pageCount = Math.max(1, Math.ceil(filtered.length / 25));
   const visible = filtered.slice((page - 1) * 25, page * 25);
-  const availableTabs = TABS.filter((item) => !(item.id === "fresh" && isExec) && !(item.id === "all" && user.role !== "Manager"));
-  const count = (id: LeadTab) => leadsForTab(user, leads, id, debouncedSearch, source, filters).length;
-  const todaysFollowUps = leadsForTab(user, leads, "callback").filter((lead) => lead.followUp === todayIST()).length;
-  const fixableCount = leads.filter((lead) => lead.status === "Fresh Lead" && (!!lead.assignedToId || !!lead.assignedTo)).length;
+  const availableTabs = TABS.filter((item) =>
+    user.role === "Calling Team" ? item.id === "fresh" || item.id === "callback"
+    : !(item.id === "fresh" && isExec) && !(item.id === "all" && user.role !== "Manager"));
+  const count = (id: LeadTab) => leadsForTab(user, leadRows, id, debouncedSearch, source, filters).length;
+  const todaysFollowUps = leadsForTab(user, leadRows, "callback").filter((lead) => lead.followUp === todayIST()).length;
+  const fixableCount = leadRows.filter((lead) => lead.status === "Fresh Lead" && (!!lead.assignedToId || !!lead.assignedTo)).length;
   const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
 
   return (
@@ -101,18 +117,23 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
 
       {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads count={fixableCount} compact /></div>}
 
-      <div className="flex gap-2 overflow-x-auto border-b pb-2 max-[480px]:-mx-1 max-[480px]:rounded-lg max-[480px]:border-0 max-[480px]:bg-slate-100 max-[480px]:p-1 max-[480px]:px-1" role="tablist" aria-label="Lead views">
+      <div className="relative -mx-1 overflow-hidden">
+      <div ref={tabListRef} className="flex gap-2 overflow-x-auto px-1 pb-2 max-[480px]:scrollbar-none" role="tablist" aria-label="Lead views">
         {availableTabs.map((item) => (
           <button
             key={item.id}
+            data-tab={item.id}
             role="tab"
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
-            className={`h-11 shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:h-10 max-[480px]:min-w-[calc(50vw-2rem)] max-[480px]:flex-1 ${tab === item.id ? "bg-primary text-primary-foreground max-[480px]:bg-white max-[480px]:text-blue-700 max-[480px]:shadow-sm" : "text-muted-foreground hover:bg-secondary hover:text-foreground max-[480px]:text-slate-600"}`}
+            className={`h-11 shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:h-10 ${tab === item.id ? "bg-primary text-primary-foreground max-[480px]:bg-white max-[480px]:text-blue-700 max-[480px]:shadow-sm" : "bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground max-[480px]:bg-slate-100 max-[480px]:text-slate-600"}`}
           >
             <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>
         ))}
+      </div>
+      <div className="pointer-events-none absolute inset-y-0 left-0 w-4 bg-gradient-to-r from-card to-transparent" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-card to-transparent" />
       </div>
 
       <div className="flex flex-row gap-2">
@@ -134,10 +155,16 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
         onClose={() => setFiltersOpen(false)}
       />
 
-      {adding && <AddLead onAdded={(id) => { setPendingAddedId(id); router.refresh(); }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
+      {adding && <AddLead onAdded={(lead) => {
+        setLeadRows((current) => current.some((item) => item.id === lead.id) ? current : [lead, ...current]);
+        setPendingAddedId(lead.id);
+        setTab(leadBucketForTab(lead));
+        setAdding(false);
+        setHighlightedLeadId(lead.id);
+      }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
-        <EmptyState filtered={filtered.length !== leads.length || !!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
+        <EmptyState hasLeads={leadRows.length > 0} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
           <div id="leads-list" className="hidden overflow-hidden rounded-xl border border-border bg-card shadow-sm md:block">
@@ -235,8 +262,10 @@ function Pagination({ page, pageCount, total, onChange }: { page: number; pageCo
   </nav>;
 }
 
-function EmptyState({ filtered, onClear }: { filtered: boolean; onClear: () => void }) {
-  return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{filtered ? "No leads match your filters" : "No leads in this view"}</div><p className="mt-1 text-muted-foreground">{filtered ? "Try a different search or source." : "New enquiries will appear here."}</p>{filtered && <Button variant="outline" className="mt-4 h-10" onClick={onClear}>Clear filters</Button>}</div>;
+function EmptyState({ hasLeads, filtered, onClear }: { hasLeads: boolean; filtered: boolean; onClear: () => void }) {
+  const title = filtered ? "No leads match your filters" : hasLeads ? "No leads in this view" : "No leads yet";
+  const detail = filtered ? "Try a different search or source." : hasLeads ? "New enquiries will appear here." : "Add a lead to get started.";
+  return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{title}</div><p className="mt-1 text-muted-foreground">{detail}</p>{filtered && <Button variant="outline" className="mt-4 h-10" onClick={onClear}>Clear filters</Button>}</div>;
 }
 
 function FixAssignedLeads({ count, compact = false }: { count: number; compact?: boolean }) {
@@ -447,13 +476,13 @@ function ScheduleForm({ lead, onDone }: { lead: Lead; onDone: () => void }) {
   </div>;
 }
 
-function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }: { onAdded: (id: string) => void; onCancel: () => void; executives: string[]; canAssign: boolean; canForceDuplicate: boolean }) {
+function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }: { onAdded: (lead: Lead) => void; onCancel: () => void; executives: string[]; canAssign: boolean; canForceDuplicate: boolean }) {
   const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedTo: "" });
   const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
   const [pending, start] = useTransition();
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [key]: event.target.value });
-  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok) { onAdded(result.data?.id ?? ""); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
+  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok && result.data) { onAdded(result.data); } else if (!result.ok) { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
     <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onCancel}><X /></Button></div>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />

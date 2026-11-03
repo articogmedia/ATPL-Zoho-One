@@ -15,6 +15,7 @@ export const STATIC_USERS: readonly StaticUser[] = [
   { username: "reshma", name: "Reshma", role: "Manager", email: process.env.ATPL_RESHMA_EMAIL, zohoUserId: "1394515000000464001", passwordEnv: "ATPL_RESHMA_PASSWORD" },
   { username: "pavan", name: "Pavan", role: "Sales", email: process.env.ATPL_PAVAN_EMAIL, zohoUserId: "1394515000001147001", passwordEnv: "ATPL_PAVAN_PASSWORD" },
   { username: "saikiran", name: "Sai Kiran", role: "Sales", email: process.env.ATPL_SAIKIRAN_EMAIL, zohoUserId: "1394515000001126001", passwordEnv: "ATPL_SAIKIRAN_PASSWORD" },
+  ...(process.env.ATPL_CALLING_USERNAME ? [{ username: process.env.ATPL_CALLING_USERNAME, name: process.env.ATPL_CALLING_NAME ?? "Calling Team", role: "Caller" as const, email: process.env.ATPL_CALLING_EMAIL, zohoUserId: process.env.ATPL_CALLING_ZOHO_USER_ID, passwordEnv: "ATPL_CALLING_PASSWORD" }] : []),
 ];
 
 export function portalRole(role: StaticRole): Role {

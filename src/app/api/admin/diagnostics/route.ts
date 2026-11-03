@@ -55,6 +55,13 @@ export async function GET() {
       }
       return Object.fromEntries(counts);
     });
+    const moduleAccess = await check(async () => {
+      const [calls, events] = await Promise.all([
+        zoho<{ data?: unknown[] }>("GET", "/Calls", { query: { per_page: 1 } }),
+        zoho<{ data?: unknown[] }>("GET", "/Events", { query: { per_page: 1 } }),
+      ]);
+      return { calls: calls?.data?.length ?? 0, events: events?.data?.length ?? 0 };
+    });
     const normalizedQueueOwnerId = configuredQueueOwnerId?.trim();
     const queueOwner = isError(rawUsers) ? undefined : rawUsers.find((u) => String(u.id).trim() === normalizedQueueOwnerId);
     const queueOwnerRole = queueOwner ? mapRole(queueOwner, overrides) : null;
@@ -88,7 +95,9 @@ export async function GET() {
             configured: !!configuredQueueOwnerId,
             resolvesToActiveUser: !!normalizedQueueOwnerId && rawUsers.some((u) => String(u.id).trim() === normalizedQueueOwnerId),
             queueOwnerIsAssignable,
-            warning: queueOwnerIsAssignable
+            warning: queueOwnerRole === "Manager"
+              ? "ZOHO_QUEUE_OWNER_ID maps to a Manager role; the queue owner should not be assignable."
+              : queueOwnerIsAssignable
               ? "The queue owner is assignable; leads owned by this user will never show as unassigned."
               : undefined,
           },
@@ -121,6 +130,7 @@ export async function GET() {
       zohoOrg: org,
       users,
       leadPicklists,
+      moduleAccess,
       customFields,
       roleOverrideEmails: [...overrides.keys()],
       knownRoleNames: Object.keys(ROLE_BY_ZOHO_NAME),
