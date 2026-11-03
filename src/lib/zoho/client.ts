@@ -4,7 +4,13 @@ import { revalidateTag, unstable_cache } from "next/cache";
 
 /** Server-side Zoho CRM client. Tokens never leave the server. */
 export class ZohoError extends Error {
-  constructor(message: string, readonly status?: number, readonly code?: string) {
+  constructor(
+    message: string,
+    readonly status?: number,
+    readonly code?: string,
+    readonly field?: string,
+    readonly invalidValue?: unknown,
+  ) {
     super(message);
     this.name = "ZohoError";
   }
@@ -108,7 +114,11 @@ export async function zoho<T = unknown>(
   if (res.status === 204) return null;
   if (res.status === 401 && !retried) return zoho<T>(method, path, opts, true);
 
-  const json = (await res.json().catch(() => null)) as (T & { code?: string; message?: string }) | null;
+  const json = (await res.json().catch(() => null)) as (T & {
+    code?: string;
+    message?: string;
+    details?: { api_name?: string; field?: string; expected_data_type?: string; value?: unknown };
+  }) | null;
   if (res.status === 429 && rateLimitAttempt < 2) {
     const retryAfter = Number(res.headers.get("retry-after"));
     const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 4000) : 250 * 2 ** rateLimitAttempt;
@@ -116,16 +126,18 @@ export async function zoho<T = unknown>(
     return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1);
   }
   if (!res.ok) {
+    const detail = json?.details;
+    const field = detail?.api_name ?? detail?.field;
     throw new ZohoError(
       res.status === 429 ? "Zoho API rate limit reached. Please retry shortly." : json?.message ?? `Zoho request failed (${res.status})`,
-      res.status, json?.code,
+      res.status, json?.code, field, detail?.value,
     );
   }
   return json;
 }
 
 type WriteResult = {
-  data: { code: string; message?: string; details?: { id?: string; api_name?: string } }[];
+  data: { code: string; message?: string; details?: { id?: string; api_name?: string; value?: unknown } }[];
 };
 
 /** POST/PUT wrapper that fails if ANY record in the response is not SUCCESS, and returns the first id. */
@@ -142,7 +154,7 @@ export async function zohoWrite(
   if (!first || first.code !== "SUCCESS") {
     const message = first?.message ?? "Zoho rejected the change";
     const apiName = first?.details?.api_name;
-    throw new ZohoError(apiName ? `${message} (field: ${apiName})` : message, undefined, first?.code);
+    throw new ZohoError(apiName ? `${message} (field: ${apiName})` : message, undefined, first?.code, apiName, first?.details?.value);
   }
   return first.details?.id ?? "";
 }

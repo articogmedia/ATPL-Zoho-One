@@ -30,7 +30,12 @@ async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
     if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
     if (err instanceof ForbiddenError) return { ok: false, error: err.message };
     if (err instanceof z.ZodError) return { ok: false, error: "Please check the form values." };
-    console.error("Action failed", err);
+    console.error("Action failed", {
+      action: "addLead",
+      zohoStatus: err instanceof ZohoError ? err.status : undefined,
+      zohoCode: err instanceof ZohoError ? err.code : undefined,
+      zohoField: err instanceof ZohoError ? err.field : undefined,
+    });
     return {
       ok: false,
       error: err instanceof ZohoError

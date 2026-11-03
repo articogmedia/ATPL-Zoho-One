@@ -111,8 +111,13 @@ export const zohoRepository: CrmRepository = {
     const queueOwner = !owner ? await queueOwnerId() : undefined;
     const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
     const record: Record<string, unknown> = {
-      Last_Name: input.name, Company: input.company || "-", Mobile: input.phone, City: input.area,
-      Lead_Source: input.source, Lead_Status: WRITE_LEAD_STATUS[status], Description: input.remarks || undefined,
+      Last_Name: input.name.trim(),
+      ...(input.company.trim() ? { Company: input.company.trim() } : {}),
+      Mobile: input.phone,
+      ...(input.area.trim() ? { City: input.area.trim() } : {}),
+      Lead_Source: input.source,
+      Lead_Status: WRITE_LEAD_STATUS[status],
+      ...(input.remarks.trim() ? { Description: input.remarks.trim() } : {}),
       ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner } }),
     };
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });

@@ -501,12 +501,28 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
   const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
   const [pending, start] = useTransition();
+  const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [key]: event.target.value });
-  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok && result.data) { onAdded(result.data); } else if (!result.ok) { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
+  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
+    event.preventDefault();
+    if (pending) return;
+    const normalizedPhone = f.phone.replace(/\D/g, "").slice(-10);
+    const nextErrors = {
+      name: f.name.trim() ? undefined : "Lead name is required.",
+      phone: /^\d{10}$/.test(normalizedPhone) ? undefined : "Enter a valid 10-digit mobile number.",
+    };
+    setErrors(nextErrors);
+    if (nextErrors.name || nextErrors.phone) return;
+    start(async () => {
+      const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedTo: f.assignedTo || null, forceCreate });
+      if (result.ok && result.data) onAdded(result.data);
+      else if (!result.ok) { setDuplicate(result.duplicate ?? null); toast.error(result.error); }
+    });
+  }}>
     <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onCancel}><X /></Button></div>
-    <input className={`${fieldClass} h-10 text-sm`} placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} />
+    <div><input className={`${fieldClass} h-10 text-sm`} aria-invalid={!!errors.name} aria-label="Lead name required" placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />
-    <input className={`${fieldClass} h-10 text-sm`} placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" required pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" />
+    <div><input className={`${fieldClass} h-10 text-sm`} aria-invalid={!!errors.phone} aria-label="Mobile number required" placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" required pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Area" value={f.area} onChange={set("area")} maxLength={120} />
     <select className={`${fieldClass} h-10 text-sm`} value={f.source} onChange={set("source")}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
     {canAssign && <select className={`${fieldClass} h-10 text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select>}
