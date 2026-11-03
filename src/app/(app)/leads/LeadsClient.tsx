@@ -124,7 +124,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
                 <tr>
                   <th className="px-4 py-3 font-semibold">Lead</th><th className="px-3 py-3 font-semibold">Phone</th>
                   <th className="px-3 py-3 font-semibold">Source</th><th className="px-3 py-3 font-semibold">Created</th>
-                  <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="px-4 py-3 text-right font-semibold">Action</th>
+                  <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="w-px whitespace-nowrap px-4 py-3 text-right font-semibold">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -160,7 +160,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
 
 function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   return <div className="flex justify-end gap-1">
-    <Button size="sm" variant="outline" className="h-11" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`}><Phone /> Call</Button>
+    <Button size="sm" variant="outline" className="h-11 w-auto md:h-9 md:w-9 md:px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`}><Phone /> <span className="md:hidden 2xl:inline">Call</span></Button>
     <Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
     {manager && <><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Reassign ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
@@ -169,10 +169,10 @@ function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boole
 function DesktopActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   const whatsapp = whatsappUrl(lead.phone);
   return <div className="flex justify-end gap-1">
-    <Button size="sm" variant="outline" className="h-11" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`}><Phone /> Call</Button>
+    <Button size="sm" variant="outline" className="h-9 w-9 px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`}><Phone /> <span className="hidden 2xl:inline">Call</span></Button>
     {whatsapp && <a className="grid h-9 w-9 place-items-center rounded-md hover:bg-secondary" href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><MessageCircle className="text-[#128C7E]" /></a>}
-    <Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
-    {manager && <><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Reassign ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+    <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
+    {manager && <><Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Reassign ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
 }
 
@@ -185,7 +185,7 @@ function DesktopRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: 
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.createdOn || "—"}</td>
       <td className="px-3 py-3"><StatusBadge status={lead.status} />{lead.followUp && lead.followUp <= todayIST() && <div className="mt-1 text-xs font-semibold text-destructive">Overdue</div>}</td>
       <td className="max-w-36 truncate px-3 py-3">{lead.assignedTo ?? "Unassigned"}</td>
-      <td className="px-4 py-3 text-right" onClick={(event) => event.stopPropagation()}><DesktopActionButtons lead={lead} manager={manager} onAction={onAction} /></td>
+      <td className="w-px whitespace-nowrap px-4 py-3 text-right" onClick={(event) => event.stopPropagation()}><DesktopActionButtons lead={lead} manager={manager} onAction={onAction} /></td>
     </tr>
   );
 }
