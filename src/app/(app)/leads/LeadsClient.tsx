@@ -155,9 +155,9 @@ export function LeadsClient({ user, leads, executives, owners, canAssign }: Prop
 
 function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   return <div className="flex justify-end gap-1">
-    <Button size="sm" variant="outline" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`}><Phone /> <span className="hidden lg:inline">Call</span></Button>
-    <Button size="icon" variant="ghost" aria-label={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
-    {manager && <><Button size="icon" variant="ghost" aria-label={`Reassign ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" aria-label={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+    <Button size="sm" variant="outline" className="h-11" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`}><Phone /> Call</Button>
+    <Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
+    {manager && <><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Reassign ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
 }
 
@@ -176,14 +176,15 @@ function DesktopRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: 
 }
 
 function MobileRow({ lead, manager, onOpen, onAction }: { lead: Lead; manager: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+  const wa = lead.phone.replace(/\D/g, "").slice(-10);
   return (
     <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }} className="rounded-xl border border-border bg-card p-3 shadow-sm max-[480px]:p-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0"><div className="truncate font-semibold">{lead.name}</div><div className="truncate text-xs text-muted-foreground">{lead.company || "No company"}</div></div>
         <StatusBadge status={lead.status} />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2"><a className="truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone || "No phone"}</a><span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
-      <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={`https://wa.me/${lead.phone.replace(/\D/g, "")}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>
+      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2">{lead.phone ? <a className="inline-flex min-h-11 items-center truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone}</a> : <span>No phone</span>}<span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
+      {wa.length === 10 && <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={`https://wa.me/91${wa}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>}
       <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={onAction} /></div>
     </div>
   );
@@ -334,7 +335,7 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
   return (
     <div className="fixed inset-0 z-50" role="presentation">
       <button className="absolute inset-0 cursor-default bg-black/40" aria-label="Close lead details" onClick={onClose} />
-      <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title" className="absolute bottom-0 left-0 flex h-[92vh] w-full flex-col rounded-t-2xl bg-card shadow-2xl focus-visible:outline-none md:bottom-auto md:left-auto md:right-0 md:top-0 md:h-full md:max-w-lg md:rounded-none">
+      <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title" className="absolute bottom-0 left-0 flex h-[92dvh] w-full flex-col rounded-t-2xl bg-card shadow-2xl focus-visible:outline-none md:bottom-auto md:left-auto md:right-0 md:top-0 md:h-full md:max-w-lg md:rounded-none">
         <header className="flex items-start justify-between gap-3 border-b px-4 py-4 sm:px-6">
           <div className="min-w-0"><h2 id="lead-drawer-title" className="truncate text-lg font-bold">{lead.name}</h2><p className="truncate text-xs text-muted-foreground">{lead.company || "No company"} · {lead.phone || "No phone"}</p></div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button>
@@ -415,15 +416,16 @@ function AddLead({ onDone, executives, canAssign, canForceDuplicate }: { onDone:
   const [forceCreate, setForceCreate] = useState(false);
   const [pending, start] = useTransition();
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [key]: event.target.value });
-  return <form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90vh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok) { const zohoUrl = result.data?.zohoUrl; toast.success("Lead added", zohoUrl ? { action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") } } : undefined); onDone(); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
+  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onDone} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => { event.preventDefault(); if (!f.name.trim() || !f.phone.trim()) return; start(async () => { const result = await addLeadAction({ ...f, assignedTo: f.assignedTo || null, forceCreate }); if (result.ok) { const zohoUrl = result.data?.zohoUrl; toast.success("Lead added", zohoUrl ? { action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") } } : undefined); onDone(); } else { setDuplicate(result.duplicate ?? null); toast.error(result.error); } }); }}>
+    <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onDone}><X /></Button></div>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />
-    <input className={`${fieldClass} h-10 text-sm`} placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" />
+    <input className={`${fieldClass} h-10 text-sm`} placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" required pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" />
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Area" value={f.area} onChange={set("area")} maxLength={120} />
     <select className={`${fieldClass} h-10 text-sm`} value={f.source} onChange={set("source")}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
     {canAssign && <select className={`${fieldClass} h-10 text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select>}
     <input className={`${fieldClass} h-10 text-sm sm:col-span-2`} placeholder="Remarks" value={f.remarks} onChange={set("remarks")} maxLength={500} />
     {duplicate && <div className="text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Owner: {duplicate.owner} · Status: {duplicate.status}</p>{canForceDuplicate && <Button type="button" variant="outline" className="mt-2 h-10" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
-    <Button type="submit" className="h-10 sm:col-span-2" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
-  </form>;
+    <Button type="button" variant="outline" className="h-10 md:hidden" onClick={onDone}>Cancel</Button><Button type="submit" className="h-10 sm:col-span-2" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
+  </form></>;
 }

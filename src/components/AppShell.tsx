@@ -36,7 +36,7 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
   }, []);
 
   return (
-    <div className="flex min-h-screen w-full bg-muted">
+    <div className="flex min-h-dvh w-full bg-muted">
       <aside className="hidden w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground md:flex">
         <Link href="/home" className="flex items-center gap-2 px-6 py-6">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
@@ -78,7 +78,7 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
               <div className="truncate text-xs text-slate-500">{user.role}</div>
             </div>
             <form action={logout}>
-              <Button type="submit" variant="outline" size="lg" className="max-[480px]:h-11 max-[480px]:w-11 max-[480px]:px-0" aria-label="Logout"><LogOut className="h-4 w-4" /><span className="max-[480px]:hidden">Logout</span></Button>
+              <Button type="submit" variant="outline" size="lg" className="max-[480px]:h-11 max-[480px]:w-11 max-[480px]:px-0" aria-label="Logout" title="Logout"><LogOut className="h-4 w-4" /><span className="max-[480px]:hidden">Logout</span></Button>
             </form>
           </div>
         </header>
