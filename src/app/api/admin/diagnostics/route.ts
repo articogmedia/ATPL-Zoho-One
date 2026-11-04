@@ -6,6 +6,7 @@ import { FIELD, ROLE_BY_ZOHO_NAME, WRITE_LEAD_STATUS } from "@/lib/zoho/fields";
 import { hosts, zoho, zohoList } from "@/lib/zoho/client";
 import { mapRole, parseRoleOverrides, type ZLead, type ZUser } from "@/lib/zoho/mappers";
 import { STATIC_USERS } from "@/lib/auth/users";
+import { siteVisitSchema } from "@/lib/zoho/site-visits";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,46 @@ export async function GET() {
         zoho<{ data?: unknown[] }>("GET", "/Events", { query: { per_page: 1 } }),
       ]);
       return { calls: calls?.data?.length ?? 0, events: events?.data?.length ?? 0 };
+    });
+    const products = await check(async () => {
+      const response = await zoho<{ data?: Record<string, unknown>[]; info?: { more_records?: boolean } }>("GET", "/Products", {
+        query: {
+          fields: "Product_Name,Unit_Price,Product_Active",
+          per_page: 200,
+        },
+      });
+      const rows = response?.data ?? [];
+      const inactive = rows.filter((row) => row.Product_Active === false || String(row.Product_Active).toLowerCase() === "false").length;
+      const withoutPrice = rows.filter((row) => row.Unit_Price === undefined || row.Unit_Price === null || row.Unit_Price === "").length;
+      return {
+        fetched: rows.length,
+        moreRecords: response?.info?.more_records === true,
+        inactive,
+        withoutPrice,
+        sample: rows.slice(0, 3),
+      };
+    });
+    const siteVisits = await check(async () => {
+      const schema = await siteVisitSchema();
+      if (!schema) {
+        return { found: false, hint: "Set ZOHO_SITE_VISITS_MODULE to the custom module API name." };
+      }
+      const fields = [...new Set([
+        schema.lead,
+        schema.date,
+        schema.time,
+        schema.status,
+        schema.address,
+        schema.notes,
+        schema.nextAction,
+        schema.followUp,
+        "Owner",
+        "Name",
+      ].filter(Boolean) as string[])];
+      const response = await zoho<{ data?: Record<string, unknown>[] }>("GET", `/${schema.module}`, {
+        query: { fields: fields.join(","), per_page: 2 },
+      });
+      return { found: true, schema, sample: response?.data?.slice(0, 2) ?? [] };
     });
     const normalizedQueueOwnerId = configuredQueueOwnerId?.trim();
     const queueOwner = isError(rawUsers) ? undefined : rawUsers.find((u) => String(u.id).trim() === normalizedQueueOwnerId);
@@ -131,6 +172,8 @@ export async function GET() {
       users,
       leadPicklists,
       moduleAccess,
+      products,
+      siteVisits,
       customFields,
       roleOverrideEmails: [...overrides.keys()],
       knownRoleNames: Object.keys(ROLE_BY_ZOHO_NAME),

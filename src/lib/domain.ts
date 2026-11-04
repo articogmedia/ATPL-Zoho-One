@@ -86,6 +86,7 @@ export type NewVisit = {
 
 export type Visit = {
   id: string;
+  module?: string;
   leadId: string;
   customer: string;
   address: string;

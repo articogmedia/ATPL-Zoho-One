@@ -10,6 +10,7 @@ import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
   type ZCall, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
+import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitUpdate } from "./site-visits";
 
 const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Street", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
 const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description", ...Object.values(FIELD.task)];
@@ -403,8 +404,42 @@ export const zohoRepository: CrmRepository = {
 
   async listProducts() {
     return cached("products", LONG, async () => {
-      const raw = await zohoList<ZProduct & { Product_Active?: boolean }>("Products", ["Product_Name", "Description", "Unit_Price", "Usage_Unit", "Product_Active"], 1000);
-      return raw.filter((p) => p.Product_Active !== false).map(mapProduct).sort((a, b) => a.model.localeCompare(b.model));
+      const fieldAttempts = [
+        ["Product_Name", "Product_Code", "Description", "Unit_Price", "Usage_Unit", "Product_Active"],
+        ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],
+        ["Product_Name", "Unit_Price"],
+      ];
+      let lastError: unknown;
+      for (const fields of fieldAttempts) {
+        try {
+          const raw = await zohoList<ZProduct & { Product_Active?: boolean }>("Products", fields, 1000, {
+            sort_by: "id",
+            sort_order: "asc",
+          });
+          const products = raw
+            .filter((product) => product.Product_Active !== false && String(product.Product_Name ?? "").trim().length > 0)
+            .map(mapProduct)
+            .sort((a, b) => a.model.localeCompare(b.model));
+          if (products.length === 0) invalidate("products");
+          return products;
+        } catch (error) {
+          lastError = error;
+          const zohoError = error as Partial<ZohoError> | null;
+          const status = zohoError?.status;
+          const code = zohoError?.code;
+          const field = zohoError?.field;
+          console.error("[zoho] Products catalogue fields rejected; trying fallback", {
+            operation: "GET /Products",
+            fields: fields.join(","),
+            status,
+            code,
+            field,
+          });
+          const invalidField = /invalid/i.test(code ?? "") || Boolean(field);
+          if (status !== 400 && !invalidField) throw error;
+        }
+      }
+      throw lastError;
     });
   },
 
@@ -447,7 +482,21 @@ export const zohoRepository: CrmRepository = {
   async listVisits() {
     return cached("visits", SHORT, async () => {
       const [raw, map] = await Promise.all([taskRows(), leadMap()]);
-      return raw.map((z) => mapTask(z, map));
+      const tasks = raw.map((z) => mapTask(z, map));
+      try {
+        const schema = await getSiteVisitsSchema();
+        if (!schema) return tasks;
+        const siteVisits = await listSiteVisits(schema, map);
+        const keys = new Set(siteVisits.map((visit) => `${visit.leadId}:${visit.date}`));
+        return [...siteVisits, ...tasks.filter((task) => task.isVisit && !keys.has(`${task.leadId}:${task.date}`))];
+      } catch (error) {
+        console.error("[zoho] Site Visits module unavailable; falling back to Tasks", {
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+          field: error instanceof ZohoError ? error.field : undefined,
+        });
+        return tasks;
+      }
     });
   },
   async getVisit(id) { return (await this.listVisits()).find((v) => v.id === id) ?? null; },
@@ -483,6 +532,14 @@ export const zohoRepository: CrmRepository = {
   async updateVisit(id, p, actor) {
     const current = await this.getVisit(id);
     if (!current) throw new ZohoError("Visit not found", 404);
+    if (current.module) {
+      const schema = await getSiteVisitsSchema();
+      if (!schema) throw new ZohoError("Site Visits schema unavailable", 404);
+      await zohoWrite("PUT", `/${schema.module}/${id}`, mapSiteVisitUpdate(schema, p));
+      if (p.notes?.trim() && current.leadId) await addNote(current.leadId, "Work update", `Notes: ${p.notes.trim()} (by ${actor.name})`);
+      invalidate("visits");
+      return;
+    }
     const record: Record<string, unknown> = {};
     if (p.status) record.Status = TASK_STATUS_WRITE[p.status];
     if (p.notes) record.Description = p.notes;

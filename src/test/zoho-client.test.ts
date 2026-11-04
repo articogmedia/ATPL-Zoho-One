@@ -17,6 +17,49 @@ beforeEach(() => {
   vi.resetModules();
 });
 
+describe("Zoho products catalogue", () => {
+  it("retries invalid fields and filters inactive or unnamed products", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string) {
+        super(message);
+      }
+    }
+    const list = vi.fn(async (_module: string, fields: string[], _max?: number, _extra?: Record<string, string>) => {
+      void _max;
+      void _extra;
+      if (fields.includes("Description")) throw new MockZohoError("Invalid field", 400, "INVALID_DATA", "Description");
+      if (fields.length > 2) throw new MockZohoError("Invalid field", 400, "INVALID_DATA", "Product_Code");
+      return [
+        { id: "p2", Product_Name: "Split AC", Unit_Price: 5000, Product_Active: true },
+        { id: "p1", Product_Name: "Cassette AC", Unit_Price: 7000, Product_Active: true },
+        { id: "p3", Product_Name: "Inactive", Unit_Price: 1000, Product_Active: false },
+        { id: "p4", Product_Name: "", Unit_Price: 1000, Product_Active: true },
+      ];
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      zoho: vi.fn(async () => ({ data: [] })),
+      zohoList: list,
+      zohoWrite: vi.fn(),
+    }));
+    const { invalidate } = await import("@/lib/cache");
+    invalidate("products");
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    const products = await zohoRepository.listProducts();
+
+    expect(products.map((product) => product.model)).toEqual(["Cassette AC", "Split AC"]);
+    expect(list.mock.calls.map((call) => call[1])).toEqual([
+      ["Product_Name", "Product_Code", "Description", "Unit_Price", "Usage_Unit", "Product_Active"],
+      ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],
+      ["Product_Name", "Unit_Price"],
+    ]);
+    for (const call of list.mock.calls) {
+      expect(call[3]).toEqual({ sort_by: "id", sort_order: "asc" });
+    }
+  });
+});
+
 describe("Zoho lead actions", () => {
   it("updates editable lead fields", async () => {
     const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {

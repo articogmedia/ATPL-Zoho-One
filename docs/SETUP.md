@@ -26,7 +26,7 @@ authorization errors, a separate Self Client may be needed for the sandbox.
 
 1. In the API Console add a **Self Client**. Put its Client ID / Secret in `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET`.
 2. Open its **Generate Code** tab. Scope (comma-separated):
-   `ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.calls.ALL,ZohoCRM.modules.events.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.users.READ,ZohoCRM.org.READ,ZohoCRM.settings.fields.READ`
+   `ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.calls.ALL,ZohoCRM.modules.events.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.modules.custom.ALL,ZohoCRM.users.READ,ZohoCRM.org.READ,ZohoCRM.settings.fields.READ,ZohoCRM.settings.modules.READ`
    Time duration 10 minutes → Generate → copy the code.
 3. Exchange it before it expires:
    ```bash

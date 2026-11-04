@@ -28,6 +28,7 @@ const schema = z
     ZOHO_LOGIN_REDIRECT_URI: z.string().url().optional(),
     /** CRM user that owns unassigned (fresh) leads, e.g. the calling-team lead. */
     ZOHO_QUEUE_OWNER_ID: z.string().optional(),
+    ZOHO_SITE_VISITS_MODULE: z.string().optional(),
     ZOHO_MAX_LEADS: z.coerce.number().int().min(200).max(5000).default(1000),
   })
   .superRefine((e, ctx) => {
