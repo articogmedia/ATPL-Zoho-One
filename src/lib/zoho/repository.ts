@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { canAdvanceLeadStatus, isAssignable, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
+import { canAdvanceLeadStatus, isAssignable, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -13,6 +13,12 @@ import {
 import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitUpdate } from "./site-visits";
 
 const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Street", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
+
+export function leadPhoneMatch(record: ZLead, normalizedPhone: string): "Mobile" | "Phone" | null {
+  if (normalizePhone(String(record.Mobile ?? "")) === normalizedPhone) return "Mobile";
+  if (normalizePhone(String(record.Phone ?? "")) === normalizedPhone) return "Phone";
+  return null;
+}
 const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description", ...Object.values(FIELD.task)];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result"];
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
@@ -135,7 +141,7 @@ export const zohoRepository: CrmRepository = {
   listLeads: leads,
   async getLead(id) { return (await leadMap()).get(id) ?? null; },
   async findLeadByPhone(phone) {
-    const normalized = phone.replace(/\D/g, "").slice(-10);
+    const normalized = normalizePhone(phone);
     if (!normalized) return null;
     for (const field of ["Mobile", "Phone"]) {
       const result = await zoho<{ data?: ZLead[] }>("GET", "/Leads", {
@@ -144,7 +150,17 @@ export const zohoRepository: CrmRepository = {
       const record = result?.data?.[0];
       if (record) {
         const assignable = await assignableIds();
-        return mapLead(record, assignable);
+        return { lead: mapLead(record, assignable), matchedField: field as "Mobile" | "Phone" };
+      }
+    }
+    const search = await zoho<{ data?: ZLead[] }>("GET", "/Leads/search", {
+      query: { phone: normalized },
+    }).catch(() => null);
+    for (const record of search?.data ?? []) {
+      const matchedField = leadPhoneMatch(record, normalized);
+      if (record && matchedField) {
+        const assignable = await assignableIds();
+        return { lead: mapLead(record, assignable), matchedField };
       }
     }
     return null;

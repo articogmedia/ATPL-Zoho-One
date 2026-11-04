@@ -13,10 +13,11 @@ import {
   normalizePhone, type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
 } from "@/lib/domain";
 
-export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; duplicate?: { id: string; name: string; owner: string; status: string } };
+export type DuplicateLeadResult = { id: string; name: string; owner: string; status: string; matchedField: "Mobile" | "Phone" };
+export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; error: string; duplicate?: DuplicateLeadResult };
 
 class DuplicateLeadError extends Error {
-  constructor(readonly lead: { id: string; name: string; owner: string; status: string }) {
+  constructor(readonly lead: DuplicateLeadResult) {
     super("A lead with this number already exists");
   }
 }
@@ -46,7 +47,7 @@ async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Prom
           return {
             ok: false,
             error: friendlyZohoError(err.status, err.code),
-            duplicate: { id: existing.id, name: existing.name, owner: existing.assignedTo ?? "Unassigned", status: existing.status },
+            duplicate: { id: existing.lead.id, name: existing.lead.name, owner: existing.lead.assignedTo ?? "Unassigned", status: existing.lead.status, matchedField: existing.matchedField },
           };
         }
       }
@@ -108,7 +109,7 @@ export async function addLeadAction(input: unknown) {
     const executive = isExecutive(user);
     const forceCreate = !executive && user.role === "Manager" && data.forceCreate;
     if (duplicate && !forceCreate) {
-      throw new DuplicateLeadError({ id: duplicate.id, name: duplicate.name, owner: duplicate.assignedTo ?? "Unassigned", status: duplicate.status });
+      throw new DuplicateLeadError({ id: duplicate.lead.id, name: duplicate.lead.name, owner: duplicate.lead.assignedTo ?? "Unassigned", status: duplicate.lead.status, matchedField: duplicate.matchedField });
     }
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
     const assignee = executive ? user.name : data.assignedTo ?? null;

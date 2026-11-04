@@ -33,7 +33,10 @@ export const mockRepository: CrmRepository = {
 
   async listLeads() { return [...state.leads].sort((a, b) => b.createdOn.localeCompare(a.createdOn)); },
   async getLead(id) { return state.leads.find((l) => l.id === id) ?? null; },
-  async findLeadByPhone(phone) { return state.leads.find((lead) => normalizePhone(lead.phone) === normalizePhone(phone)) ?? null; },
+  async findLeadByPhone(phone) {
+    const lead = state.leads.find((lead) => normalizePhone(lead.phone) === normalizePhone(phone));
+    return lead ? { lead, matchedField: "Mobile" as const } : null;
+  },
   async listAssignableUsers() { return MOCK_USERS.filter((u) => isAssignable(u, env().ZOHO_QUEUE_OWNER_ID)); },
   async createLead(input, actor, assignTo, forceCreate) {
     if (!forceCreate && state.leads.some((lead) => normalizePhone(lead.phone) === normalizePhone(input.phone))) {

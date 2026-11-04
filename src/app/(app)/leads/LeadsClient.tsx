@@ -535,7 +535,7 @@ function ScheduleForm({ lead, onDone }: { lead: Lead; onDone: () => void }) {
 
 function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }: { onAdded: (lead: Lead) => void; onCancel: () => void; executives: string[]; canAssign: boolean; canForceDuplicate: boolean }) {
   const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedTo: "" });
-  const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string } | null>(null);
+  const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string; matchedField?: "Mobile" | "Phone" } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
   const [flaggedPhone, setFlaggedPhone] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -638,7 +638,7 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
         <div><label htmlFor="add-lead-source" className="mb-1 block text-sm font-medium">Source</label><select id="add-lead-source" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.source} onChange={set("source")}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select></div>
         {canAssign && <div><label htmlFor="add-lead-assignee" className="mb-1 block text-sm font-medium">Assign to</label><select id="add-lead-assignee" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select></div>}
         <div className="sm:col-span-2"><label htmlFor="add-lead-remarks" className="mb-1 block text-sm font-medium">Remarks</label><textarea id="add-lead-remarks" className={`${fieldClass} min-h-11 text-base md:min-h-10 md:text-sm`} value={f.remarks} onChange={set("remarks")} maxLength={500} /></div>
-        {duplicate && duplicateMatchesPhone && <div className="rounded-lg border border-destructive bg-card p-3 text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Owner: {duplicate.owner} · Status: {duplicate.status}</p>{canForceDuplicate && !forceCreate && <Button type="button" variant="outline" className="mt-2 h-11" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
+        {duplicate && duplicateMatchesPhone && <div className="rounded-lg border border-destructive bg-card p-3 text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Matched on {duplicate.matchedField ?? "phone"} · Owner: {duplicate.owner} · Status: {duplicate.status}</p>        {canForceDuplicate && !forceCreate && <Button type="button" variant="outline" className="mt-2 h-11" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
       </div>
     </div>
     <div className="flex shrink-0 gap-3 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]">

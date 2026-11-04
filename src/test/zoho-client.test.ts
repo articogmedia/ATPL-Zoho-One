@@ -61,6 +61,20 @@ describe("Zoho products catalogue", () => {
 });
 
 describe("Zoho lead actions", () => {
+  it("matches +91, spaced, and leading-zero phone formats by phone field", async () => {
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho: vi.fn(async () => ({ data: [] })),
+      zohoList: vi.fn(async () => []),
+      zohoWrite: vi.fn(),
+    }));
+    const { leadPhoneMatch } = await import("@/lib/zoho/repository");
+
+    expect(leadPhoneMatch({ Mobile: "+91 98765 43210" } as never, "9876543210")).toBe("Mobile");
+    expect(leadPhoneMatch({ Phone: "98765 43210" } as never, "9876543210")).toBe("Phone");
+    expect(leadPhoneMatch({ Mobile: "09876543210" } as never, "9876543210")).toBe("Mobile");
+  });
+
   it("updates editable lead fields", async () => {
     const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
       if (path === "/Leads/lead-1") expect(record).toMatchObject({
