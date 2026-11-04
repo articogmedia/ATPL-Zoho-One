@@ -103,3 +103,12 @@ leads from ad forms should be owned by that user (Setup → Automation → Assig
 11. Open `/api/admin/diagnostics` as a Manager and confirm the queue owner resolves and all expected executives are mapped.
 12. Mobile smoke (390x844): add a lead, confirm it appears in All Leads, assign it, log a call, schedule a site visit, create a quote, and confirm the lead status advances to `Quotation Sent`.
 13. Test the supplied `docs/238 - OFFER.xlsx` layout in the PDF preview; confirm `NNN/YY-YY` offer numbers and server-side Zoho prices.
+
+14. UI regression: verify at 390x844 and 1366x768 that navigation, cards, bottom sheets, forms, tables/cards, and A4 print preview remain usable.
+15. Verify keyboard focus, accessible labels, status contrast, and logout/back-navigation behaviour after a session ends.
+
+## Remaining risks
+
+- Playwright UI automation is not bundled unless the project's approved Playwright package is installed; sandbox credentials and a dedicated test record are required for the end-to-end flow.
+- Zoho custom Task fields and user metadata can change independently of the portal; run `/api/admin/diagnostics` before acceptance testing.
+- Browser-close/session restoration behaviour differs across mobile browsers, so test on the actual target Android/iOS browser versions.

@@ -102,6 +102,22 @@
   --sidebar-ring: oklch(0.6 0.15 254);
   --gradient-hero: linear-gradient(150deg, oklch(0.42 0.15 258), oklch(0.62 0.14 235));
   --shadow-elegant: 0 20px 50px -20px oklch(0.3 0.12 258 / 0.5);
+  --status-fresh: oklch(0.94 0.035 240);
+  --status-fresh-fg: oklch(0.36 0.13 254);
+  --status-assigned: oklch(0.89 0.055 254);
+  --status-assigned-fg: oklch(0.32 0.14 254);
+  --status-warning: oklch(0.93 0.075 85);
+  --status-warning-fg: oklch(0.42 0.12 70);
+  --status-callback: oklch(0.92 0.04 300);
+  --status-callback-fg: oklch(0.38 0.12 300);
+  --status-contacted: oklch(0.91 0.045 225);
+  --status-contacted-fg: oklch(0.34 0.12 225);
+  --status-site: oklch(0.91 0.045 275);
+  --status-site-fg: oklch(0.36 0.13 275);
+  --status-quotation: oklch(0.93 0.065 55);
+  --status-quotation-fg: oklch(0.42 0.14 55);
+  --status-qualified: oklch(0.92 0.045 165);
+  --status-qualified-fg: oklch(0.35 0.12 165);
 }
 
 .dark {
@@ -162,6 +178,29 @@
   textarea {
     font-size: 16px;
   }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+  .status-fresh { color: var(--status-fresh-fg); background: var(--status-fresh); }
+  .status-assigned { color: var(--status-assigned-fg); background: var(--status-assigned); }
+  .status-attempted { color: var(--status-warning-fg); background: var(--status-warning); }
+  .status-callback { color: var(--status-callback-fg); background: var(--status-callback); }
+  .status-contacted { color: var(--status-contacted-fg); background: var(--status-contacted); }
+  .status-site-visit { color: var(--status-site-fg); background: var(--status-site); }
+  .status-quotation { color: var(--status-quotation-fg); background: var(--status-quotation); }
+  .status-won { color: var(--success-foreground); background: var(--success); }
+  .status-lost, .status-junk { color: var(--destructive-foreground); background: var(--destructive); }
+  .status-neutral { color: var(--foreground); background: var(--secondary); }
+  .status-qualified { color: var(--status-qualified-fg); background: var(--status-qualified); }
 }
 
 @utility bg-hero {

@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { Suspense, useEffect, type ReactNode } from "react";
-import { BarChart3, ClipboardList, FileText, LogOut, MapPin } from "lucide-react";
+import { BarChart3, ClipboardList, FileText, Home, LogOut, MapPin } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
 
   return (
     <div className="flex min-h-dvh w-full bg-muted">
-      <aside className="hidden w-64 shrink-0 flex-col bg-sidebar text-sidebar-foreground md:flex">
+      <aside className="hidden w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:flex">
         <Link href="/home" className="flex items-center gap-2 px-6 py-6">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
             <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" priority />
@@ -49,11 +49,14 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
             <div className="text-xs opacity-75">Air Trendz Pvt Ltd</div>
           </div>
         </Link>
-        <nav className="flex flex-col gap-1 px-3">
+        <nav className="mt-2 flex flex-col gap-1 px-3">
+          <Link href="/home" className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
+            <Home className="h-5 w-5" /> Home
+          </Link>
           {items.map((n) => (
             <Link key={n.to} href={n.to}
               prefetch
-              className={`flex items-center gap-3 rounded-lg px-3 py-3 text-sm font-medium transition-colors ${path === n.to ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-sidebar-primary"}`}>
+              className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors ${path === n.to ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
               <n.icon className="h-5 w-5" /> {n.label}
             </Link>
           ))}
@@ -61,7 +64,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b bg-card px-4 py-3 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:px-8">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex min-w-0 items-center gap-2 md:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
@@ -84,7 +87,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
             </form>
           </div>
         </header>
-        <main className="min-w-0 flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">
+        <main className="mx-auto min-w-0 w-full max-w-[1280px] flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">
           <Suspense fallback={<div className="space-y-4" aria-label="Loading"><div className="h-8 w-48 animate-pulse rounded-lg bg-secondary" /><div className="h-32 animate-pulse rounded-xl bg-secondary" /></div>}>
             {children}
           </Suspense>
@@ -92,12 +95,15 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       </div>
 
       {items.length > 0 && (
-        <nav className="fixed inset-x-0 bottom-0 z-30 grid min-h-16 border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0,1fr))` }}>
+        <nav className="fixed inset-x-0 bottom-0 z-30 grid min-h-[64px] border-t border-border bg-card px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0,1fr))` }}>
+          <Link href="/home" className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
+            <Home className="h-5 w-5" /> Home
+          </Link>
           {items.map((n) => (
             <Link key={n.to} href={n.to}
               prefetch
-              className={`flex min-h-16 flex-col items-center justify-center gap-1 text-xs font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
-              <n.icon className="h-6 w-6" /> {n.short}
+              className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
+              <n.icon className="h-5 w-5" /> {n.short}
             </Link>
           ))}
         </nav>

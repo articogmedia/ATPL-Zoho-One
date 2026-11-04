@@ -103,9 +103,9 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
         </div>
       </div>
 
-      {viewer.role === "Manager" && <div className="rounded-xl bg-card p-5 shadow-sm">
+      {viewer.role === "Manager" && <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
         <h2 className="mb-4 text-base font-semibold">Executive-wise Performance</h2>
-        <div className="overflow-x-auto">
+        <div className="hidden overflow-x-auto md:block">
           <table className="min-w-[700px] w-full text-sm">
             <thead>
               <tr className="border-b text-left text-muted-foreground">
@@ -130,6 +130,19 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="grid gap-3 md:hidden">
+          {s.rows.map((r) => (
+            <article key={r.name} className="rounded-xl border border-border bg-muted/40 p-4">
+              <h3 className="font-semibold">{r.name}</h3>
+              <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <div><dt className="text-muted-foreground">Leads assigned</dt><dd className="font-semibold">{r.leads}</dd></div>
+                <div><dt className="text-muted-foreground">Visits done</dt><dd className="font-semibold">{r.visits}</dd></div>
+                <div><dt className="text-muted-foreground">Quotes sent</dt><dd className="font-semibold">{r.quotes}</dd></div>
+                <div><dt className="text-muted-foreground">Conversion</dt><dd className="font-semibold text-primary">{r.conversion}%</dd></div>
+              </dl>
+            </article>
+          ))}
         </div>
       </div>}
     </div>

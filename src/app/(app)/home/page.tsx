@@ -30,15 +30,18 @@ export default async function Home() {
 
   return (
     <>
-      <h1 className="mb-1 text-2xl font-bold">{part}, {user.name}</h1>
-      <p className="mb-6 text-sm text-muted-foreground">{user.role} · What would you like to do today?</p>
+      <section className="mb-6 rounded-xl bg-primary p-5 text-primary-foreground shadow-elegant sm:p-6">
+        <p className="text-sm font-medium opacity-80">{user.role}</p>
+        <h1 className="mt-1 text-[28px] font-bold leading-tight">{part}, {user.name}</h1>
+        <p className="mt-2 max-w-xl text-sm opacity-90">Your sales workspace for leads, quotations, site visits and performance.</p>
+      </section>
       <div className="grid gap-4 sm:grid-cols-2">
         {cards.filter((c) => canAccess(user.role, c.s)).map((c) => (
           <Link key={c.to} href={c.to}
-            className="group flex min-h-36 flex-col justify-between gap-6 rounded-2xl border bg-card p-5 shadow-elegant transition-colors hover:border-primary sm:p-6">
+            className="group flex min-h-36 flex-col justify-between gap-6 rounded-xl border border-border bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-primary hover:shadow-elegant sm:p-6">
             <div className="flex items-start justify-between gap-3">
-              <div className="grid h-12 w-12 place-items-center rounded-xl bg-primary text-primary-foreground group-hover:bg-primary/90"><c.icon className="h-6 w-6" /></div>
-              {typeof c.count === "number" && <span className="rounded-full bg-secondary px-3 py-1 text-xs font-semibold text-secondary-foreground">{c.count}</span>}
+              <div className="grid h-12 w-12 place-items-center rounded-xl bg-accent text-accent-foreground"><c.icon className="h-6 w-6" /></div>
+              {typeof c.count === "number" && <span className="inline-flex min-w-8 items-center justify-center rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground" aria-label={`${c.count} items`}>{c.count}</span>}
             </div>
             <div>
               <div className="text-lg font-bold leading-tight">{c.label}</div>

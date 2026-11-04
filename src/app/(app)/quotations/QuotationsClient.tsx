@@ -60,6 +60,12 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
 
   return (
     <div className="space-y-6">
+      <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
+        {["Customer", "Products", "Preview"].map((label, index) => {
+          const complete = index === 0 ? !!lead : index === 1 ? items.length > 0 : preview;
+          return <div key={label} className={`min-h-11 rounded-lg px-2 py-2 text-center text-xs font-semibold ${complete ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={index === (lead ? (items.length ? 2 : 1) : 0) ? "step" : undefined}>{index + 1}. {label}</div>;
+        })}
+      </nav>
       <section className="space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 1 · Choose customer</h2>
         {lead ? (
@@ -146,7 +152,13 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
           onClick={() => setRows([...rows, { productId: products[0]!.id, qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add Row</Button>
         <datalist id="zoho-products">{products.map((product) => <option key={product.id} value={product.model}>{formatINR(product.price)}</option>)}</datalist>
         <Totals t={t} />
-        <Button size="lg" className="h-14 w-full text-base" disabled={!lead || !items.length} onClick={() => setPreview(true)}><Eye className="h-5 w-5" /> Preview Offer</Button>
+        <div className="fixed inset-x-0 bottom-16 z-20 border-t bg-card p-3 shadow-[0_-8px_24px_rgba(15,23,42,.12)] sm:hidden">
+          <div className="mx-auto flex max-w-md items-center gap-3">
+            <div className="min-w-0 flex-1"><div className="text-xs text-muted-foreground">Grand total</div><div className="truncate font-bold">{formatINR(t.total)}</div></div>
+            <Button size="lg" className="h-12 shrink-0 px-5" disabled={!lead || !items.length} onClick={() => setPreview(true)}>Preview</Button>
+          </div>
+        </div>
+        <Button size="lg" className="hidden h-14 w-full text-base sm:flex" disabled={!lead || !items.length} onClick={() => setPreview(true)}><Eye className="h-5 w-5" /> Preview Offer</Button>
         {!lead && <p className="text-center text-sm text-muted-foreground">Choose a customer first.</p>}
       </section>
 

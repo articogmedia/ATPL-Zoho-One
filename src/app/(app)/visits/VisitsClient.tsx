@@ -66,7 +66,7 @@ export function VisitsClient({ user, visits, executives, today, performance }: {
         </label>
       )}
 
-      <section className="rounded-xl border-2 border-primary bg-accent p-4">
+      <section className="rounded-xl border border-primary/30 bg-accent p-4 shadow-sm">
         <h2 className="mb-3 text-lg font-semibold">Today&apos;s visits ({todays.length})</h2>
         <div className="grid gap-3 md:grid-cols-2">
           {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} />)}
@@ -105,7 +105,7 @@ function Item({ v, showExec }: { v: Visit; showExec: boolean }) {
   const quote = v.leadId ? { pathname: "/quotations", query: { lead: v.leadId } } : "/quotations";
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl bg-card p-4 shadow-sm">
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm">
       <div className="flex justify-between gap-2">
         <div className="min-w-0">
           <div className="font-semibold">{v.customer}</div>
