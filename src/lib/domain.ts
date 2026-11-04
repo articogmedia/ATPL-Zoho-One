@@ -120,6 +120,24 @@ export function workForTab(user: User, visits: Visit[], tab: WorkTab, today: str
 
 export type Product = { id: string; model: string; description?: string; price: number; unit: string };
 
+export function uniqueProducts(products: readonly Product[]): Product[] {
+  const seen = new Set<string>();
+  return products.filter((product) => {
+    const key = `${product.model.trim().toLowerCase()}|${product.price}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => a.model.localeCompare(b.model, undefined, { sensitivity: "base" }));
+}
+
+export function validateQuoteLine(qty: number, discount: number, price: number): string | null {
+  if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty <= 0) return "Quantity must be a positive whole number.";
+  if (!Number.isFinite(discount) || discount < 0) return "Discount cannot be negative.";
+  const lineAmount = qty * price;
+  if (discount > lineAmount) return "Discount cannot exceed the line amount.";
+  return null;
+}
+
 /** GST is shown as Rs 0 until ATPL confirms GST invoicing scope (see plan section 12). */
 export const GST_RATE = 0;
 

@@ -1,6 +1,6 @@
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
-import { nextOfferNo, todayIST, visibleFor } from "@/lib/domain";
+import { nextOfferNo, todayIST, uniqueProducts, visibleFor } from "@/lib/domain";
 import type { Product } from "@/lib/domain";
 import { QuotationsClient } from "./QuotationsClient";
 
@@ -16,7 +16,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: P
   let products: Product[] = [];
   let productError = "";
   try {
-    products = await repo.listProducts();
+    products = uniqueProducts(await repo.listProducts());
   } catch (error) {
     console.error("[page] quotations products failed", {
       message: error instanceof Error ? error.message : String(error),

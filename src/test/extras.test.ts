@@ -1,11 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, quoteTotals, todayIST } from "@/lib/domain";
+import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, quoteTotals, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
 import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
 import { matchPortalUserToZohoUser, missingPortalUsers, resolvePortalUserZohoId, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
 
 describe("offer numbering", () => {
+  it("de-duplicates products by normalized model and price, keeping the first", () => {
+    const products = [
+      { id: "1", model: "  Split AC ", price: 50000, unit: "Nos" },
+      { id: "2", model: "split ac", price: 50000, unit: "Nos" },
+      { id: "3", model: "Split AC", price: 55000, unit: "Nos" },
+    ];
+    expect(uniqueProducts(products).map((product) => product.id)).toEqual(["1", "3"]);
+  });
+
+  it("validates quantity and line discount", () => {
+    expect(validateQuoteLine(0, 0, 100)).toBeTruthy();
+    expect(validateQuoteLine(2, 201, 100)).toBe("Discount cannot exceed the line amount.");
+    expect(validateQuoteLine(2, 200, 100)).toBeNull();
+  });
   it("applies discounts before GST and totals correctly", () => {
     expect(quoteTotals([
       { model: "AC", unit: "Nos", qty: 2, price: 50000, discount: 5000 },

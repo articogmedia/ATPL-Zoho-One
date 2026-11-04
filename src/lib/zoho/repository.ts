@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { canAdvanceLeadStatus, isAssignable, quoteTotals, todayIST, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
+import { canAdvanceLeadStatus, isAssignable, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -420,9 +420,10 @@ export const zohoRepository: CrmRepository = {
             sort_by: "id",
             sort_order: "asc",
           });
-          const products = raw
+          const products = uniqueProducts(raw
             .filter((product) => product.Product_Active !== false)
-            .map(mapProduct);
+            .filter((product) => Boolean(product.Product_Name?.trim()))
+            .map(mapProduct));
           if (products.length === 0) invalidate("products");
           return products;
         } catch (error) {
