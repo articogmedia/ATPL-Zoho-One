@@ -6,6 +6,7 @@ import { crm } from "@/lib/crm";
 import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { ZohoError } from "@/lib/zoho/client";
+import { friendlyZohoError } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
 import {
   LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
@@ -21,7 +22,7 @@ class DuplicateLeadError extends Error {
 }
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
-async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
+async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Promise<ActionResult<T>> {
   try {
     const data = await fn();
     revalidatePath("/", "layout");
@@ -38,9 +39,22 @@ async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
       zohoField: err instanceof ZohoError ? err.field : undefined,
       zohoOperation: err instanceof ZohoError ? err.operation : undefined,
     });
+    if (err instanceof ZohoError) {
+      if (err.code === "DUPLICATE_DATA" && duplicatePhone) {
+        const existing = await crm().findLeadByPhone(duplicatePhone());
+        if (existing) {
+          return {
+            ok: false,
+            error: friendlyZohoError(err.status, err.code),
+            duplicate: { id: existing.id, name: existing.name, owner: existing.assignedTo ?? "Unassigned", status: existing.status },
+          };
+        }
+      }
+      return { ok: false, error: friendlyZohoError(err.status, err.code) };
+    }
     return {
       ok: false,
-      error: "Unable to complete the request. Please try again.",
+      error: "Something went wrong. Please try again.",
     };
   }
 }
@@ -85,9 +99,11 @@ const newLeadSchema = z.object({
 });
 
 export async function addLeadAction(input: unknown) {
+  let submittedPhone = "";
   return run(async () => {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
+    submittedPhone = data.phone;
     const duplicate = await crm().findLeadByPhone(data.phone);
     const executive = isExecutive(user);
     const forceCreate = !executive && user.role === "Manager" && data.forceCreate;
@@ -98,13 +114,13 @@ export async function addLeadAction(input: unknown) {
     const assignee = executive ? user.name : data.assignedTo ?? null;
     if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     if (assignee && !(await assignableNames()).includes(assignee)) throw new ForbiddenError("Choose a team member.");
-    const lead = await crm().createLead(data, user, assignee);
+    const lead = await crm().createLead(data, user, assignee, forceCreate);
     revalidateTag("leads");
     revalidateTag("visits");
     revalidatePath("/leads");
     revalidateTag("users");
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
-  });
+  }, () => submittedPhone);
 }
 
 const updateLeadSchema = z.object({

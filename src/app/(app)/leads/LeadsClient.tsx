@@ -5,11 +5,12 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
+import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getLeadTimelineAction, logCallAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, leadsForTab, todayIST,
+  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, leadsForTab, normalizePhone, todayIST,
   type CallOutcome, type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
 } from "@/lib/domain";
 
@@ -521,14 +522,37 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
   const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedTo: "" });
   const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
+  const [flaggedPhone, setFlaggedPhone] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
   const submittedRef = useRef(false);
-  const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, []);
+  const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF((prev) => ({ ...prev, [key]: event.target.value }));
-  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
+  const phoneChanged = (event: React.ChangeEvent<HTMLInputElement>) => {
+    set("phone")(event);
+    if (shouldClearLeadDuplicate(flaggedPhone, normalizePhone(event.target.value))) {
+      setDuplicate(null);
+      setForceCreate(false);
+      setFlaggedPhone(null);
+    }
+    setErrors((prev) => ({ ...prev, phone: undefined }));
+  };
+  const normalizedCurrentPhone = normalizePhone(f.phone);
+  const duplicateMatchesPhone = !!flaggedPhone && flaggedPhone === normalizedCurrentPhone;
+  const close = () => {
+    setDuplicate(null);
+    setForceCreate(false);
+    setFlaggedPhone(null);
+    onCancel();
+  };
+  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={close} /><form className="fixed inset-x-0 bottom-[var(--bottom-nav-height,4rem)] z-40 flex max-h-[calc(90dvh-var(--bottom-nav-height,4rem))] flex-col rounded-t-2xl border border-border bg-card shadow-2xl md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
     event.preventDefault();
-    if (pending || submittedRef.current) return;
+    if (pending || !claimLeadSubmission(submittedRef)) return;
     const normalizedPhone = f.phone.replace(/\D/g, "").slice(-10);
     const nextErrors = {
       name: f.name.trim() ? undefined : "Lead name is required.",
@@ -539,26 +563,42 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
       toast.error(nextErrors.name || nextErrors.phone || "Enter a valid lead.");
       return;
     }
-    submittedRef.current = true;
     start(async () => {
       try {
         const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedTo: f.assignedTo || null, forceCreate });
         if (result.ok && result.data) onAdded(result.data);
-        else if (!result.ok) { setDuplicate(result.duplicate ?? null); toast.error(result.error); submittedRef.current = false; }
+        else if (!result.ok) {
+          if (result.duplicate) {
+            setDuplicate(result.duplicate);
+            setFlaggedPhone(normalizedPhone);
+          } else {
+            setDuplicate(null);
+            setFlaggedPhone(null);
+            setForceCreate(false);
+          }
+          toast.error(result.error);
+          submittedRef.current = false;
+        }
       } catch {
         submittedRef.current = false;
       }
     });
   }}>
-    <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onCancel}><X /></Button></div>
-    <div><input className={`${fieldClass} h-10 text-sm`} autoComplete="off" aria-invalid={!!errors.name} aria-label="Lead name required" placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
-    <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />
-    <div><input className={`${fieldClass} h-10 text-sm`} aria-invalid={!!errors.phone} aria-label="Mobile number required" placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" required pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
-    <input className={`${fieldClass} h-10 text-sm`} placeholder="Area" value={f.area} onChange={set("area")} maxLength={120} />
-    <select className={`${fieldClass} h-10 text-sm`} value={f.source} onChange={set("source")}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select>
-    {canAssign && <select className={`${fieldClass} h-10 text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select>}
-    <input className={`${fieldClass} h-10 text-sm sm:col-span-2`} placeholder="Remarks" value={f.remarks} onChange={set("remarks")} maxLength={500} />
-    {duplicate && <div className="text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Owner: {duplicate.owner} · Status: {duplicate.status}</p>{canForceDuplicate && <Button type="button" variant="outline" className="mt-2 h-10" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
-    <Button type="button" variant="outline" className="h-10 md:hidden" onClick={onCancel}>Cancel</Button><Button type="submit" className="h-10 sm:col-span-2" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
+    <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-border px-4 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-11 w-11" aria-label="Close add lead form" onClick={close}><X /></Button></div>
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-8">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div><label htmlFor="add-lead-name" className="mb-1 block text-sm font-medium">Lead name *</label><input id="add-lead-name" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} autoComplete="off" aria-invalid={!!errors.name} value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
+        <div><label htmlFor="add-lead-company" className="mb-1 block text-sm font-medium">Company</label><input id="add-lead-company" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.company} onChange={set("company")} maxLength={160} /></div>
+        <div><label htmlFor="add-lead-phone" className="mb-1 block text-sm font-medium">Mobile number *</label><input id="add-lead-phone" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} aria-invalid={!!errors.phone} value={f.phone} onChange={phoneChanged} inputMode="tel" required maxLength={15} />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
+        <div><label htmlFor="add-lead-area" className="mb-1 block text-sm font-medium">Area</label><input id="add-lead-area" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.area} onChange={set("area")} maxLength={120} /></div>
+        <div><label htmlFor="add-lead-source" className="mb-1 block text-sm font-medium">Source</label><select id="add-lead-source" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.source} onChange={set("source")}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select></div>
+        {canAssign && <div><label htmlFor="add-lead-assignee" className="mb-1 block text-sm font-medium">Assign to</label><select id="add-lead-assignee" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select></div>}
+        <div className="sm:col-span-2"><label htmlFor="add-lead-remarks" className="mb-1 block text-sm font-medium">Remarks</label><textarea id="add-lead-remarks" className={`${fieldClass} min-h-11 text-base md:min-h-10 md:text-sm`} value={f.remarks} onChange={set("remarks")} maxLength={500} /></div>
+        {duplicate && duplicateMatchesPhone && <div className="rounded-lg border border-destructive bg-card p-3 text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Owner: {duplicate.owner} · Status: {duplicate.status}</p>{canForceDuplicate && !forceCreate && <Button type="button" variant="outline" className="mt-2 h-11" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
+      </div>
+    </div>
+    <div className="flex shrink-0 gap-3 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] md:static md:mt-2 md:border-0 md:p-0">
+      <Button type="button" variant="outline" className="h-11 flex-1 md:hidden" onClick={close}>Cancel</Button><Button type="submit" className="h-11 flex-1 md:w-full" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
+    </div>
   </form></>;
 }

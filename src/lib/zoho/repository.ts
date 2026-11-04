@@ -150,8 +150,8 @@ export const zohoRepository: CrmRepository = {
     return null;
   },
 
-  async createLead(input, actor, assignTo) {
-    const existing = await this.findLeadByPhone(input.phone);
+  async createLead(input, actor, assignTo, forceCreate = false) {
+    const existing = forceCreate ? null : await this.findLeadByPhone(input.phone);
     if (existing) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
     const phoneKey = input.phone.replace(/\D/g, "").slice(-10);
     const previous = leadCreateLocks.get(phoneKey) ?? Promise.resolve();
@@ -161,7 +161,7 @@ export const zohoRepository: CrmRepository = {
     leadCreateLocks.set(phoneKey, chain);
     await previous;
     try {
-      if (await this.findLeadByPhone(input.phone)) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
+      if (!forceCreate && await this.findLeadByPhone(input.phone)) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
     const executiveCreatesLead = actor.role === "Sales Executive";
     const owner = executiveCreatesLead
       ? await userByName(actor.name)
