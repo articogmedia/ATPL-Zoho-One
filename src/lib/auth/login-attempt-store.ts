@@ -22,6 +22,39 @@ export class MemoryLoginAttemptStore implements LoginAttemptStore {
   }
 }
 
-// TODO(client): Add an Upstash Redis implementation when UPSTASH_REDIS_REST_URL
-// and UPSTASH_REDIS_REST_TOKEN are configured. Keep memory disabled when absent.
-export const loginAttemptStore: LoginAttemptStore = new MemoryLoginAttemptStore();
+class UpstashLoginAttemptStore implements LoginAttemptStore {
+  constructor(private readonly url: string, private readonly token: string) {}
+
+  private async request(args: string[]) {
+    const [command, ...commandArgs] = args;
+    const response = await fetch(this.url.replace(/\/$/, ""), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify([command, ...commandArgs]),
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`Upstash login attempt store returned ${response.status}.`);
+    return response.json() as Promise<{ result: unknown }>;
+  }
+
+  async get(username: string) {
+    const { result } = await this.request(["GET", `login-attempt:${username}`]);
+    return typeof result === "string" ? JSON.parse(result) as LoginAttempt : undefined;
+  }
+
+  async set(username: string, attempt: LoginAttempt) {
+    await this.request(["SET", `login-attempt:${username}`, JSON.stringify(attempt)]);
+  }
+
+  async delete(username: string) {
+    await this.request(["DEL", `login-attempt:${username}`]);
+  }
+}
+
+const redisUrl = process.env.UPSTASH_REDIS_REST_URL?.trim();
+const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+
+export const loginAttemptStore: LoginAttemptStore =
+  redisUrl && redisToken
+    ? new UpstashLoginAttemptStore(redisUrl, redisToken)
+    : new MemoryLoginAttemptStore();

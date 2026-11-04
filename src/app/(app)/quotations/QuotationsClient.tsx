@@ -7,7 +7,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/ui-bits";
 import { addLeadAction, createQuoteAction } from "@/app/actions/crm";
-import { COMPANY, offerSubject } from "@/lib/company";
+import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
+import { splitQuotationItems } from "@/lib/quotation-presentation";
 import { LEAD_SOURCES, formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
@@ -26,7 +27,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const [pending, start] = useTransition();
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
-  const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
+  const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ productId: p.id, model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
   const t = quoteTotals(items);
   const lead = myLeads.find((l) => l.id === leadId);
   const validLineCount = rows.filter((row) => {
@@ -237,7 +238,7 @@ function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; t
   );
 }
 
-type Item = { model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
+type Item = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
 
 function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; onBack: () => void; onSave: () => void; saving: boolean;
@@ -249,6 +250,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
   const date = `${datePart("day")}.${datePart("month")}.${datePart("year")}`;
   const hasDiscount = items.some((item) => (item.discount ?? 0) > 0);
+  const splitParts = splitQuotationItems(items);
   const basicAmount = (item: Item) => item.qty * item.price;
   const lineAmount = (item: Item) => basicAmount(item) - (item.discount ?? 0);
   const validTillDate = new Date();
@@ -256,6 +258,27 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   const validTill = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric",
   }).format(validTillDate);
+  const renderPart = (part: Item[], title: string, gst: string, startIndex = 0) => (
+    <section className="mt-4">
+      <div className="border-y border-border py-2 text-center font-bold">{title}</div>
+      <table className="w-full border-collapse text-[9px]">
+        <thead><tr>{["S.No", "Description", "Unit", "Qty", ...(hasDiscount ? ["Discount (Rs)"] : []), "Basic Rate (Rs)", "Amount (Rs)"].map((heading) => <th key={heading} className="border border-border px-1 py-2">{heading}</th>)}</tr></thead>
+        <tbody>{part.map((item, index) => (
+          <tr key={`${item.model}-${index}`} className="border border-border">
+            <td className="border border-border px-1 py-2 text-center">{startIndex + index + 1}</td>
+            <td className="border border-border px-1 py-2"><span className="font-semibold">{item.model}</span>{item.description && <div className="mt-1 break-words text-muted-foreground">{item.description}</div>}</td>
+            <td className="border border-border px-1 py-2 text-center">{item.unit}</td>
+            <td className="border border-border px-1 py-2 text-center">{item.qty}</td>
+            {hasDiscount && <td className="border border-border px-1 py-2 text-right">{formatINR(item.discount ?? 0)}</td>}
+            <td className="border border-border px-1 py-2 text-right">{formatINR(item.price)}</td>
+            <td className="border border-border px-1 py-2 text-right">{formatINR(lineAmount(item))}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+      <div className="mt-1 grid grid-cols-2 border border-border p-2 font-semibold"><span>Basic Sub Total - {title.includes("PART A") ? "Part A" : "Part B"}</span><span className="text-right">{formatINR(quoteTotals(part).total)}</span></div>
+      <div className="mt-1 text-center text-[10px] font-semibold">{gst}</div>
+    </section>
+  );
   const msg = [
     `Dear Sir, please find our offer ${offerNo} dated ${date} for ${customer}.`,
     `Sub: ${subject}`, "",
@@ -263,12 +286,35 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
     "", `Grand Total: ${formatINR(t.total)}`, "", `for ${COMPANY.name}, ${COMPANY.signatory}, ${COMPANY.phones}`,
   ].join("\n");
   const wa = `https://wa.me/91${lead.phone.replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(msg)}`;
+  const downloadPdf = async () => {
+    try {
+      const response = await fetch("/api/quotations/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leadId: lead.id,
+          offerNo,
+          subject,
+          items: items.map((item) => ({ productId: item.productId, qty: item.qty, discount: item.discount ?? 0 })),
+        }),
+      });
+      if (!response.ok) throw new Error("Unable to create the PDF.");
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `offer-${offerNo.replace("/", "-")}.pdf`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
+    }
+  };
 
   return (
     <div className="space-y-4">
       <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
-        <Button className="h-12 w-full sm:w-auto" onClick={() => window.print()}><Printer className="h-5 w-5" /> Print / PDF</Button>
+        <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf}><Printer className="h-5 w-5" /> Download PDF</Button>
         <Button asChild variant="secondary" className="h-12 w-full sm:w-auto"><a className="flex items-center justify-center gap-2" href={wa} target="_blank" rel="noreferrer"><MessageCircle className="h-5 w-5" /> WhatsApp</a></Button>
         <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
       </div>
@@ -319,29 +365,18 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
               className="min-w-0 flex-1 border-0 bg-transparent p-0 font-semibold outline-none print:border-0 print:outline-none"
             />
           </div>
-          <p className="mt-2 text-justify">We thank you very much for your enquiry. We are pleased to submit herewith our offer. Our detailed Bill of quantities are as follows.</p>
+          <p className="mt-2 text-justify">{OFFER_TEXT.enquiry}</p>
         </section>
 
+        <section className="mt-4 grid grid-cols-[1fr_auto] gap-2 border border-border p-3">
+          <div><span className="font-bold">EQUIPMENT REQUIRED</span>{items.filter((item) => !/^B\s*-\s*/i.test(item.model)).map((item) => <div key={item.model}>{item.model} / {item.qty} / {item.unit}</div>)}</div>
+          <div className="font-bold">Total Units: {items.reduce((sum, item) => sum + item.qty, 0)}</div>
+        </section>
         <div className="max-w-full overflow-x-auto">
-        <table className="mt-4 min-w-[520px] w-full border-collapse text-[10px]">
-          <thead><tr className="bg-[#4f94cd] text-white">
-            <th className="px-2 py-2 text-left">Item &amp; Description</th>
-            <th className="px-2 py-2 text-right">List Price</th>
-            <th className="px-2 py-2 text-right">Qty</th>
-            {hasDiscount && <th className="px-2 py-2 text-right">Discount</th>}
-            <th className="px-2 py-2 text-right">Amount</th>
-          </tr></thead>
-          <tbody>{items.map((item, index) => (
-            <tr key={`${item.model}-${index}`} className="border-b border-slate-300">
-              <td className="px-2 py-2"><span className="font-semibold">{index + 1}. {item.model}</span>{item.description && <div className="mt-1 text-slate-600">{item.description}</div>}</td>
-              <td className="px-2 py-2 text-right">{formatINR(item.price)}</td>
-              <td className="px-2 py-2 text-right">{item.qty} {item.unit}</td>
-              {hasDiscount && <td className="px-2 py-2 text-right">{formatINR(item.discount ?? 0)}</td>}
-              <td className="px-2 py-2 text-right">{formatINR(lineAmount(item))}</td>
-            </tr>
-          ))}</tbody>
-        </table>
+          {renderPart(splitParts.equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst)}
+          {splitParts.ancillary.length > 0 && renderPart(splitParts.ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, splitParts.equipment.length)}
         </div>
+        <div className="mt-3 grid grid-cols-2 border border-border p-2 font-bold"><span>TOTAL PART A + B</span><span className="text-right">{formatINR(t.total)}</span></div>
 
         <div className="offer-no-break mt-4 grid grid-cols-1 gap-8 sm:grid-cols-2">
           <div>

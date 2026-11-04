@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-presentation";
 
 const currentUser = vi.fn();
 vi.mock("@/lib/auth/guard", () => ({ currentUser }));
@@ -31,5 +32,14 @@ describe("quotation PDF route", () => {
     });
     const response = await POST(request);
     expect(response.status).toBe(400);
+  });
+
+  it("reserves space for totals when rendering many item rows", () => {
+    const items = Array.from({ length: 25 }, (_, index) => ({
+      model: `Product ${index + 1}`, unit: "Nos", qty: 1, price: 1000,
+    }));
+    const presentation = quotationPresentation(items);
+    expect(presentation.grandTotal).toBe(25000);
+    expect(needsPdfTotalsPage(25, 120)).toBe(true);
   });
 });

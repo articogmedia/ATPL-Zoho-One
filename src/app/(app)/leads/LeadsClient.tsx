@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
@@ -17,6 +17,15 @@ import {
 type Props = { user: User; leads: Lead[]; executives: string[]; owners: string[]; canAssign: boolean; fixableLeads: { id: string; name: string; ownerName: string }[] };
 type DrawerMode = "edit" | "history" | "schedule";
 type LeadAction = { type: "call" | "edit" | "reassign" | "delete"; lead: Lead } | null;
+
+function useBodyScrollLock(open = true) {
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [open]);
+}
 
 function whatsappUrl(phone: string): string | null {
   const digits = phone.replace(/\D/g, "").slice(-10);
@@ -172,9 +181,12 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         setLeadRows((current) => current.some((item) => item.id === lead.id) ? current : [lead, ...current]);
         setJustAdded(lead);
         setPendingAddedId(lead.id);
-        setTab(isExec ? "mine" : leadBucketForTab(lead));
+        setTab(user.role === "Manager" ? "all" : isExec ? "mine" : leadBucketForTab(lead));
         setAdding(false);
         setHighlightedLeadId(lead.id);
+        window.requestAnimationFrame(() => {
+          (document.getElementById("leads-list-mobile") ?? document.getElementById("leads-list"))?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
         router.refresh();
         window.setTimeout(() => router.refresh(), 2500);
       }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
@@ -316,6 +328,7 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
   open: boolean; owners: string[]; filters: LeadFilters; source: LeadSource | "All";
   onChange: (filters: LeadFilters) => void; onSourceChange: (source: LeadSource | "All") => void; onClose: () => void;
 }) {
+  useBodyScrollLock(open);
   const content = <div className="grid gap-2 sm:grid-cols-4">
     <label className="text-xs font-semibold">Owner<select className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.owner ?? "All"} onChange={(e) => onChange({ ...filters, owner: e.target.value })}><option value="All">All owners</option>{owners.map((owner) => <option key={owner}>{owner}</option>)}</select></label>
     <label className="text-xs font-semibold">Stage<select className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.stage ?? "All"} onChange={(e) => onChange({ ...filters, stage: e.target.value as LeadStatus | "All" })}><option value="All">All stages</option>{LEAD_STATUSES.map((stage) => <option key={stage}>{stage}</option>)}</select></label>
@@ -324,13 +337,14 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
   </div>;
   return <>
     <div className="hidden rounded-lg border bg-card p-3 sm:block">{content}</div>
-    {open && <div className="fixed inset-0 z-50 flex items-end bg-black/40 sm:hidden"><button className="absolute inset-0" aria-label="Close filters" onClick={onClose} /><div className="relative w-full rounded-t-2xl bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Filter leads</h2><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close filters"><X /></Button></div>{content}<Button className="mt-4 w-full" onClick={onClose}>Apply filters</Button></div></div>}
+    {open && <div className="fixed inset-0 z-50 flex items-end bg-black/40 sm:hidden"><button className="absolute inset-0" aria-label="Close filters" onClick={onClose} /><div className="relative flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-card"><div className="overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Filter leads</h2><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close filters"><X /></Button></div>{content}<Button className="mt-4 w-full" onClick={onClose}>Apply filters</Button></div></div></div>}
   </>;
 }
 
 function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
   action: Exclude<LeadAction, null>; executives: string[]; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (name: string) => void;
 }) {
+  useBodyScrollLock(true);
   const [pending, start] = useTransition();
   const [name, setName] = useState(action.lead.name);
   const [company, setCompany] = useState(action.lead.company);
@@ -375,7 +389,7 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
   const title = action.type === "call" ? "Log call" : action.type === "edit" ? "Edit lead" : action.type === "reassign" ? "Reassign owner" : "Delete lead";
   return <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 md:items-center md:p-4" role="presentation">
     <button className="absolute inset-0 cursor-default" aria-label="Close dialog" onClick={onClose} />
-    <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="lead-action-title" className="relative w-full max-w-md space-y-4 rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl md:rounded-xl md:pb-5">
+    <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="lead-action-title" className="relative max-h-[90dvh] w-full max-w-md space-y-4 overflow-y-auto rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl md:rounded-xl md:pb-5">
       <div className="flex items-start justify-between gap-3"><div><h2 id="lead-action-title" className="text-lg font-bold">{title}</h2><p className="text-sm text-muted-foreground">{action.lead.name}</p></div><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button></div>
       {action.type === "edit" && <div className="grid gap-3">
         <label className="font-medium">Name<input className={`${fieldClass} mt-1 h-10 text-sm`} value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} /></label>
@@ -408,6 +422,7 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const drawerRef = useRef<HTMLDivElement>(null);
   const filteredExecutives = executives.filter((name) => name.toLowerCase().includes(assigneeSearch.toLowerCase()));
+  useBodyScrollLock(true);
 
   useEffect(() => {
     drawerRef.current?.focus();
@@ -526,11 +541,43 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
   const [pending, start] = useTransition();
   const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
   const submittedRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  useBodyScrollLock(true);
+  const close = useCallback(() => {
+    setDuplicate(null);
+    setForceCreate(false);
+    setFlaggedPhone(null);
+    onCancel();
+  }, [onCancel]);
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = previousOverflow; };
-  }, []);
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    nameRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close();
+        return;
+      }
+      if (event.key !== "Tab" || !panelRef.current) return;
+      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]')).filter((element) => element.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      trigger?.focus();
+    };
+  }, [close]);
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setF((prev) => ({ ...prev, [key]: event.target.value }));
   const phoneChanged = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -544,15 +591,11 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
   };
   const normalizedCurrentPhone = normalizePhone(f.phone);
   const duplicateMatchesPhone = !!flaggedPhone && flaggedPhone === normalizedCurrentPhone;
-  const close = () => {
-    setDuplicate(null);
-    setForceCreate(false);
-    setFlaggedPhone(null);
-    onCancel();
-  };
-  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={close} /><form className="fixed inset-x-0 bottom-[calc(64px+env(safe-area-inset-bottom))] z-40 flex max-h-[calc(100dvh-64px-env(safe-area-inset-bottom))] flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
+  return <div className="fixed inset-0 z-[60] flex items-end bg-black/40 md:items-center md:justify-center md:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
+    <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="add-lead-title" className="flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-card shadow-2xl md:max-w-2xl md:rounded-2xl">
+      <form className="flex min-h-0 flex-1 flex-col" onSubmit={(event) => {
     event.preventDefault();
-    if (pending || !claimLeadSubmission(submittedRef)) return;
+    if (pending) return;
     const normalizedPhone = f.phone.replace(/\D/g, "").slice(-10);
     const nextErrors = {
       name: f.name.trim() ? undefined : "Lead name is required.",
@@ -563,6 +606,7 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
       toast.error(nextErrors.name || nextErrors.phone || "Enter a valid lead.");
       return;
     }
+    if (!claimLeadSubmission(submittedRef)) return;
     start(async () => {
       try {
         const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedTo: f.assignedTo || null, forceCreate });
@@ -584,10 +628,10 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
       }
     });
   }}>
-    <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-border px-4 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-11 w-11" aria-label="Close add lead form" onClick={close}><X /></Button></div>
+    <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-border px-4"><h2 id="add-lead-title" className="font-semibold">Add Lead</h2><Button type="button" variant="ghost" size="icon" className="h-11 w-11" aria-label="Close add lead form" onClick={close}><X /></Button></div>
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-8">
       <div className="grid gap-4 sm:grid-cols-2">
-        <div><label htmlFor="add-lead-name" className="mb-1 block text-sm font-medium">Lead name *</label><input id="add-lead-name" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} autoComplete="off" aria-invalid={!!errors.name} value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
+        <div><label htmlFor="add-lead-name" className="mb-1 block text-sm font-medium">Lead name *</label><input ref={nameRef} id="add-lead-name" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} autoComplete="off" aria-invalid={!!errors.name} value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
         <div><label htmlFor="add-lead-company" className="mb-1 block text-sm font-medium">Company</label><input id="add-lead-company" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.company} onChange={set("company")} maxLength={160} /></div>
         <div><label htmlFor="add-lead-phone" className="mb-1 block text-sm font-medium">Mobile number *</label><input id="add-lead-phone" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} aria-invalid={!!errors.phone} value={f.phone} onChange={phoneChanged} inputMode="tel" required maxLength={15} />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
         <div><label htmlFor="add-lead-area" className="mb-1 block text-sm font-medium">Area</label><input id="add-lead-area" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.area} onChange={set("area")} maxLength={120} /></div>
@@ -597,8 +641,10 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
         {duplicate && duplicateMatchesPhone && <div className="rounded-lg border border-destructive bg-card p-3 text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Owner: {duplicate.owner} · Status: {duplicate.status}</p>{canForceDuplicate && !forceCreate && <Button type="button" variant="outline" className="mt-2 h-11" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
       </div>
     </div>
-    <div className="flex shrink-0 gap-3 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] md:static md:mt-2 md:border-0 md:p-0">
-      <Button type="button" variant="outline" className="h-11 flex-1 md:hidden" onClick={close}>Cancel</Button><Button type="submit" className="h-11 flex-1 md:w-full" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
+    <div className="flex shrink-0 gap-3 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]">
+      <Button type="button" variant="outline" className="h-11 flex-1" onClick={close}>Cancel</Button><Button type="submit" className="h-11 flex-1" disabled={pending}>{pending ? "Adding…" : "Add Lead"}</Button>
     </div>
-  </form></>;
+      </form>
+    </div>
+  </div>;
 }
