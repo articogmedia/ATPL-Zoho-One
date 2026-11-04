@@ -120,7 +120,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
           {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-muted-foreground sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
         </div>
         <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
-          <Button className="h-11 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button>
+          <Button className="hidden h-11 shrink-0 sm:inline-flex" onClick={() => setAdding((value) => !value)}><Plus /> Add Lead</Button>
           {(user.role === "Manager" || user.role === "Calling Team") && <span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {todaysFollowUps}</span>}
           {user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeads} count={fixableCount} /></span>}
         </div>
@@ -523,11 +523,12 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
   const [forceCreate, setForceCreate] = useState(false);
   const [pending, start] = useTransition();
   const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
+  const submittedRef = useRef(false);
   const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF((prev) => ({ ...prev, [key]: event.target.value }));
   return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
     event.preventDefault();
-    if (pending) return;
+    if (pending || submittedRef.current) return;
     const normalizedPhone = f.phone.replace(/\D/g, "").slice(-10);
     const nextErrors = {
       name: f.name.trim() ? undefined : "Lead name is required.",
@@ -538,10 +539,15 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
       toast.error(nextErrors.name || nextErrors.phone || "Enter a valid lead.");
       return;
     }
+    submittedRef.current = true;
     start(async () => {
-      const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedTo: f.assignedTo || null, forceCreate });
-      if (result.ok && result.data) onAdded(result.data);
-      else if (!result.ok) { setDuplicate(result.duplicate ?? null); toast.error(result.error); }
+      try {
+        const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedTo: f.assignedTo || null, forceCreate });
+        if (result.ok && result.data) onAdded(result.data);
+        else if (!result.ok) { setDuplicate(result.duplicate ?? null); toast.error(result.error); submittedRef.current = false; }
+      } catch {
+        submittedRef.current = false;
+      }
     });
   }}>
     <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onCancel}><X /></Button></div>
