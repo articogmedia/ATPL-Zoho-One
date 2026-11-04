@@ -68,16 +68,26 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   );
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
+  const scrollToStep = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+  const currentStep = !lead ? 0 : items.length > 0 ? 1 : 1;
 
   return (
     <div className="space-y-6">
       <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
         {["Customer", "Products", "Preview"].map((label, index) => {
-          const complete = index === 0 ? !!lead : index === 1 ? items.length > 0 : preview;
-          return <div key={label} className={`min-h-11 rounded-lg px-2 py-2 text-center text-xs font-semibold ${complete ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={index === (lead ? (items.length ? 2 : 1) : 0) ? "step" : undefined}>{index + 1}. {label}</div>;
+          const disabled = index === 1 ? !lead : index === 2 ? !lead || items.length === 0 : false;
+          const active = index === currentStep && !preview;
+          const selectStep = () => {
+            if (index === 0) scrollToStep("quote-step-customer");
+            if (index === 1) scrollToStep("quote-step-products");
+            if (index === 2) setPreview(true);
+          };
+          return <button type="button" key={label} disabled={disabled} onClick={selectStep} className={`min-h-11 cursor-pointer rounded-lg px-2 py-2 text-center text-xs font-semibold transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={active ? "step" : undefined}>{index + 1}. {label}</button>;
         })}
       </nav>
-      <section className="space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
+      <section id="quote-step-customer" className="scroll-mt-20 space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 1 · Choose customer</h2>
         {lead ? (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary p-3 text-secondary-foreground">
@@ -122,7 +132,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         )}
       </section>
 
-      <section className="space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6">
+      <section id="quote-step-products" className="scroll-mt-20 space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 2 · Products</h2>
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="hidden overflow-x-auto lg:block">
