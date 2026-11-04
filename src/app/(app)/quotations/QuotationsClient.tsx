@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/ui-bits";
 import { addLeadAction, createQuoteAction } from "@/app/actions/crm";
-import { COMPANY } from "@/lib/company";
+import { COMPANY, offerSubject } from "@/lib/company";
 import { LEAD_SOURCES, formatINR, quoteTotals, type Lead, type LeadSource, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
@@ -213,6 +213,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; onBack: () => void; onSave: () => void; saving: boolean;
 }) {
   const t = quoteTotals(items);
+  const [subject, setSubject] = useState(() => offerSubject(items.map((item) => item.model)));
   const customer = lead.company || lead.name;
   const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date());
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
@@ -227,7 +228,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   const equipmentUnits = partA.reduce((sum, item) => sum + item.qty, 0);
   const msg = [
     `Dear Sir, please find our offer ${offerNo} dated ${date} for ${customer}.`,
-    `Sub: ${COMPANY.subject}`, "",
+    `Sub: ${subject}`, "",
     ...items.map((it, i) => `${i + 1}. ${it.model} - ${it.qty} ${it.unit} x ${formatINR(it.price)} = ${formatINR(it.qty * it.price)}`),
     "", `Grand Total: ${formatINR(t.total)}`, "", `for ${COMPANY.name}, ${COMPANY.signatory}, ${COMPANY.phones}`,
   ].join("\n");
@@ -269,7 +270,15 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
 
         <section>
           <p>Dear Sir,</p>
-          <p className="mt-2 font-semibold">Sub: {COMPANY.subject}</p>
+          <div className="mt-2 flex items-baseline gap-1 font-semibold">
+            <span>Sub:</span>
+            <input
+              aria-label="Quotation subject"
+              value={subject}
+              onChange={(event) => setSubject(event.target.value)}
+              className="min-w-0 flex-1 border-0 bg-transparent p-0 font-semibold outline-none print:border-0 print:outline-none"
+            />
+          </div>
           <p className="mt-2 text-justify">We thank you very much for your enquiry. In connection with subsequent discussions had with you, we are pleased to submit herewith our offer for the subject works. Our detailed Bill of Quantities is as follows.</p>
         </section>
 
