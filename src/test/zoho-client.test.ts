@@ -175,7 +175,7 @@ describe("Zoho lead actions", () => {
       ZohoError: class extends Error {},
       zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-dup"
         ? { data: [{ id: "lead-dup", Last_Name: "Duplicate", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Pavan" } }] }
-        : path === "/Tasks" ? { data: [{ Subject: "Call new lead", Owner: { id: "exec-1" } }] }
+        : path === "/Tasks" ? { data: [{ Subject: "Call new lead", Owner: { id: "exec-1" }, What_Id: { id: "lead-dup" } }] }
         : { users: [{ id: "exec-1", full_name: "Pavan", role: { name: "Sales Executive" } }] }),
       zohoList: vi.fn(async () => [{ id: "lead-dup", Last_Name: "Duplicate", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1" } }]),
       zohoWrite: write,
@@ -270,7 +270,7 @@ describe("Zoho lead owner fallbacks", () => {
       if (path === "/Leads") {
         expect(record.Owner).toEqual({ id: "exec-1" });
         expect(record.Lead_Status).toBe("Assigned to Sales");
-        expect(record.Lead_Source).toBe("Sales Executive");
+        expect(record.Lead_Source).toBe("Direct Call");
       }
       return "lead-exec";
     });
@@ -278,7 +278,7 @@ describe("Zoho lead owner fallbacks", () => {
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
       zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-exec"
-        ? { data: [{ id: "lead-exec", Full_Name: "Executive lead", Mobile: "9999999998", Lead_Source: "Sales Executive", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
+        ? { data: [{ id: "lead-exec", Full_Name: "Executive lead", Mobile: "9999999998", Lead_Source: "Direct Call", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
         : { users: [{ id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } }] }),
       zohoList: vi.fn(async () => []),
       zohoWrite: write,
@@ -296,7 +296,7 @@ describe("Zoho lead owner fallbacks", () => {
     expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.objectContaining({
       Owner: { id: "exec-1" },
       Lead_Status: "Assigned to Sales",
-      Lead_Source: "Sales Executive",
+      Lead_Source: "Direct Call",
     }), { trigger: ["workflow"] });
   });
 

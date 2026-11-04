@@ -1,6 +1,6 @@
 import "server-only";
 import { env, ZOHO_HOSTS } from "@/lib/env";
-import { revalidateTag, unstable_cache } from "next/cache";
+import { unstable_cache } from "next/cache";
 
 /** Server-side Zoho CRM client. Tokens never leave the server. */
 export class ZohoError extends Error {
@@ -71,7 +71,6 @@ async function refreshAccessToken(): Promise<string> {
 async function accessToken(force = false): Promise<string> {
   const t = g.__atplZohoToken;
   if (!force && t && t.exp > Date.now()) return t.value;
-  if (force) revalidateTag("zoho-access-token");
   // De-duplicate concurrent refreshes.
   g.__atplZohoRefresh ??= (async () => {
     const cached = await cachedAccessToken();
@@ -79,7 +78,6 @@ async function accessToken(force = false): Promise<string> {
       g.__atplZohoToken = cached;
       return cached.value;
     }
-    revalidateTag("zoho-access-token");
     return refreshAccessToken();
   })().finally(() => { g.__atplZohoRefresh = undefined; });
   return g.__atplZohoRefresh;
@@ -113,7 +111,10 @@ export async function zoho<T = unknown>(
   console.info(`[zoho] ${method} ${path} ${res.status} ${Date.now() - started}ms`);
 
   if (res.status === 204) return null;
-  if (res.status === 401 && !retried) return zoho<T>(method, path, opts, true);
+  if (res.status === 401 && !retried) {
+    g.__atplZohoToken = undefined;
+    return zoho<T>(method, path, opts, true);
+  }
 
   const json = (await res.json().catch(() => null)) as (T & {
     code?: string;

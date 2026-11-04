@@ -21,6 +21,7 @@ const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
+const leadCreateLocks = new Map<string, Promise<unknown>>();
 const taskRows = cache(() => cached("visits:tasks", SHORT, async () => {
   try {
     return await zohoList<ZTask>("Tasks", TASK_FIELDS, 1000);
@@ -133,15 +134,41 @@ export const zohoRepository: CrmRepository = {
 
   listLeads: leads,
   async getLead(id) { return (await leadMap()).get(id) ?? null; },
+  async findLeadByPhone(phone) {
+    const normalized = phone.replace(/\D/g, "").slice(-10);
+    if (!normalized) return null;
+    for (const field of ["Mobile", "Phone"]) {
+      const result = await zoho<{ data?: ZLead[] }>("GET", "/Leads", {
+        query: { fields: LEAD_FIELDS.join(","), criteria: `(${field}:equals:${normalized})`, per_page: 1 },
+      }).catch(() => null);
+      const record = result?.data?.[0];
+      if (record) {
+        const assignable = await assignableIds();
+        return mapLead(record, assignable);
+      }
+    }
+    return null;
+  },
 
   async createLead(input, actor, assignTo) {
+    const existing = await this.findLeadByPhone(input.phone);
+    if (existing) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
+    const phoneKey = input.phone.replace(/\D/g, "").slice(-10);
+    const previous = leadCreateLocks.get(phoneKey) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    const chain = previous.then(() => current);
+    leadCreateLocks.set(phoneKey, chain);
+    await previous;
+    try {
+      if (await this.findLeadByPhone(input.phone)) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
     const executiveCreatesLead = actor.role === "Sales Executive";
     const owner = executiveCreatesLead
       ? await userByName(actor.name)
       : assignTo ? await userByName(assignTo) : null;
     const queueOwner = !owner ? await queueOwnerId() : undefined;
     const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
-    const leadSource = executiveCreatesLead ? "Sales Executive" : input.source;
+    const leadSource = input.source;
     const record: Record<string, unknown> = {
       Last_Name: input.name.trim(),
       ...(input.company.trim() ? { Company: input.company.trim() } : {}),
@@ -204,6 +231,10 @@ export const zohoRepository: CrmRepository = {
       assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id ?? queueOwner,
       remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [actor.name],
     };
+    } finally {
+      release();
+      if (leadCreateLocks.get(phoneKey) === chain) leadCreateLocks.delete(phoneKey);
+    }
   },
 
   async assignLead(id, assignee, actor) {
@@ -234,11 +265,22 @@ export const zohoRepository: CrmRepository = {
 
     let taskCreated = false;
     let taskWarning: string | undefined;
-    const existingTasks = await zoho<{ data?: ZTask[] }>("GET", "/Tasks", {
-      query: { fields: TASK_FIELDS.join(","), page: 1, per_page: 200, who_id: id, sort_by: "Created_Time", sort_order: "desc" },
-    }).catch(() => null);
+    const relatedTasks = await zoho<{ data?: ZTask[] }>("GET", `/Leads/${id}/Tasks`, {
+      query: { fields: TASK_FIELDS.join(","), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" },
+    }).catch(async () =>
+      zoho<{ data?: ZTask[] }>("GET", "/Tasks", {
+        query: { fields: TASK_FIELDS.join(","), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" },
+      }).catch(() => null),
+    );
+    const existingTasks = relatedTasks?.data?.length
+      ? relatedTasks
+      : await zoho<{ data?: ZTask[] }>("GET", "/Tasks", {
+          query: { fields: TASK_FIELDS.join(","), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" },
+        }).catch(() => null);
     const hasAssignmentTask = (existingTasks?.data ?? []).some((task) =>
-      task.Subject === "Call new lead" && String(task.Owner?.id ?? "") === String(owner.id),
+      task.Subject === "Call new lead" &&
+      String(task.Owner?.id ?? "") === String(owner.id) &&
+      String(task.What_Id?.id ?? task.Who_Id?.id ?? "") === String(id),
     );
     if (!hasAssignmentTask) {
       try {
@@ -313,7 +355,11 @@ export const zohoRepository: CrmRepository = {
     const record: Record<string, unknown> = {};
     const parts: string[] = [];
 
-    if (p.name?.trim() && p.name.trim() !== current.name) { record.Last_Name = p.name.trim(); parts.push("Name updated"); }
+    if (p.name?.trim() && p.name.trim() !== current.name) {
+      record.Last_Name = p.name.trim();
+      record.First_Name = null;
+      parts.push("Name updated");
+    }
     if (p.company !== undefined && p.company.trim() !== current.company) { record.Company = p.company.trim() || "-"; parts.push("Company updated"); }
     if (p.phone?.trim() && p.phone.trim() !== current.phone) { record.Mobile = p.phone.trim(); parts.push("Phone updated"); }
     if (p.source && p.source !== current.source) { record.Lead_Source = p.source; parts.push(`Source: ${p.source}`); }

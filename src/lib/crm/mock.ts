@@ -7,7 +7,7 @@ export function advanceMockLeadStatus(lead: Lead, target: "Site Visit Scheduled"
   return true;
 }
 import type { CrmRepository, LogCallInput } from "./repository";
-import { isAssignable } from "@/lib/domain";
+import { isAssignable, normalizePhone } from "@/lib/domain";
 import { env } from "@/lib/env";
 import { MOCK_HISTORY, MOCK_LEADS, MOCK_PRODUCTS, MOCK_QUOTES, MOCK_USERS, MOCK_VISITS } from "./mock-data";
 
@@ -33,8 +33,12 @@ export const mockRepository: CrmRepository = {
 
   async listLeads() { return [...state.leads].sort((a, b) => b.createdOn.localeCompare(a.createdOn)); },
   async getLead(id) { return state.leads.find((l) => l.id === id) ?? null; },
+  async findLeadByPhone(phone) { return state.leads.find((lead) => normalizePhone(lead.phone) === normalizePhone(phone)) ?? null; },
   async listAssignableUsers() { return MOCK_USERS.filter((u) => isAssignable(u, env().ZOHO_QUEUE_OWNER_ID)); },
   async createLead(input, actor, assignTo) {
+    if (state.leads.some((lead) => normalizePhone(lead.phone) === normalizePhone(input.phone))) {
+      throw new Error("Duplicate lead");
+    }
     const selfAssigned = actor.role === "Sales Executive";
     const lead: Lead = {
       ...input, id: `L${101 + state.leads.length}`, status: selfAssigned ? "Assigned to Sales" : "Fresh Lead",

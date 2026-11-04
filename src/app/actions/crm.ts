@@ -88,7 +88,7 @@ export async function addLeadAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
-    const duplicate = (await crm().listLeads()).find((lead) => normalizePhone(lead.phone) === data.phone);
+    const duplicate = await crm().findLeadByPhone(data.phone);
     const executive = isExecutive(user);
     const forceCreate = !executive && user.role === "Manager" && data.forceCreate;
     if (duplicate && !forceCreate) {

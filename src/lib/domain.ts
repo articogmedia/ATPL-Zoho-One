@@ -298,8 +298,11 @@ export type LeadBucket = "fresh" | "assigned" | "callback" | "other";
 
 export function leadBucket(lead: Lead): LeadBucket {
   const hasAssignee = !!lead.assignedTo?.trim() || !!lead.assignedToId?.trim();
-  if (lead.status === "Fresh Lead" && !hasAssignee) return "fresh";
-  if (lead.status === "Fresh Lead" && hasAssignee) return "assigned";
+  const callingStatuses = new Set<LeadStatus>([
+    "Fresh Lead", "Not Contacted", "Attempted to Contact", "Not Responsive", "Contacted",
+  ]);
+  if (callingStatuses.has(lead.status) && !hasAssignee) return "fresh";
+  if (callingStatuses.has(lead.status) && hasAssignee) return "assigned";
   if (lead.status === "Assigned to Sales") return "assigned";
   if (lead.status === "Callback in Future") return "callback";
   return "other";

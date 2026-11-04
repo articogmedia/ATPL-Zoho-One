@@ -54,17 +54,22 @@ describe("manage leads", () => {
     expect(leadBucket({ ...base, status: "Fresh Lead", assignedTo: "Reshma", assignedToId: "manager-id" } as Lead)).toBe("assigned");
     expect(leadBucket({ ...base, status: "Fresh Lead", assignedTo: "Anil", assignedToId: "executive-id" } as Lead)).toBe("assigned");
   });
-  it("puts Contacted leads in other", () => {
-    expect(leadBucket({ ...SAMPLE_LEADS[0], status: "Contacted" } as Lead)).toBe("other");
+  it("puts unassigned Contacted leads in the calling fresh queue", () => {
+    expect(leadBucket({ ...SAMPLE_LEADS[0], status: "Contacted", assignedTo: null, assignedToId: undefined } as Lead)).toBe("fresh");
   });
-  it("fresh tab shows only unassigned Fresh Leads", () => {
+  it("fresh tab includes unassigned calling statuses", () => {
     const r = leadsForTab(u("divya"), SAMPLE_LEADS, "fresh");
     expect(r.length).toBeGreaterThan(0);
-    expect(r.every((l) => l.status === "Fresh Lead" && !l.assignedTo)).toBe(true);
+    expect(r.every((l) => ["Fresh Lead", "Not Contacted", "Attempted to Contact", "Not Responsive", "Contacted"].includes(l.status) && !l.assignedTo)).toBe(true);
   });
   it("fresh tab excludes leads with an assigned owner id even without a display name", () => {
     const leads = [{ ...SAMPLE_LEADS[0], status: "Fresh Lead" as const, assignedTo: null, assignedToId: "owner-1" }] as typeof SAMPLE_LEADS;
     expect(leadsForTab(u("divya"), leads, "fresh")).toHaveLength(0);
+  });
+  it("keeps No Answer/Not Responsive leads visible to Calling Team", () => {
+    const lead = { ...SAMPLE_LEADS[0], status: "Not Responsive" as const, assignedTo: null, assignedToId: undefined } as Lead;
+    expect(leadBucket(lead)).toBe("fresh");
+    expect(leadsForTab({ id: "caller-id", name: "Caller", role: "Calling Team" }, [lead], "fresh")).toHaveLength(1);
   });
   it("assigned lead leaves Fresh but stays in All", () => {
     const leads = SAMPLE_LEADS.map((l) => (l.id === "L105" ? { ...l, assignedTo: "Ravi" } : l));

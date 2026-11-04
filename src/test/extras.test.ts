@@ -4,6 +4,14 @@ import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
 import { matchPortalUserToZohoUser, missingPortalUsers, resolvePortalUserZohoId, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
+import { productionDemoLoginAllowed } from "@/lib/auth/demo-policy";
+
+describe("demo login safety", () => {
+  it("hides demo buttons in production unless explicitly allowed", () => {
+    expect(productionDemoLoginAllowed("production", "demo", true, false)).toBe(false);
+    expect(productionDemoLoginAllowed("production", "demo", true, true)).toBe(true);
+  });
+});
 
 describe("offer numbering", () => {
   it("de-duplicates products by normalized model and price, keeping the first", () => {
@@ -88,11 +96,11 @@ describe("zoho mapping", () => {
     });
   });
   it("maps Zoho's stock statuses to portal statuses", () => {
-    expect(normalizeStatus("Not Contacted")).toBe("Fresh Lead");
+    expect(normalizeStatus("Not Contacted")).toBe("Not Contacted");
     expect(normalizeStatus("Contact in Future")).toBe("Callback in Future");
     expect(normalizeStatus("Junk Lead")).toBe("Junk Lead");
     expect(normalizeStatus("Won")).toBe("Won");
-    expect(normalizeStatus("something custom")).toBe("Fresh Lead");
+    expect(normalizeStatus("something custom")).toBe("Not Contacted");
   });
   it("normalizes duplicate phone numbers and maps every call outcome", () => {
     expect(normalizePhone("+91 98765 43210")).toBe("9876543210");

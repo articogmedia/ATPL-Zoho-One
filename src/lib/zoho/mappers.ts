@@ -6,6 +6,8 @@ import { FIELD, READ_LEAD_STATUS, ROLE_BY_ZOHO_NAME, ROLE_KEYWORDS } from "./fie
 type Ref = { id: string; name?: string } | null | undefined;
 const day = (iso?: string | null) => (iso ? iso.slice(0, 10) : "");
 const ownerId = (id?: string | number) => (id === undefined || id === null ? undefined : String(id).trim());
+const warnedStatuses = new Set<string>();
+const warnedSources = new Set<string>();
 
 export type ZUser = { id: string | number; full_name: string; email?: string; role?: { name?: string }; profile?: { name?: string } };
 export type ZLead = {
@@ -59,14 +61,37 @@ export function mapUser(u: ZUser, overrides?: ReadonlyMap<string, Role>): User |
 
 /** Zoho lead sources are free-form (Facebook, Google AdWords, ...). Fold them into ATPL's three. */
 export function normalizeSource(raw?: string): LeadSource {
-  const s = (raw ?? "").toLowerCase();
+  const value = (raw ?? "").trim();
+  const s = value.toLowerCase();
   if (/meta|facebook|instagram|\bfb\b|\big\b/.test(s)) return "Meta Ads";
   if (/google|adwords|youtube/.test(s)) return "Google Ads";
+  if (/phone|telephone|walk[- ]?in|direct call|direct|sales executive|inbound/.test(s)) return "Direct Call";
+  if (value && !warnedSources.has(s)) {
+    warnedSources.add(s);
+    console.warn("[zoho] Unknown lead source; using Direct Call", { source: value });
+  }
   return "Direct Call";
 }
 
 export function normalizeStatus(raw?: string): LeadStatus {
-  return READ_LEAD_STATUS[(raw ?? "").trim().toLowerCase()] ?? "Fresh Lead";
+  const value = (raw ?? "").trim();
+  const normalized = value.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  const aliases: Record<string, LeadStatus> = {
+    "fresh lead": "Fresh Lead", fresh: "Fresh Lead",
+    "not contacted": "Not Contacted", attempted: "Attempted to Contact", "attempted to contact": "Attempted to Contact",
+    "no answer": "Not Responsive", "not responsive": "Not Responsive", busy: "Attempted to Contact",
+    contacted: "Contacted", "callback in future": "Callback in Future", "call back later": "Callback in Future",
+    "assigned to sales": "Assigned to Sales", "site visit scheduled": "Site Visit Scheduled",
+    "quotation sent": "Quotation Sent", won: "Won", "lost lead": "Lost Lead", junk: "Junk Lead",
+    "junk lead": "Junk Lead", "pre qualified": "Pre-Qualified", "not qualified": "Not Qualified",
+  };
+  const mapped = aliases[normalized] ?? READ_LEAD_STATUS[normalized];
+  if (mapped) return mapped;
+  if (value && !warnedStatuses.has(normalized)) {
+    warnedStatuses.add(normalized);
+    console.warn("[zoho] Unknown lead status; using Not Contacted", { status: value });
+  }
+  return "Not Contacted";
 }
 
 export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutives?: ReadonlySet<string>): Lead {
