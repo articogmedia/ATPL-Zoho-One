@@ -15,7 +15,7 @@ export type ZLead = {
 };
 export type ZProduct = { id: string; Product_Name: string; Description?: string; Unit_Price?: number; Usage_Unit?: string };
 export type ZQuote = { id: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; [k: string]: unknown };
-export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; Description?: string; [k: string]: unknown };
+export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; [k: string]: unknown };
 export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
 export type ZNote = { Note_Content?: string; Created_Time?: string; Created_By?: Ref };
 
@@ -121,12 +121,13 @@ export function mapTaskStatus(raw?: string): VisitStatus {
 }
 
 export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
-  const lead = z.Who_Id ? leadsById.get(z.Who_Id.id) : undefined;
+  const related = z.What_Id ?? z.Who_Id;
+  const lead = related ? leadsById.get(related.id) : undefined;
   const status = mapTaskStatus(z.Status);
   return {
     id: String(z.id).trim(),
-    leadId: z.Who_Id?.id ?? "",
-    customer: lead ? lead.company || lead.name : z.Who_Id?.name ?? "",
+    leadId: related?.id ?? "",
+    customer: lead ? lead.company || lead.name : related?.name ?? "",
     address: lead?.address ?? "",
     area: lead?.area ?? "",
     executive: z.Owner?.name ?? "",

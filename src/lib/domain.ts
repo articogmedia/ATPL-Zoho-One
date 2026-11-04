@@ -302,7 +302,12 @@ export function leadsForTab(
   const q = search.trim().toLowerCase();
   return visibleFor(user, leads).filter((l) => {
     if (tab !== "all" && tab !== "mine" && leadBucket(l) !== tab) return false;
-    if (tab === "mine" && !(l.assignedTo === user.name || l.touchedBy.includes(user.name))) return false;
+    if (tab === "mine" && !(
+      l.ownerId === user.id ||
+      l.assignedToId === user.id ||
+      l.assignedTo === user.name ||
+      (user.role === "Calling Team" && l.touchedBy.includes(user.name))
+    )) return false;
     if (source !== "All" && l.source !== source) return false;
     if (filters.owner && filters.owner !== "All" && (l.assignedTo ?? "Unassigned") !== filters.owner) return false;
     if (filters.stage && filters.stage !== "All" && l.status !== filters.stage) return false;

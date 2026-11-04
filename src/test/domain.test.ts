@@ -71,6 +71,14 @@ describe("manage leads", () => {
     expect(leadsForTab(u("divya"), leads, "fresh").some((l) => l.id === "L105")).toBe(false);
     expect(leadsForTab(u("divya"), leads, "mine", "Arjun").map((l) => l.id)).toEqual(["L105"]);
   });
+  it("My Leads for managers includes only owned leads, not merely touched leads", () => {
+    const manager = { id: "manager-id", name: "Manager", role: "Manager" as const };
+    const leads = [
+      { ...SAMPLE_LEADS[0], id: "A", ownerId: "manager-id", assignedTo: "Manager", touchedBy: [] },
+      { ...SAMPLE_LEADS[0], id: "B", ownerId: "pavan-id", assignedTo: "Pavan", touchedBy: ["Manager"] },
+    ] as typeof SAMPLE_LEADS;
+    expect(leadsForTab(manager, leads, "mine").map((lead) => lead.id)).toEqual(["A"]);
+  });
   it("filters Assigned to Sales by role and owner", () => {
     const assigned = [
       { ...SAMPLE_LEADS[0]!, status: "Assigned to Sales" as const, assignedTo: "Ravi", assignedToId: "ravi-id" },

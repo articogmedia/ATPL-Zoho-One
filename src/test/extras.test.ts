@@ -143,4 +143,13 @@ describe("zoho mapping", () => {
     expect(v).toMatchObject({ status: "Assigned", isVisit: true, customer: "Clinic", address: "Plot 45", area: "Kukatpally", time: "11:00", done: false });
     expect(mapTaskStatus("Completed")).toBe("Completed");
   });
+  it("maps lead-linked Tasks through What_Id", () => {
+    const lead = mapLead({ id: "L9", Last_Name: "Ramesh", Company: "Clinic One", Owner: { id: "u1", name: "Anil Kumar" } }, execs);
+    const visit = mapTask(
+      { id: "T9", Subject: "Follow-up", Status: "Not Started", What_Id: { id: "L9" }, Owner: { id: "u1", name: "Anil Kumar" } },
+      new Map([["L9", lead]]),
+    );
+    expect(visit.leadId).toBe("L9");
+    expect(visit.customer).toBe("Clinic One");
+  });
 });

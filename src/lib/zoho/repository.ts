@@ -12,13 +12,14 @@ import {
 } from "./mappers";
 
 const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Street", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
-const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "Description", ...Object.values(FIELD.task)];
+const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description", ...Object.values(FIELD.task)];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result"];
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products
-const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "Description"];
+const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
+const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
 const taskRows = cache(() => cached("visits:tasks", SHORT, async () => {
   try {
     return await zohoList<ZTask>("Tasks", TASK_FIELDS, 1000);
@@ -100,7 +101,7 @@ const leads = cache(async function leads(): Promise<Lead[]> {
     const salesExecutives = new Set(allUsers.filter((user) => user.role === "Sales Executive").map((user) => String(user.id).trim()));
     const followUps = new Map<string, { date: string; time: string }>();
     for (const task of tasks) {
-      const leadId = task.Who_Id?.id;
+      const leadId = task.What_Id?.id ?? task.Who_Id?.id;
       const date = String(task[FIELD.task.followUp] ?? "");
       if (leadId && date && (!followUps.has(leadId) || date > followUps.get(leadId)!.date)) {
         followUps.set(leadId, { date, time: String(task[FIELD.task.visitTime] ?? "") });
@@ -165,7 +166,7 @@ export const zohoRepository: CrmRepository = {
           Status: TASK_STATUS_WRITE.Assigned,
           Due_Date: todayIST(),
           Owner: { id: owner.id },
-          Who_Id: { id },
+          ...relatedToLead(id),
         });
       } catch (error) {
         console.error("[zoho] secondary lead assignment work failed", {
@@ -241,7 +242,7 @@ export const zohoRepository: CrmRepository = {
           Status: TASK_STATUS_WRITE.Assigned,
           Due_Date: todayIST(),
           Owner: { id: owner.id },
-          Who_Id: { id },
+          ...relatedToLead(id),
         });
         taskCreated = true;
       } catch (error) {
@@ -380,7 +381,7 @@ export const zohoRepository: CrmRepository = {
       const owner = lead.assignedTo ? await userByName(lead.assignedTo) : actor;
       await zohoWrite("POST", "/Tasks", {
         Subject: `Follow-up call - ${lead.name}`, Status: TASK_STATUS_WRITE.Assigned,
-        Due_Date: input.followUp, Owner: { id: owner.id }, Who_Id: { id: lead.id },
+        Due_Date: input.followUp, Owner: { id: owner.id }, ...relatedToLead(lead.id),
         [FIELD.task.isSiteVisit]: false, [FIELD.task.visitTime]: input.followUpTime || undefined,
         [FIELD.task.nextAction]: "Follow up call", [FIELD.task.followUp]: input.followUp,
       });
@@ -458,7 +459,7 @@ export const zohoRepository: CrmRepository = {
     await zohoWrite("POST", "/Tasks", {
       Subject: `${input.type} - ${lead.company || lead.name}`,
       Status: TASK_STATUS_WRITE.Assigned, Due_Date: input.date, Owner: { id: owner.id },
-      Who_Id: { id: lead.id },
+      ...relatedToLead(lead.id),
       [FIELD.task.type]: input.type, [FIELD.task.isSiteVisit]: input.isVisit,
       [FIELD.task.visitTime]: input.time, [FIELD.task.nextAction]: input.nextAction,
       [FIELD.task.followUp]: input.followUp || undefined,
@@ -470,7 +471,7 @@ export const zohoRepository: CrmRepository = {
       await zohoWrite("POST", "/Events", {
         Event_Title: `${input.type} - ${lead.company || lead.name}`,
         Start_DateTime: start, End_DateTime: end, Location: address || undefined,
-        Who_Id: { id: lead.id }, Owner: { id: owner.id },
+        ...relatedToLead(lead.id), Owner: { id: owner.id },
         Description: input.nextAction || undefined,
       });
     }
