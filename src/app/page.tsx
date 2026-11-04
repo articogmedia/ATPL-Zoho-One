@@ -12,8 +12,10 @@ import type { Role } from "@/lib/domain";
 
 export const metadata = { title: "Sign in" };
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 const ERRORS: Record<string, string> = {
+  expired: "Your session has expired. Please log in again.",
   no_access: "Your Zoho account is not set up for this portal. Ask your manager to check your CRM role.",
   state: "Sign-in expired. Please try again.",
   token: "Zoho did not complete the sign-in. Please try again.",

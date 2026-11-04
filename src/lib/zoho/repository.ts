@@ -402,7 +402,7 @@ export const zohoRepository: CrmRepository = {
 
   async listProducts() {
     return cached("products", LONG, async () => {
-      const raw = await zohoList<ZProduct & { Product_Active?: boolean }>("Products", ["Product_Name", "Unit_Price", "Usage_Unit", "Product_Active"], 1000);
+      const raw = await zohoList<ZProduct & { Product_Active?: boolean }>("Products", ["Product_Name", "Description", "Unit_Price", "Usage_Unit", "Product_Active"], 1000);
       return raw.filter((p) => p.Product_Active !== false).map(mapProduct).sort((a, b) => a.model.localeCompare(b.model));
     });
   },

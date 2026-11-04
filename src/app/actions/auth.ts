@@ -49,9 +49,17 @@ export async function loginAction(_: unknown, formData: FormData) {
   redirect("/leads");
 }
 
-export async function logoutAction() {
+export async function logoutAction(expired = false) {
+  await destroySession();
+  redirect(expired ? "/login?expired=1" : "/login");
+}
+
+export async function logout() {
   await destroySession();
   redirect("/login");
 }
 
-export const logout = logoutAction;
+export async function logoutExpired() {
+  await destroySession();
+  redirect("/login?expired=1");
+}

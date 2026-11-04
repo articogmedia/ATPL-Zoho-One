@@ -117,7 +117,7 @@ export function workForTab(user: User, visits: Visit[], tab: WorkTab, today: str
   ).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 }
 
-export type Product = { id: string; model: string; price: number; unit: string };
+export type Product = { id: string; model: string; description?: string; price: number; unit: string };
 
 /** GST is shown as Rs 0 until ATPL confirms GST invoicing scope (see plan section 12). */
 export const GST_RATE = 0;

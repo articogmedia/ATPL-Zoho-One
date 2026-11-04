@@ -53,7 +53,10 @@ describe("Zoho lead actions", () => {
 
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
-      zoho: vi.fn(async () => ({ users: [{ id: "1394515000001147001", full_name: "Pavan", role: { name: "Sales Executive" } }] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
+        ? { data: [{ id: "lead-1", Last_Name: "Lead", Lead_Status: "Assigned to Sales", Owner: { id: "1394515000001147001", name: "Pavan" } }] }
+        : path === "/Tasks" ? { data: [] }
+        : { users: [{ id: "1394515000001147001", full_name: "Pavan", role: { name: "Sales Executive" } }] }),
       zohoList: vi.fn(async (module: string) => module === "Leads"
         ? [{ id: "lead-1", Last_Name: "Lead", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }]
         : []),
@@ -69,12 +72,12 @@ describe("Zoho lead actions", () => {
       method: "PUT", path: "/Leads/lead-1",
       record: { Owner: { id: "1394515000001147001" }, Lead_Status: "Assigned to Sales" },
     });
-    expect(writes[1]).toMatchObject({ method: "POST", path: "/Notes", record: { Note_Title: "Lead assigned" } });
-    expect(writes[1]?.record.Note_Content).toMatch(/Assigned to Pavan by Reshma on \d{4}-\d{2}-\d{2}/);
-    expect(writes[2]).toMatchObject({
+    expect(writes[1]).toMatchObject({
       method: "POST", path: "/Tasks",
       record: { Subject: "Call new lead", Due_Date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), Owner: { id: "1394515000001147001" } },
     });
+    expect(writes[2]).toMatchObject({ method: "POST", path: "/Notes", record: { Note_Title: "Lead assigned" } });
+    expect(writes[2]?.record.Note_Content).toMatch(/Assigned to Pavan by Reshma on \d{4}-\d{2}-\d{2}/);
   });
 
   it("does not move a progressed lead backwards during assignment", async () => {
@@ -85,7 +88,10 @@ describe("Zoho lead actions", () => {
     });
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
-      zoho: vi.fn(async () => ({ users: [{ id: "1394515000001147001", full_name: "Pavan", role: { name: "Sales Executive" } }] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-2"
+        ? { data: [{ id: "lead-2", Last_Name: "Lead", Lead_Status: "Contacted", Owner: { id: "1394515000001147001", name: "Pavan" } }] }
+        : path === "/Tasks" ? { data: [] }
+        : { users: [{ id: "1394515000001147001", full_name: "Pavan", role: { name: "Sales Executive" } }] }),
       zohoList: vi.fn(async (module: string) => module === "Leads"
         ? [{ id: "lead-2", Last_Name: "Lead", Lead_Status: "Contacted", Owner: { id: "queue-1", name: "Queue" } }]
         : []),
@@ -96,6 +102,47 @@ describe("Zoho lead actions", () => {
     const { zohoRepository } = await import("@/lib/zoho/repository");
     await zohoRepository.assignLead("lead-2", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
     expect(writes[0]?.record).toEqual({ Owner: { id: "1394515000001147001" } });
+  });
+
+  it("reports partial assignment success when follow-up task creation fails", async () => {
+    const write = vi.fn(async (_method: string, path: string) => {
+      if (path === "/Tasks") throw new Error("invalid data");
+      return "ok";
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-partial"
+        ? { data: [{ id: "lead-partial", Last_Name: "Partial", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Pavan" } }] }
+        : path === "/Tasks" ? { data: [] }
+        : { users: [{ id: "exec-1", full_name: "Pavan", role: { name: "Sales Executive" } }] }),
+      zohoList: vi.fn(async () => [{ id: "lead-partial", Last_Name: "Partial", Lead_Status: "Fresh Lead", Owner: { id: "queue-1" } }]),
+      zohoWrite: write,
+    }));
+    const { invalidate } = await import("@/lib/cache");
+    invalidate("leads", "users");
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const result = await zohoRepository.assignLead("lead-partial", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
+    expect(result.owner).toBe("Pavan");
+    expect(result.taskWarning).toContain("Follow-up task creation failed");
+  });
+
+  it("does not create a duplicate assignment task", async () => {
+    const write = vi.fn(async (...args: unknown[]) => { void args.length; return "ok"; });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-dup"
+        ? { data: [{ id: "lead-dup", Last_Name: "Duplicate", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Pavan" } }] }
+        : path === "/Tasks" ? { data: [{ Subject: "Call new lead", Owner: { id: "exec-1" } }] }
+        : { users: [{ id: "exec-1", full_name: "Pavan", role: { name: "Sales Executive" } }] }),
+      zohoList: vi.fn(async () => [{ id: "lead-dup", Last_Name: "Duplicate", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1" } }]),
+      zohoWrite: write,
+    }));
+    const { invalidate } = await import("@/lib/cache");
+    invalidate("leads", "users");
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const result = await zohoRepository.assignLead("lead-dup", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
+    expect(result.taskCreated).toBe(false);
+    expect(write.mock.calls.some(([, path]) => path === "/Tasks")).toBe(false);
   });
 
   it("deletes a lead through the Zoho recycle-bin endpoint", async () => {

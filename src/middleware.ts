@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jwtVerify } from "jose";
+import { jwtVerify, SignJWT } from "jose";
 
 /**
  * First line of defence: unauthenticated visitors never reach app pages.
@@ -10,8 +10,30 @@ export async function middleware(req: NextRequest) {
   const secret = process.env.SESSION_SECRET;
   if (token && secret) {
     try {
-      await jwtVerify(token, new TextEncoder().encode(secret), { algorithms: ["HS256"] });
-      return NextResponse.next();
+      const { payload } = await jwtVerify(token, new TextEncoder().encode(secret), { algorithms: ["HS256"] });
+      const lastActivity = Number(payload.lastActivity ?? (Number(payload.iat ?? 0) * 1000));
+      const inactivityMinutes = Number(process.env.SESSION_INACTIVITY_MINUTES ?? 30);
+      if (!Number.isFinite(lastActivity) || Date.now() - lastActivity > inactivityMinutes * 60_000) {
+        const response = req.nextUrl.pathname.startsWith("/api/")
+          ? NextResponse.json({ error: "Session expired" }, { status: 401 })
+          : NextResponse.redirect(new URL("/login?expired=1", req.url));
+        response.cookies.delete({ name: "atpl_session", path: "/" });
+        return response;
+      }
+      const response = NextResponse.next();
+      response.headers.set("Cache-Control", "private, no-store, max-age=0");
+      const refreshed = await new SignJWT({
+        username: payload.username, name: payload.name, role: payload.role,
+        zohoUserId: payload.zohoUserId ?? payload.sub, lastActivity: Date.now(),
+      }).setProtectedHeader({ alg: "HS256" })
+        .setSubject(String(payload.sub))
+        .setIssuedAt()
+        .setExpirationTime("8h")
+        .sign(new TextEncoder().encode(secret));
+      response.cookies.set("atpl_session", refreshed, {
+        httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/",
+      });
+      return response;
     } catch {
       /* fall through to redirect */
     }
@@ -20,5 +42,8 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/home/:path*", "/leads/:path*", "/quotations/:path*", "/visits/:path*", "/performance/:path*"],
+  matcher: [
+    "/home/:path*", "/leads/:path*", "/quotations/:path*", "/visits/:path*", "/performance/:path*",
+    "/api/admin/:path*", "/api/quotations/:path*", "/api/warm",
+  ],
 };

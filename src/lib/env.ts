@@ -6,6 +6,7 @@ const schema = z
     DATA_SOURCE: z.enum(["mock", "zoho"]).default("mock"),
     AUTH_MODE: z.enum(["demo", "zoho"]).default("demo"),
     SESSION_SECRET: z.string().min(32, "SESSION_SECRET must be at least 32 characters"),
+    SESSION_INACTIVITY_MINUTES: z.coerce.number().int().min(1).max(1440).default(30),
     ALLOW_DEMO_LOGIN_IN_PRODUCTION: z.enum(["true", "false"]).default("false"),
     ALLOW_DEMO_LOGIN: z.enum(["true", "false"]).default("false"),
     ATPL_RESHMA_PASSWORD: z.string().optional(),

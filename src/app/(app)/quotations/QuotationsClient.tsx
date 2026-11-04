@@ -25,7 +25,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const [pending, start] = useTransition();
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
-  const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ model: p.model, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
+  const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
   const t = quoteTotals(items);
   const lead = myLeads.find((l) => l.id === leadId);
   const upd = (i: number, p: Partial<Row>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
@@ -175,14 +175,24 @@ function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; t
   );
 }
 
-type Item = { model: string; unit: string; qty: number; price: number; discount?: number };
+type Item = { model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
 
 function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; onBack: () => void; onSave: () => void; saving: boolean;
 }) {
   const t = quoteTotals(items);
   const customer = lead.company || lead.name;
-  const date = new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata" });
+  const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date());
+  const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
+  const date = `${datePart("day")}.${datePart("month")}.${datePart("year")}`;
+  const hasDiscount = items.some((item) => (item.discount ?? 0) > 0);
+  const partA = items.filter((item) => !/^B\s*-\s*/i.test(item.model));
+  const partB = items.filter((item) => /^B\s*-\s*/i.test(item.model));
+  const basicAmount = (item: Item) => item.qty * item.price;
+  const lineAmount = (item: Item) => basicAmount(item) - (item.discount ?? 0);
+  const sectionTotal = (section: Item[]) => section.reduce((sum, item) => sum + lineAmount(item), 0);
+  const stripPartB = (model: string) => model.replace(/^B\s*-\s*/i, "");
+  const equipmentUnits = partA.reduce((sum, item) => sum + item.qty, 0);
   const msg = [
     `Dear Sir, please find our offer ${offerNo} dated ${date} for ${customer}.`,
     `Sub: ${COMPANY.subject}`, "",
@@ -195,36 +205,88 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
     <div className="space-y-4">
       <div className="no-print flex flex-wrap gap-2">
         <Button variant="outline" className="h-12" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
-        <Button className="h-12" onClick={() => {
-          const params = new URLSearchParams({ offerNo, customer, leadName: lead.name, leadPhone: lead.phone, address: lead.address || lead.area, date });
-          items.forEach((item, index) => params.set(`item${index}`, JSON.stringify(item)));
-          window.open(`/api/quotations/pdf?${params.toString()}`, "_blank", "noopener,noreferrer");
-        }}><Printer className="h-5 w-5" /> Download PDF</Button>
+        <Button className="h-12" onClick={() => window.print()}><Printer className="h-5 w-5" /> Print / PDF</Button>
         <Button asChild variant="secondary" className="h-12"><a href={wa} target="_blank" rel="noreferrer"><MessageCircle className="h-5 w-5" /> Share on WhatsApp</a></Button>
         <Button variant="outline" className="h-12" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
       </div>
-      <article className="print-area mx-auto max-w-3xl space-y-4 rounded-xl bg-card p-5 text-sm shadow-sm sm:p-8">
-        <h1 className="text-center text-2xl font-bold tracking-widest">OFFER</h1>
-        <div className="flex flex-wrap justify-between gap-2">
-          <label className="flex items-center gap-2"><span className="font-semibold">Offer No:</span>
-            <input className="w-32 rounded border border-input bg-card px-2 py-1" value={offerNo} onChange={(e) => setOfferNo(e.target.value)} maxLength={30} /></label>
-          <span><span className="font-semibold">Date:</span> {date}</span>
+      <article className="print-area offer-document mx-auto max-w-3xl rounded-xl bg-card p-5 text-[11px] leading-snug shadow-sm sm:p-8">
+        <header className="border-b-2 border-slate-800 pb-3 text-center">
+          <div className="text-xl font-bold uppercase tracking-wide">{COMPANY.name}</div>
+          <div className="mt-1 text-[10px]">{COMPANY.address}</div>
+          <div className="text-[10px]">{COMPANY.contact}</div>
+          <div className="mt-1 text-[10px] font-semibold">GSTIN {COMPANY.gstin}</div>
+        </header>
+        <div className="my-4 grid grid-cols-2 gap-4 border-b border-slate-300 pb-3">
+          <label className="font-semibold">OFFER REF
+            <input aria-label="Offer reference" className="mt-1 block h-9 w-full rounded border border-input px-2 text-center font-medium" pattern="\d{3}/\d{2}-\d{2}" value={offerNo} onChange={(e) => setOfferNo(e.target.value)} maxLength={8} />
+          </label>
+          <div><span className="font-semibold">DATE</span><div className="mt-1 flex h-9 items-center rounded border border-input px-2">{date}</div></div>
+          <div className="col-span-2"><span className="font-semibold">CLIENT</span><div className="mt-1 rounded border border-input px-2 py-2">
+            <div>{lead.name}{lead.company ? `, ${lead.company}` : ""}</div>
+            <div>{[lead.address || "", lead.area || ""].filter(Boolean).join(", ")}{lead.area || lead.address ? ", Hyderabad" : ""}</div>
+          </div></div>
         </div>
-        <div><div className="font-semibold">To,</div><div>{customer}</div>{lead.company && <div>Attn: {lead.name}</div>}<div>{[lead.address, lead.area].filter(Boolean).join(", ")}{lead.area ? ", Hyderabad" : ""}</div></div>
-        <p>Dear Sir,</p>
-        <p className="font-semibold">Sub: {COMPANY.subject}</p>
-        <div className="overflow-x-auto">
-          <table className="w-full border text-left">
-            <thead className="bg-secondary"><tr><th className="border p-2">S.No</th><th className="border p-2">Model</th><th className="border p-2">Unit</th><th className="border p-2 text-right">Qty</th><th className="border p-2 text-right">Rate</th><th className="border p-2 text-right">Discount</th><th className="border p-2 text-right">Amount</th></tr></thead>
-            <tbody>{items.map((it, i) => (
-              <tr key={i}><td className="border p-2">{i + 1}</td><td className="border p-2">{it.model}</td><td className="border p-2">{it.unit}</td><td className="border p-2 text-right">{it.qty}</td><td className="border p-2 text-right">{formatINR(it.price)}</td><td className="border p-2 text-right">{formatINR(it.discount ?? 0)}</td><td className="border p-2 text-right">{formatINR(it.qty * it.price - (it.discount ?? 0))}</td></tr>
-            ))}</tbody>
-            <tfoot><tr><td className="border p-2 text-right font-semibold" colSpan={6}>Total</td><td className="border p-2 text-right font-semibold">{formatINR(t.total)}</td></tr></tfoot>
-          </table>
-        </div>
-        <Totals t={t} />
-        <p className="whitespace-pre-line">{COMPANY.terms.replace(/\. /g, ".\n")}</p>
-        <div className="pt-6"><div>for {COMPANY.name}</div><div className="mt-8 font-semibold">{COMPANY.signatory}</div><div>{COMPANY.phones}</div></div>
+
+        <section className="offer-no-break mb-3">
+          <div className="font-bold">EQUIPMENT REQUIRED</div>
+          <div className="mt-1 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1">
+            {partA.map((item, index) => <div key={`${item.model}-${index}`} className="contents"><span>{item.model}</span><span className="font-semibold">{item.qty} {item.unit}</span></div>)}
+          </div>
+          <div className="mt-2 flex justify-end gap-3 border-t pt-1 font-bold"><span>Total Units</span><span>{equipmentUnits}</span></div>
+        </section>
+
+        <section>
+          <p>Dear Sir,</p>
+          <p className="mt-2 font-semibold">Sub: {COMPANY.subject}</p>
+          <p className="mt-2 text-justify">We thank you very much for your enquiry. In connection with subsequent discussions had with you, we are pleased to submit herewith our offer for the subject works. Our detailed Bill of Quantities is as follows.</p>
+        </section>
+
+        {[
+          { title: "BOQ - PART A - EQUIPMENT SUPPLY", items: partA, total: sectionTotal(partA), tax: "GST @ 18% included" },
+          { title: "BOQ - PART B - ANCILLARY WORKS", items: partB, total: sectionTotal(partB), tax: "GST @ 18% EXTRA" },
+        ].map((section) => <section key={section.title} className="mt-4">
+          <h2 className="mb-1 font-bold">{section.title}</h2>
+          <div className="overflow-x-auto">
+            <table className="border border-slate-800 text-[10px]">
+              <thead><tr>{["S.No", "Description", "Unit", "Qty", "Basic Rate (Rs)", ...(hasDiscount ? ["Discount"] : []), "Amount (Rs)"].map((heading) => <th key={heading} className="border border-slate-800 px-1 py-1.5 text-center">{heading}</th>)}</tr></thead>
+              <tbody>{section.items.map((item, index) => {
+                const displayName = section.title.includes("PART B") ? stripPartB(item.model) : item.model;
+                return <tr key={`${item.model}-${index}`}>
+                  <td className="border border-slate-800 px-1 py-2 text-center">{index + 1}</td>
+                  <td className="border border-slate-800 px-1 py-2"><span className="font-medium">{displayName}</span>{item.description && <div className="mt-1 text-[9px] text-slate-600">{item.description}</div>}</td>
+                  <td className="border border-slate-800 px-1 py-2 text-center">{item.unit}</td>
+                  <td className="border border-slate-800 px-1 py-2 text-right">{item.qty}</td>
+                  <td className="border border-slate-800 px-1 py-2 text-right">{formatINR(item.price)}</td>
+                  {hasDiscount && <td className="border border-slate-800 px-1 py-2 text-right">{formatINR(item.discount ?? 0)}</td>}
+                  <td className="border border-slate-800 px-1 py-2 text-right">{formatINR(lineAmount(item))}</td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
+          <div className="offer-no-break border-x border-b border-slate-800 text-right">
+            <div className="grid grid-cols-[1fr_auto] gap-8 px-2 py-1"><span>Basic Sub Total - {section.title.includes("PART A") ? "Part A" : "Part B"}</span><span>{formatINR(section.items.reduce((sum, item) => sum + basicAmount(item), 0))}</span></div>
+            <div className="grid grid-cols-[1fr_auto] gap-8 px-2 py-1"><span>{section.tax}</span><span>{formatINR(0)}</span></div>
+            <div className="grid grid-cols-[1fr_auto] gap-8 border-t border-slate-800 px-2 py-1 font-bold"><span>{section.title.includes("PART A") ? "Total For PART - A with taxes" : "TOTAL PART B"}</span><span>{formatINR(section.total)}</span></div>
+          </div>
+        </section>)}
+
+        <div className="offer-no-break mt-4 grid grid-cols-[1fr_auto] gap-8 border border-slate-800 px-2 py-2 font-bold"><span>TOTAL PART A + B</span><span>{formatINR(sectionTotal(partA) + sectionTotal(partB))}</span></div>
+
+        <section className="mt-4 space-y-2">
+          <div className="offer-no-break"><span className="font-bold">NOTE</span><p>Pls note that the above quantities are tentative only, and final billing shall be based on actual measurements.</p></div>
+          <div className="offer-no-break"><div className="font-bold">ITEMS EXCLUDED</div><ol className="list-decimal pl-5"><li>Main incoming electrical cabling &amp; civil works such as core cutting, wall chipping in client scope</li><li>In case of Cat walk requirement for outdoor unit, the same shall be in client scope</li></ol></div>
+          <div className="offer-no-break"><div className="font-bold">TERMS &amp; CONDITIONS</div>
+            <dl className="grid grid-cols-[90px_1fr] gap-x-2">
+              <dt>Validity</dt><dd>30 days from the date of this offer</dd>
+              <dt>Taxes</dt><dd>Included As mentioned above / GST @ 18% EXTRA as applicable to Part B</dd>
+              <dt>Delivery</dt><dd>1-2 weeks from the date of order</dd>
+              <dt>Payment Terms</dt><dd>100% advance for equipment; 60% advance for Part B and 40% on completion</dd>
+            </dl>
+          </div>
+          <p>We hope our offer is in line with your requirement and look forward to receive your valued order.</p>
+          <p>Thanking you and assuring you of our best attention at all times, we remain,</p>
+        </section>
+        <div className="offer-no-break mt-6 text-right"><div>very truly yours</div><div className="mt-4">for {COMPANY.name}</div><div className="mt-8 font-semibold">{COMPANY.signatory}</div><div>{COMPANY.phones}</div></div>
       </article>
     </div>
   );

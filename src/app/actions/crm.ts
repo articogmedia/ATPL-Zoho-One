@@ -132,16 +132,16 @@ export async function updateLeadAction(input: unknown) {
 const reassignLeadSchema = z.object({ id, assignedTo: text(120).min(1) });
 
 export async function reassignLeadAction(input: unknown) {
-  return run(async () => {
+  return run<{ owner: string; status: string; taskCreated: boolean; taskWarning?: string; zohoUrl?: string }>(async () => {
     const user = await requireActionUser("leads");
     if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can reassign leads.");
     const p = reassignLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
     if (!(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
-    await crm().assignLead(p.id, p.assignedTo, user);
+    const assignment = await crm().assignLead(p.id, p.assignedTo, user);
     revalidateTag("leads");
     revalidateTag("users");
-    return { zohoUrl: zohoLeadUrl(p.id) };
+    return { ...assignment, zohoUrl: zohoLeadUrl(p.id) };
   });
 }
 
