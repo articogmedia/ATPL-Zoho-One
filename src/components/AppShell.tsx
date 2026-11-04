@@ -38,8 +38,8 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   }, [inactivityMinutes]);
 
   return (
-    <div className="flex min-h-dvh w-full bg-muted">
-      <aside className="hidden w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:flex">
+    <div className="flex min-h-dvh w-full max-w-full overflow-x-hidden bg-muted">
+      <aside className="hidden w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:h-dvh lg:overflow-y-auto">
         <Link href="/home" className="flex items-center gap-2 px-6 py-6">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
             <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" priority />
@@ -63,7 +63,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
         </nav>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col lg:ml-[240px]">
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
           <Link href="/home" className="flex min-w-0 items-center gap-2 lg:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
@@ -85,7 +85,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
             </form>
           </div>
         </header>
-        <main className="mx-auto min-w-0 w-full max-w-[1280px] flex-1 px-4 pb-28 pt-5 md:px-8 md:pb-10">
+        <main className="mx-auto min-w-0 w-full max-w-[1280px] flex-1 overflow-visible px-4 pb-28 pt-5 md:px-8 md:pb-10">
           <Suspense fallback={<div className="space-y-4" aria-label="Loading"><div className="h-8 w-48 animate-pulse rounded-lg bg-secondary" /><div className="h-32 animate-pulse rounded-xl bg-secondary" /></div>}>
             {children}
           </Suspense>

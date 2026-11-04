@@ -550,7 +550,7 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
     setFlaggedPhone(null);
     onCancel();
   };
-  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={close} /><form className="fixed inset-x-0 bottom-[var(--bottom-nav-height,4rem)] z-40 flex max-h-[calc(90dvh-var(--bottom-nav-height,4rem))] flex-col rounded-t-2xl border border-border bg-card shadow-2xl md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
+  return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={close} /><form className="fixed inset-x-0 bottom-[calc(64px+env(safe-area-inset-bottom))] z-40 flex max-h-[calc(100dvh-64px-env(safe-area-inset-bottom))] flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
     event.preventDefault();
     if (pending || !claimLeadSubmission(submittedRef)) return;
     const normalizedPhone = f.phone.replace(/\D/g, "").slice(-10);
