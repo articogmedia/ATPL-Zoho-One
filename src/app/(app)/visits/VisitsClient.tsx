@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { CalendarClock, CheckCircle2, FileText, MapPin, Play } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,17 @@ const TABS: { id: WorkTab; label: string }[] = [
 
 type Summary = { leads: number; calls: number; visits: number; quotes: number; won: number; conversion: number };
 export function VisitsClient({ user, visits, executives, today, performance }: { user: User; visits: Visit[]; executives: string[]; today: string; performance?: { week: Summary; month: Summary } }) {
+  const [taskFieldWarning, setTaskFieldWarning] = useState("");
+  useEffect(() => {
+    if (user.role !== "Manager") return;
+    void fetch("/api/admin/diagnostics", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((diagnostics: { customFields?: { taskMissing?: string[] } } | null) => {
+        const missing = diagnostics?.customFields?.taskMissing ?? [];
+        setTaskFieldWarning(missing.length ? `Missing Tasks custom fields: ${missing.join(", ")}` : "");
+      })
+      .catch(() => undefined);
+  }, [user.role]);
   const [tab, setTab] = useState<WorkTab>("assigned");
   const [exec, setExec] = useState("all");
   const isManager = user.role === "Manager";
@@ -30,6 +41,7 @@ export function VisitsClient({ user, visits, executives, today, performance }: {
 
   return (
     <div className="space-y-6">
+      {taskFieldWarning && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{taskFieldWarning}</div>}
       {performance && summary && <section aria-label="My Performance" className="rounded-xl border bg-card p-3 shadow-sm">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="font-semibold">My Performance</h2>

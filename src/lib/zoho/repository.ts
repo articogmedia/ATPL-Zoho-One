@@ -1,6 +1,6 @@
 import "server-only";
 import { cache } from "react";
-import { isAssignable, quoteTotals, todayIST, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
+import { canAdvanceLeadStatus, isAssignable, quoteTotals, todayIST, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -18,9 +18,19 @@ const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total
 
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products
-const taskRows = cache(() => cached("visits:tasks", SHORT, () =>
-  zohoList<ZTask>("Tasks", TASK_FIELDS, 1000),
-));
+const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "Description"];
+const taskRows = cache(() => cached("visits:tasks", SHORT, async () => {
+  try {
+    return await zohoList<ZTask>("Tasks", TASK_FIELDS, 1000);
+  } catch (error) {
+    console.error("[zoho] Tasks custom fields unavailable; retrying with standard fields", {
+      operation: "GET /Tasks",
+      code: error instanceof ZohoError ? error.code : undefined,
+      status: error instanceof ZohoError ? error.status : undefined,
+    });
+    return zohoList<ZTask>("Tasks", STANDARD_TASK_FIELDS, 1000);
+  }
+}));
 
 const users = cache(async function users(): Promise<User[]> {
   const mappedUsers = await cached("users", LONG, async () => {
@@ -52,6 +62,13 @@ const userByName = async (name: string) => {
   if (!u) throw new ZohoError(`No active Zoho user named "${name}"`);
   return u;
 };
+
+export async function advanceLead(leadId: string, currentStatus: Lead["status"], target: "Site Visit Scheduled" | "Quotation Sent"): Promise<boolean> {
+  if (!canAdvanceLeadStatus(currentStatus, target)) return false;
+  await zohoWrite("PUT", `/Leads/${leadId}`, { Lead_Status: WRITE_LEAD_STATUS[target] }, { trigger: ["workflow"] });
+  invalidate("leads");
+  return true;
+}
 const activeUserById = async (id: string) => {
   const expected = String(id).trim();
   return (await users()).find((u) => String(u.id).trim() === expected);
@@ -67,11 +84,20 @@ const queueOwnerId = async () => {
 
 const leads = cache(async function leads(): Promise<Lead[]> {
   return cached("leads", SHORT, async () => {
-    const [raw, assignable, tasks] = await Promise.all([
+    const [raw, assignable, tasks, allUsers] = await Promise.all([
       zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS),
       assignableIds(),
-      taskRows(),
+      taskRows().catch((error) => {
+        console.error("[zoho] Tasks unavailable while loading leads", {
+          operation: "GET /Tasks",
+          code: error instanceof ZohoError ? error.code : undefined,
+          status: error instanceof ZohoError ? error.status : undefined,
+        });
+        return [];
+      }),
+      users(),
     ]);
+    const salesExecutives = new Set(allUsers.filter((user) => user.role === "Sales Executive").map((user) => String(user.id).trim()));
     const followUps = new Map<string, { date: string; time: string }>();
     for (const task of tasks) {
       const leadId = task.Who_Id?.id;
@@ -81,7 +107,7 @@ const leads = cache(async function leads(): Promise<Lead[]> {
       }
     }
     return raw.map((z) => {
-      const lead = mapLead(z, assignable);
+      const lead = mapLead(z, assignable, salesExecutives);
       const followUp = followUps.get(lead.id);
       return followUp ? { ...lead, followUp: followUp.date, followUpTime: followUp.time } : lead;
     }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
@@ -152,12 +178,26 @@ export const zohoRepository: CrmRepository = {
     }
     invalidate("leads", "users");
     const assignable = await assignableIds();
-    const created = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${id}`, {
-      query: { fields: LEAD_FIELDS.join(",") },
-    });
-    const createdRecord = created?.data?.[0];
-    if (createdRecord) return mapLead(createdRecord, assignable);
-    throw new ZohoError(`Lead ${id} was created but could not be verified by GET /Leads/${id}`, 200, "CREATED_RECORD_NOT_FOUND", undefined, undefined, `GET /Leads/${id}`);
+    try {
+      const created = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${id}`, {
+        query: { fields: LEAD_FIELDS.join(",") },
+      });
+      const createdRecord = created?.data?.[0];
+      if (createdRecord) return mapLead(createdRecord, assignable, new Set((await users()).filter((user) => user.role === "Sales Executive").map((user) => String(user.id))));
+    } catch (error) {
+      console.error("[zoho] created lead verification failed; using verified creation input", {
+        leadId: id,
+        operation: `GET /Leads/${id}`,
+        status: error instanceof ZohoError ? error.status : undefined,
+        code: error instanceof ZohoError ? error.code : undefined,
+      });
+    }
+    return {
+      id, name: input.name.trim(), company: input.company.trim(), phone: input.phone,
+      area: input.area.trim(), source: input.source, status: owner ? ASSIGNED_STAGE : "Fresh Lead",
+      assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id ?? queueOwner,
+      remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [actor.name],
+    };
   },
 
   async assignLead(id, assignee, actor) {
@@ -165,24 +205,36 @@ export const zohoRepository: CrmRepository = {
     const current = await this.getLead(id);
     if (!current) throw new ZohoError("Lead not found", 404);
     const owner = await userByName(assignee);
-    const previousOwnerId = current.ownerId;
-    const previousStatus = current.status;
     const nextStatus = current.status === "Fresh Lead" ? ASSIGNED_STAGE : current.status;
     const record = {
       Owner: { id: owner.id },
       ...(nextStatus !== current.status ? { Lead_Status: WRITE_LEAD_STATUS[nextStatus] } : {}),
     };
-    try {
+    if (current.ownerId !== owner.id || record.Lead_Status) {
       try {
         await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
       } catch (error) {
         throw new ZohoError(`Lead assignment failed while updating owner/status: ${error instanceof Error ? error.message : "Zoho rejected the update"}`);
       }
-      try {
-        await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
-      } catch (error) {
-        throw new ZohoError(`Lead assignment failed while adding the note: ${error instanceof Error ? error.message : "Zoho rejected the note"}`);
-      }
+    }
+
+    const verified = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${id}`, {
+      query: { fields: LEAD_FIELDS.join(",") },
+    });
+    const persisted = verified?.data?.[0];
+    if (!persisted || String(persisted.Owner?.id ?? "") !== String(owner.id)) {
+      throw new ZohoError(`Lead assignment could not be verified in Zoho CRM: GET /Leads/${id}`, undefined, "ASSIGNMENT_NOT_VERIFIED", undefined, undefined, `GET /Leads/${id}`);
+    }
+
+    let taskCreated = false;
+    let taskWarning: string | undefined;
+    const existingTasks = await zoho<{ data?: ZTask[] }>("GET", "/Tasks", {
+      query: { fields: TASK_FIELDS.join(","), page: 1, per_page: 200, who_id: id, sort_by: "Created_Time", sort_order: "desc" },
+    }).catch(() => null);
+    const hasAssignmentTask = (existingTasks?.data ?? []).some((task) =>
+      task.Subject === "Call new lead" && String(task.Owner?.id ?? "") === String(owner.id),
+    );
+    if (!hasAssignmentTask) {
       try {
         await zohoWrite("POST", "/Tasks", {
           Subject: "Call new lead",
@@ -191,23 +243,32 @@ export const zohoRepository: CrmRepository = {
           Owner: { id: owner.id },
           Who_Id: { id },
         });
+        taskCreated = true;
       } catch (error) {
-        throw new ZohoError(`Lead assignment failed while creating the task: ${error instanceof Error ? error.message : "Zoho rejected the task"}`);
+        taskWarning = error instanceof ZohoError
+          ? `Follow-up task creation failed (${error.operation ?? "POST /Tasks"}${error.code ? `: ${error.code}` : ""}${error.field ? `, field: ${error.field}` : ""})`
+          : "Follow-up task creation failed.";
+        console.error("[zoho] reassignment follow-up task failed", {
+          leadId: id, ownerId: owner.id, operation: "POST /Tasks",
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+          field: error instanceof ZohoError ? error.field : undefined,
+        });
       }
+    }
+
+    try {
+      await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
     } catch (error) {
-      try {
-        await zohoWrite("PUT", `/Leads/${id}`, {
-          Owner: previousOwnerId ? { id: previousOwnerId } : undefined,
-          Lead_Status: WRITE_LEAD_STATUS[previousStatus],
-        }, { trigger: ["workflow"] });
-      } catch (rollbackError) {
-        throw new ZohoError(
-          `${error instanceof Error ? error.message : "Lead assignment failed"}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : "unknown error"}`,
-        );
-      }
-      throw error;
+      console.error("[zoho] reassignment note failed", {
+        leadId: id, operation: "POST /Notes",
+        status: error instanceof ZohoError ? error.status : undefined,
+        code: error instanceof ZohoError ? error.code : undefined,
+        field: error instanceof ZohoError ? error.field : undefined,
+      });
     }
     invalidate("leads", "users", "visits");
+    return { owner: owner.name, status: mapLead(persisted, await assignableIds()).status, taskCreated, taskWarning };
   },
 
   async fixAssignedLeads(actor) {
@@ -377,6 +438,7 @@ export const zohoRepository: CrmRepository = {
       Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
     });
     await addNote(lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`);
+    await advanceLead(lead.id, lead.status, "Quotation Sent");
     invalidate("quotes", "leads");
     return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total: totals.total, status: "Draft", date: new Date().toISOString().slice(0, 10) };
   },
@@ -413,6 +475,7 @@ export const zohoRepository: CrmRepository = {
       });
     }
     await addNote(lead.id, "Work scheduled", `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date} (by ${actor.name})`);
+    if (input.isVisit) await advanceLead(lead.id, lead.status, "Site Visit Scheduled");
     invalidate("visits");
   },
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { financialYear, isAssignable, nextOfferNo, normalizePhone, todayIST } from "@/lib/domain";
+import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, todayIST } from "@/lib/domain";
 import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
@@ -10,6 +10,20 @@ describe("offer numbering", () => {
     expect(financialYear("2026-10-29")).toBe("26-27");
     expect(financialYear("2027-03-31")).toBe("26-27");
     expect(financialYear("2027-04-01")).toBe("27-28");
+  });
+
+  describe("mock lead pipeline advancement", () => {
+    it("advances visits and quotations forward only", () => {
+      expect(canAdvanceLeadStatus("Assigned to Sales", "Site Visit Scheduled")).toBe(true);
+      expect(canAdvanceLeadStatus("Site Visit Scheduled", "Quotation Sent")).toBe(true);
+      expect(canAdvanceLeadStatus("Quotation Sent", "Site Visit Scheduled")).toBe(false);
+    });
+
+    it("never changes terminal leads", () => {
+      for (const status of ["Won", "Lost Lead", "Junk Lead", "Not Qualified"] as const) {
+        expect(canAdvanceLeadStatus(status, "Quotation Sent")).toBe(false);
+      }
+    });
   });
   it("continues from the highest number in the same financial year", () => {
     expect(nextOfferNo(["225/26-27", "227/26-27", "226/26-27"], "2026-10-29")).toBe("228/26-27");
@@ -75,6 +89,15 @@ describe("zoho mapping", () => {
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).assignedTo).toBeNull();
     expect(mapLead({ ...base, Owner: { id: "queue-1", name: "Queue Owner" } }, assignable).assignedTo).toBeNull();
     expect(mapLead({ ...base, Owner: { id: "u2", name: "Divya" } }, execs).createdOn).toBe("2026-10-25");
+  });
+  it("keeps manager-owned Fresh Leads in the fresh queue when sales executives are supplied", () => {
+    const salesExecutives = new Set(["exec-1"]);
+    const base = { id: "fresh-manager", Last_Name: "Rao", Lead_Status: "Fresh Lead", Created_Time: "2026-10-25T10:15:00+05:30" };
+    const managerOwned = mapLead({ ...base, Owner: { id: "manager-1", name: "Manager" } }, new Set(["manager-1"]), salesExecutives);
+    const executiveOwned = mapLead({ ...base, Owner: { id: "exec-1", name: "Executive" } }, new Set(["exec-1"]), salesExecutives);
+    expect(managerOwned.assignedTo).toBeNull();
+    expect(managerOwned.assignedToId).toBeUndefined();
+    expect(executiveOwned.assignedTo).toBe("Executive");
   });
   it("matches portal users to Zoho users by normalized email", () => {
     const portal = { username: "pavan", name: "Pavan", role: "Sales" as const, email: " PAVAN@ATPL.COM ", zohoUserId: "fallback", passwordEnv: "P" };

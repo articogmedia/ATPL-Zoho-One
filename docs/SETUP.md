@@ -101,3 +101,5 @@ leads from ad forms should be owned by that user (Setup → Automation → Assig
 9. Submit a test Meta and Google lead form → appear in Fresh Leads with the right source label.
 10. Kill the network / use a wrong token → users see a friendly error, no stack traces or secrets.
 11. Open `/api/admin/diagnostics` as a Manager and confirm the queue owner resolves and all expected executives are mapped.
+12. Mobile smoke (390x844): add a lead, confirm it appears in All Leads, assign it, log a call, schedule a site visit, create a quote, and confirm the lead status advances to `Quotation Sent`.
+13. Test the supplied `docs/238 - OFFER.xlsx` layout in the PDF preview; confirm `NNN/YY-YY` offer numbers and server-side Zoho prices.

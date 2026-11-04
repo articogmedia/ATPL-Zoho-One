@@ -1,5 +1,11 @@
-import { quoteTotals, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
+import { canAdvanceLeadStatus, quoteTotals, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
+
+export function advanceMockLeadStatus(lead: Lead, target: "Site Visit Scheduled" | "Quotation Sent"): boolean {
+  if (!canAdvanceLeadStatus(lead.status, target)) return false;
+  lead.status = target;
+  return true;
+}
 import type { CrmRepository, LogCallInput } from "./repository";
 import { isAssignable } from "@/lib/domain";
 import { env } from "@/lib/env";
@@ -44,6 +50,7 @@ export const mockRepository: CrmRepository = {
     if (lead.status === "Fresh Lead") lead.status = ASSIGNED_STAGE;
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
     note(id, actor.name, `Assigned to ${assignee} by ${actor.name}`);
+    return { owner: assignee, status: lead.status, taskCreated: true };
   },
   async fixAssignedLeads(actor) {
     if (actor.role !== "Manager") throw new Error("Only managers can fix assigned leads.");
@@ -112,6 +119,7 @@ export const mockRepository: CrmRepository = {
     };
     state.quotes.unshift(q);
     note(lead.id, actor.name, `Quotation ${q.offerNo} created`);
+    advanceMockLeadStatus(lead, "Quotation Sent");
     return q;
   },
 
@@ -127,6 +135,7 @@ export const mockRepository: CrmRepository = {
       nextAction: input.nextAction, followUp: "", notes: "", done: false,
     });
     note(lead.id, actor.name, `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date}`);
+    if (input.isVisit) advanceMockLeadStatus(lead, "Site Visit Scheduled");
   },
   async updateVisit(id, p) {
     const v = state.visits.find((x) => x.id === id);

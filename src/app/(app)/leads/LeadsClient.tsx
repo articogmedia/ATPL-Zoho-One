@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
@@ -35,7 +36,9 @@ const TABS: { id: LeadTab; label: string }[] = [
 ];
 
 export function LeadsClient({ user, leads, executives, owners, canAssign, fixableLeads }: Props) {
+  const router = useRouter();
   const [leadRows, setLeadRows] = useState(leads);
+  const [justAdded, setJustAdded] = useState<Lead | null>(null);
   const isExec = user.role === "Sales Executive";
   const [tab, setTab] = useState<LeadTab>(user.role === "Manager" && leadsForTab(user, leads, "fresh").length === 0 ? "all" : isExec ? "mine" : "fresh");
   const tabListRef = useRef<HTMLDivElement>(null);
@@ -51,9 +54,15 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
   const [selected, setSelected] = useState<Lead | null>(null);
   const [action, setAction] = useState<LeadAction>(null);
 
+  const mergedLeadRows = useMemo(() => {
+    if (!justAdded) return leadRows;
+    return [justAdded, ...leadRows.filter((lead) => lead.id !== justAdded.id)];
+  }, [justAdded, leadRows]);
+
   useEffect(() => {
     setLeadRows(leads);
-  }, [leads]);
+    if (justAdded && leads.some((lead) => lead.id === justAdded.id)) setJustAdded(null);
+  }, [leads, justAdded]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
@@ -86,8 +95,8 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
   }, [isExec, leadRows, pendingAddedId, user.role]);
 
   const filtered = useMemo(
-    () => leadsForTab(user, leadRows, tab, debouncedSearch, source, filters),
-    [user, leadRows, tab, debouncedSearch, source, filters],
+    () => leadsForTab(user, mergedLeadRows, tab, debouncedSearch, source, filters),
+    [user, mergedLeadRows, tab, debouncedSearch, source, filters],
   );
   const pageCount = Math.max(1, Math.ceil(filtered.length / 25));
   const visible = filtered.slice((page - 1) * 25, page * 25);
@@ -120,13 +129,14 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         {availableTabs.map((item) => (
           <button
             key={item.id}
+            id={`lead-tab-${item.id}`}
             data-tab={item.id}
             role="tab"
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
             className={`h-11 shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:h-10 ${tab === item.id ? "bg-primary text-primary-foreground max-[480px]:bg-white max-[480px]:text-blue-700 max-[480px]:shadow-sm" : "bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground max-[480px]:bg-slate-100 max-[480px]:text-slate-600"}`}
           >
-            <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
+            <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.id === "assigned" ? "Assigned" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>
         ))}
       </div>
@@ -155,10 +165,13 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
 
       {adding && <AddLead onAdded={(lead) => {
         setLeadRows((current) => current.some((item) => item.id === lead.id) ? current : [lead, ...current]);
+        setJustAdded(lead);
         setPendingAddedId(lead.id);
         setTab(leadBucketForTab(lead));
         setAdding(false);
         setHighlightedLeadId(lead.id);
+        router.refresh();
+        window.setTimeout(() => router.refresh(), 2500);
       }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
@@ -335,7 +348,11 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
             ? await deleteLeadAction({ id: action.lead.id })
             : await logCallAction({ leadId: action.lead.id, outcome, remarks, ...(followUp ? { followUp, followUpTime } : {}) });
       if (!result.ok) { toast.error(result.error); return; }
-      if (action.type === "reassign") onAssigned(assignee);
+      if (action.type === "reassign") {
+        const assignment = result.data as { owner?: string; taskWarning?: string } | undefined;
+        if (assignment?.taskWarning) toast.warning(`${assignment.taskWarning}. The owner update is saved.`);
+        onAssigned(assignment?.owner ?? assignee);
+      }
       else {
         toast.success(action.type === "delete" ? "Lead deleted" : "Lead updated");
         const status: LeadStatus = outcome === "Connected" ? "Contacted"
@@ -502,7 +519,8 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
   const [forceCreate, setForceCreate] = useState(false);
   const [pending, start] = useTransition();
   const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
-  const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF({ ...f, [key]: event.target.value });
+  const set = (key: keyof typeof f) => (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setF((prev) => ({ ...prev, [key]: event.target.value }));
   return <><button type="button" className="fixed inset-0 z-30 bg-black/40 md:hidden" aria-label="Close add lead form" onClick={onCancel} /><form className="fixed inset-x-0 bottom-0 z-40 grid max-h-[90dvh] gap-2 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl sm:grid-cols-2 md:static md:max-h-none md:overflow-visible md:rounded-xl md:p-4 md:shadow-sm" onSubmit={(event) => {
     event.preventDefault();
     if (pending) return;
@@ -512,7 +530,10 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
       phone: /^\d{10}$/.test(normalizedPhone) ? undefined : "Enter a valid 10-digit mobile number.",
     };
     setErrors(nextErrors);
-    if (nextErrors.name || nextErrors.phone) return;
+    if (nextErrors.name || nextErrors.phone) {
+      toast.error(nextErrors.name || nextErrors.phone || "Enter a valid lead.");
+      return;
+    }
     start(async () => {
       const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedTo: f.assignedTo || null, forceCreate });
       if (result.ok && result.data) onAdded(result.data);
@@ -520,7 +541,7 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
     });
   }}>
     <div className="flex items-center justify-between sm:col-span-2 md:hidden"><h2 className="font-semibold">Add lead</h2><Button type="button" variant="ghost" size="icon" className="h-10 w-10" aria-label="Close add lead form" onClick={onCancel}><X /></Button></div>
-    <div><input className={`${fieldClass} h-10 text-sm`} aria-invalid={!!errors.name} aria-label="Lead name required" placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
+    <div><input className={`${fieldClass} h-10 text-sm`} autoComplete="off" aria-invalid={!!errors.name} aria-label="Lead name required" placeholder="Lead name *" value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Company" value={f.company} onChange={set("company")} maxLength={160} />
     <div><input className={`${fieldClass} h-10 text-sm`} aria-invalid={!!errors.phone} aria-label="Mobile number required" placeholder="Mobile number *" value={f.phone} onChange={set("phone")} inputMode="tel" required pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
     <input className={`${fieldClass} h-10 text-sm`} placeholder="Area" value={f.area} onChange={set("area")} maxLength={120} />

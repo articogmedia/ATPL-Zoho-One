@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { Suspense, useEffect, type ReactNode } from "react";
 import { BarChart3, ClipboardList, FileText, LogOut, MapPin } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
-import { logout } from "@/app/actions/auth";
+import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
 
 const NAV = [
@@ -16,7 +16,7 @@ const NAV = [
   { s: "performance" as Section, to: "/performance", label: "Performance", short: "Stats", icon: BarChart3 },
 ];
 
-export function AppShell({ user, children }: { user: { name: string; role: Role }; children: ReactNode }) {
+export function AppShell({ user, inactivityMinutes = 30, children }: { user: { name: string; role: Role }; inactivityMinutes?: number; children: ReactNode }) {
   const path = usePathname();
   const items = NAV.filter((n) => canAccess(user.role, n.s));
 
@@ -24,7 +24,9 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
     let timer: number | undefined;
     const resetTimer = () => {
       if (timer !== undefined) window.clearTimeout(timer);
-      timer = window.setTimeout(() => { void logout(); }, 30 * 60 * 1000);
+      timer = window.setTimeout(() => {
+        void logoutExpired();
+      }, inactivityMinutes * 60_000);
     };
     const events = ["pointerdown", "keydown", "touchstart", "scroll"] as const;
     events.forEach((event) => window.addEventListener(event, resetTimer, { passive: true }));
@@ -33,7 +35,7 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
       if (timer !== undefined) window.clearTimeout(timer);
       events.forEach((event) => window.removeEventListener(event, resetTimer));
     };
-  }, []);
+  }, [inactivityMinutes]);
 
   return (
     <div className="flex min-h-dvh w-full bg-muted">
@@ -90,7 +92,7 @@ export function AppShell({ user, children }: { user: { name: string; role: Role 
       </div>
 
       {items.length > 0 && (
-        <nav className="fixed inset-x-0 bottom-0 z-30 grid border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0,1fr))` }}>
+        <nav className="fixed inset-x-0 bottom-0 z-30 grid min-h-16 border-t bg-card pb-[env(safe-area-inset-bottom)] md:hidden" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0,1fr))` }}>
           {items.map((n) => (
             <Link key={n.to} href={n.to}
               prefetch

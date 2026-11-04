@@ -46,6 +46,15 @@ export type Lead = {
   followUpTime?: string;
 };
 
+export function canAdvanceLeadStatus(current: LeadStatus, target: "Site Visit Scheduled" | "Quotation Sent"): boolean {
+  if (["Won", "Lost Lead", "Junk Lead", "Not Qualified"].includes(current)) return false;
+  const rank: Partial<Record<LeadStatus, number>> = {
+    "Fresh Lead": 0, "Attempted to Contact": 1, "Not Contacted": 1, Contacted: 2,
+    "Pre-Qualified": 3, "Assigned to Sales": 4, "Site Visit Scheduled": 5, "Quotation Sent": 6, Won: 99,
+  };
+  return (rank[current] ?? 0) <= (rank[target] ?? 99);
+}
+
 export const leadLabel = (l: Lead) => (l.company ? `${l.name} (${l.company})` : l.name);
 export const normalizePhone = (value: string): string => value.replace(/\D/g, "").slice(-10);
 

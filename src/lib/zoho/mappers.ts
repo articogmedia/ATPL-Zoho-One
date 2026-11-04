@@ -69,10 +69,13 @@ export function normalizeStatus(raw?: string): LeadStatus {
   return READ_LEAD_STATUS[(raw ?? "").trim().toLowerCase()] ?? "Fresh Lead";
 }
 
-export function mapLead(z: ZLead, assignable: ReadonlySet<string>): Lead {
+export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutives?: ReadonlySet<string>): Lead {
   const ownerName = z.Owner?.name ?? "";
   const zohoOwnerId = ownerId(z.Owner?.id);
-  const isAssignableOwner = !!zohoOwnerId && assignable.has(zohoOwnerId);
+  const status = normalizeStatus(z.Lead_Status);
+  const isSalesOwnedFreshLead = status === "Fresh Lead" && !!zohoOwnerId && !!salesExecutives && salesExecutives.has(zohoOwnerId);
+  const isAssignableOwner = !!zohoOwnerId && assignable.has(zohoOwnerId) &&
+    (!salesExecutives || status !== "Fresh Lead" || isSalesOwnedFreshLead);
   return {
     id: String(z.id).trim(),
     name: [z.First_Name, z.Last_Name].filter(Boolean).join(" ").trim() || "(no name)",
@@ -81,7 +84,7 @@ export function mapLead(z: ZLead, assignable: ReadonlySet<string>): Lead {
     area: z.City ?? "",
     address: z.Street ?? "",
     source: normalizeSource(z.Lead_Source),
-    status: normalizeStatus(z.Lead_Status),
+    status,
     // Ownership is the assignment: an executive owner means "assigned", anyone else means the fresh queue.
     assignedTo: isAssignableOwner ? ownerName : null,
     assignedToId: isAssignableOwner ? zohoOwnerId : undefined,
