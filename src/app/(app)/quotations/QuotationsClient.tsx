@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import Image from "next/image";
 import { ArrowLeft, Eye, MessageCircle, Plus, Printer, Search, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -219,13 +220,13 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
   const date = `${datePart("day")}.${datePart("month")}.${datePart("year")}`;
   const hasDiscount = items.some((item) => (item.discount ?? 0) > 0);
-  const partA = items.filter((item) => !/^B\s*-\s*/i.test(item.model));
-  const partB = items.filter((item) => /^B\s*-\s*/i.test(item.model));
   const basicAmount = (item: Item) => item.qty * item.price;
   const lineAmount = (item: Item) => basicAmount(item) - (item.discount ?? 0);
-  const sectionTotal = (section: Item[]) => section.reduce((sum, item) => sum + lineAmount(item), 0);
-  const stripPartB = (model: string) => model.replace(/^B\s*-\s*/i, "");
-  const equipmentUnits = partA.reduce((sum, item) => sum + item.qty, 0);
+  const validTillDate = new Date();
+  validTillDate.setDate(validTillDate.getDate() + 30);
+  const validTill = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric",
+  }).format(validTillDate);
   const msg = [
     `Dear Sir, please find our offer ${offerNo} dated ${date} for ${customer}.`,
     `Sub: ${subject}`, "",
@@ -243,30 +244,40 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
         <Button variant="outline" className="h-12" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
       </div>
       <article className="print-area offer-document mx-auto max-w-3xl rounded-xl bg-card p-5 text-[11px] leading-snug shadow-sm sm:p-8">
-        <header className="border-b-2 border-slate-800 pb-3 text-center">
-          <div className="text-xl font-bold uppercase tracking-wide">{COMPANY.name}</div>
-          <div className="mt-1 text-[10px]">{COMPANY.address}</div>
-          <div className="text-[10px]">{COMPANY.contact}</div>
-          <div className="mt-1 text-[10px] font-semibold">GSTIN {COMPANY.gstin}</div>
-        </header>
-        <div className="my-4 grid grid-cols-2 gap-4 border-b border-slate-300 pb-3">
-          <label className="font-semibold">OFFER REF
-            <input aria-label="Offer reference" className="mt-1 block h-9 w-full rounded border border-input px-2 text-center font-medium" pattern="\d{3}/\d{2}-\d{2}" value={offerNo} onChange={(e) => setOfferNo(e.target.value)} maxLength={8} />
-          </label>
-          <div><span className="font-semibold">DATE</span><div className="mt-1 flex h-9 items-center rounded border border-input px-2">{date}</div></div>
-          <div className="col-span-2"><span className="font-semibold">CLIENT</span><div className="mt-1 rounded border border-input px-2 py-2">
-            <div>{lead.name}{lead.company ? `, ${lead.company}` : ""}</div>
-            <div>{[lead.address || "", lead.area || ""].filter(Boolean).join(", ")}{lead.area || lead.address ? ", Hyderabad" : ""}</div>
-          </div></div>
-        </div>
-
-        <section className="offer-no-break mb-3">
-          <div className="font-bold">EQUIPMENT REQUIRED</div>
-          <div className="mt-1 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1">
-            {partA.map((item, index) => <div key={`${item.model}-${index}`} className="contents"><span>{item.model}</span><span className="font-semibold">{item.qty} {item.unit}</span></div>)}
+        <header className="flex items-start justify-between gap-4 border-b border-slate-300 pb-4">
+          <Image src="/brand/atpl-logo.png" alt="Air Trendz" width={150} height={60} className="h-auto w-36 object-contain" priority />
+          <div className="text-right">
+            <div className="text-lg font-bold">Air Trendz Pvt. Ltd.</div>
+            <div className="mt-1 text-[10px]">{COMPANY.address}</div>
+            <div className="text-[10px]">{COMPANY.contact}</div>
+            <div className="mt-1 text-[10px] font-semibold">GSTIN - {COMPANY.gstin}</div>
           </div>
-          <div className="mt-2 flex justify-end gap-3 border-t pt-1 font-bold"><span>Total Units</span><span>{equipmentUnits}</span></div>
-        </section>
+        </header>
+        <div className="grid grid-cols-2 gap-4 py-4">
+          <div className="offer-no-break space-y-1 border-r border-slate-300 pr-4">
+            <div className="text-base font-bold">OFFER</div>
+            <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
+              <input aria-label="Offer reference" className="h-8 rounded border border-input px-2 font-medium" pattern="\d{3}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />
+            </label>
+            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Stage</span><span>Draft</span></div>
+            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Valid Till</span><span>{validTill}</span></div>
+            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Date</span><span>{date}</span></div>
+            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Sales Person</span><span>{COMPANY.signatory}</span></div>
+            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Amount</span><span>{formatINR(t.subtotal)}</span></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="offer-no-break">
+              <div className="font-bold">Bill To</div>
+              <div className="mt-1">{lead.company || lead.name}</div>
+              <div>{lead.address || lead.area || ""}</div>
+            </div>
+            <div className="offer-no-break">
+              <div className="font-bold">Ship To</div>
+              <div className="mt-1">{lead.company || lead.name}</div>
+              <div>{lead.address || lead.area || ""}</div>
+            </div>
+          </div>
+        </div>
 
         <section>
           <p>Dear Sir,</p>
@@ -279,47 +290,48 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
               className="min-w-0 flex-1 border-0 bg-transparent p-0 font-semibold outline-none print:border-0 print:outline-none"
             />
           </div>
-          <p className="mt-2 text-justify">We thank you very much for your enquiry. In connection with subsequent discussions had with you, we are pleased to submit herewith our offer for the subject works. Our detailed Bill of Quantities is as follows.</p>
+          <p className="mt-2 text-justify">We thank you very much for your enquiry. We are pleased to submit herewith our offer. Our detailed Bill of quantities are as follows.</p>
         </section>
 
-        {[
-          { title: "BOQ - PART A - EQUIPMENT SUPPLY", items: partA, total: sectionTotal(partA), tax: "GST @ 18% included" },
-          { title: "BOQ - PART B - ANCILLARY WORKS", items: partB, total: sectionTotal(partB), tax: "GST @ 18% EXTRA" },
-        ].map((section) => <section key={section.title} className="mt-4">
-          <h2 className="mb-1 font-bold">{section.title}</h2>
-          <div className="overflow-x-auto">
-            <table className="border border-slate-800 text-[10px]">
-              <thead><tr>{["S.No", "Description", "Unit", "Qty", "Basic Rate (Rs)", ...(hasDiscount ? ["Discount"] : []), "Amount (Rs)"].map((heading) => <th key={heading} className="border border-slate-800 px-1 py-1.5 text-center">{heading}</th>)}</tr></thead>
-              <tbody>{section.items.map((item, index) => {
-                const displayName = section.title.includes("PART B") ? stripPartB(item.model) : item.model;
-                return <tr key={`${item.model}-${index}`}>
-                  <td className="border border-slate-800 px-1 py-2 text-center">{index + 1}</td>
-                  <td className="border border-slate-800 px-1 py-2"><span className="font-medium">{displayName}</span>{item.description && <div className="mt-1 text-[9px] text-slate-600">{item.description}</div>}</td>
-                  <td className="border border-slate-800 px-1 py-2 text-center">{item.unit}</td>
-                  <td className="border border-slate-800 px-1 py-2 text-right">{item.qty}</td>
-                  <td className="border border-slate-800 px-1 py-2 text-right">{formatINR(item.price)}</td>
-                  {hasDiscount && <td className="border border-slate-800 px-1 py-2 text-right">{formatINR(item.discount ?? 0)}</td>}
-                  <td className="border border-slate-800 px-1 py-2 text-right">{formatINR(lineAmount(item))}</td>
-                </tr>;
-              })}</tbody>
-            </table>
-          </div>
-          <div className="offer-no-break border-x border-b border-slate-800 text-right">
-            <div className="grid grid-cols-[1fr_auto] gap-8 px-2 py-1"><span>Basic Sub Total - {section.title.includes("PART A") ? "Part A" : "Part B"}</span><span>{formatINR(section.items.reduce((sum, item) => sum + basicAmount(item), 0))}</span></div>
-            <div className="grid grid-cols-[1fr_auto] gap-8 px-2 py-1"><span>{section.tax}</span><span>{formatINR(0)}</span></div>
-            <div className="grid grid-cols-[1fr_auto] gap-8 border-t border-slate-800 px-2 py-1 font-bold"><span>{section.title.includes("PART A") ? "Total For PART - A with taxes" : "TOTAL PART B"}</span><span>{formatINR(section.total)}</span></div>
-          </div>
-        </section>)}
+        <table className="mt-4 w-full border-collapse text-[10px]">
+          <thead><tr className="bg-[#4f94cd] text-white">
+            <th className="px-2 py-2 text-left">Item &amp; Description</th>
+            <th className="px-2 py-2 text-right">List Price</th>
+            <th className="px-2 py-2 text-right">Qty</th>
+            {hasDiscount && <th className="px-2 py-2 text-right">Discount</th>}
+            <th className="px-2 py-2 text-right">Amount</th>
+          </tr></thead>
+          <tbody>{items.map((item, index) => (
+            <tr key={`${item.model}-${index}`} className="border-b border-slate-300">
+              <td className="px-2 py-2"><span className="font-semibold">{index + 1}. {item.model}</span>{item.description && <div className="mt-1 text-slate-600">{item.description}</div>}</td>
+              <td className="px-2 py-2 text-right">{formatINR(item.price)}</td>
+              <td className="px-2 py-2 text-right">{item.qty} {item.unit}</td>
+              {hasDiscount && <td className="px-2 py-2 text-right">{formatINR(item.discount ?? 0)}</td>}
+              <td className="px-2 py-2 text-right">{formatINR(lineAmount(item))}</td>
+            </tr>
+          ))}</tbody>
+        </table>
 
-        <div className="offer-no-break mt-4 grid grid-cols-[1fr_auto] gap-8 border border-slate-800 px-2 py-2 font-bold"><span>TOTAL PART A + B</span><span>{formatINR(sectionTotal(partA) + sectionTotal(partB))}</span></div>
+        <div className="offer-no-break mt-4 grid grid-cols-2 gap-8">
+          <div>
+            <div className="font-bold">Authority Signature</div>
+            <div className="mt-5">for {COMPANY.name}</div>
+            <div>{COMPANY.signatory}</div>
+            <div>{COMPANY.phones}</div>
+          </div>
+          <div className="text-right">
+            <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Sub Total</span><span>{formatINR(t.subtotal)}</span></div>
+            <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>GST</span><span>{formatINR(0)}</span></div>
+            <div className="mt-1 grid grid-cols-[1fr_auto] gap-6 bg-slate-500 px-2 py-2 font-bold text-white"><span>Grand Total</span><span>{formatINR(t.subtotal)}</span></div>
+          </div>
+        </div>
 
         <section className="mt-4 space-y-2">
-          <div className="offer-no-break"><span className="font-bold">NOTE</span><p>Pls note that the above quantities are tentative only, and final billing shall be based on actual measurements.</p></div>
+          <div className="offer-no-break"><span className="font-bold">NOTE</span><p>Quantities are tentative and final billing will be based on actual measurements.</p></div>
           <div className="offer-no-break"><div className="font-bold">ITEMS EXCLUDED</div><ol className="list-decimal pl-5"><li>Main incoming electrical cabling &amp; civil works such as core cutting, wall chipping in client scope</li><li>In case of Cat walk requirement for outdoor unit, the same shall be in client scope</li></ol></div>
           <div className="offer-no-break"><div className="font-bold">TERMS &amp; CONDITIONS</div>
             <dl className="grid grid-cols-[90px_1fr] gap-x-2">
-              <dt>Validity</dt><dd>30 days from the date of this offer</dd>
-              <dt>Taxes</dt><dd>Included As mentioned above / GST @ 18% EXTRA as applicable to Part B</dd>
+              <dt>Validity</dt><dd>30 days</dd>
               <dt>Delivery</dt><dd>1-2 weeks from the date of order</dd>
               <dt>Payment Terms</dt><dd>100% advance for equipment; 60% advance for Part B and 40% on completion</dd>
             </dl>
@@ -327,7 +339,6 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
           <p>We hope our offer is in line with your requirement and look forward to receive your valued order.</p>
           <p>Thanking you and assuring you of our best attention at all times, we remain,</p>
         </section>
-        <div className="offer-no-break mt-6 text-right"><div>very truly yours</div><div className="mt-4">for {COMPANY.name}</div><div className="mt-8 font-semibold">{COMPANY.signatory}</div><div>{COMPANY.phones}</div></div>
       </article>
     </div>
   );
