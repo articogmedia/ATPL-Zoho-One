@@ -45,7 +45,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
             <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" priority />
           </span>
           <div>
-            <div className="text-lg font-bold leading-tight">ATPL Sales Portal</div>
+            <div className="whitespace-nowrap text-lg font-bold leading-tight">ATPL Sales Portal</div>
             <div className="text-xs opacity-75">Air Trendz Pvt Ltd</div>
           </div>
         </Link>
@@ -64,21 +64,19 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex min-w-0 items-center gap-2 md:hidden">
+        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
+          <Link href="/home" className="flex min-w-0 items-center gap-2 lg:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
                 <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" />
               </span>
-              <span className="truncate text-sm font-semibold">ATPL Sales Portal</span>
-            </div>
-            <div className="hidden min-w-0 text-right md:block">
+            <span className="max-[379px]:hidden truncate text-sm font-semibold">ATPL Sales Portal</span>
+          </Link>
+          <div className="ml-auto flex shrink-0 items-center gap-3">
+            <div className="hidden text-right leading-tight lg:block">
               <div className="truncate text-sm font-semibold">{user.name}</div>
               <div className="truncate text-[11px] text-muted-foreground">{user.role}</div>
             </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <div className="text-right leading-tight md:hidden">
+            <div className="text-right leading-tight lg:hidden">
               <div className="truncate text-sm font-medium">{user.name}</div>
               <div className="truncate text-xs text-slate-500">{user.role}</div>
             </div>

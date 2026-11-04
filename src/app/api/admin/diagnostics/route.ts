@@ -75,7 +75,6 @@ export async function GET() {
       const withoutPrice = rows.filter((row) => row.Unit_Price === undefined || row.Unit_Price === null || row.Unit_Price === "").length;
       return {
         fetched: rows.length,
-        moreRecords: response?.info?.more_records === true,
         inactive,
         withoutPrice,
         sample: rows.slice(0, 3),

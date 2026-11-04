@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { canAccess, type Section, type User } from "@/lib/domain";
 import { crm } from "@/lib/crm";
 import { readSession } from "./session";
-import { STATIC_USERS, portalRole, staticUserAsPortalUser } from "./users";
+import { STATIC_USERS, portalRole, resolvePortalUserZohoId, staticUserAsPortalUser } from "./users";
 
 export class ForbiddenError extends Error {
   constructor(message = "You are not allowed to do that.") {
@@ -20,8 +20,31 @@ export async function currentUser(): Promise<User | null> {
   const s = await readSession();
   if (!s) return null;
   const staticUser = STATIC_USERS.find((u) => u.username === s.username && portalRole(u.role) === s.role);
-  if (staticUser) return staticUserAsPortalUser(staticUser, s.zohoUserId);
-  const live = (await crm().listUsers()).find((u) => u.id === s.uid);
+  if (staticUser) {
+    let zohoUserId = staticUser.zohoUserId?.trim() ?? "";
+    try {
+      const users = await crm().listUsers();
+      zohoUserId = resolvePortalUserZohoId(staticUser, users);
+    } catch (error) {
+      console.error("[auth] Could not resolve sandbox CRM user; using configured user id", {
+        username: staticUser.username,
+        configuredId: zohoUserId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return staticUserAsPortalUser(staticUser, zohoUserId);
+  }
+  let liveUsers;
+  try {
+    liveUsers = await crm().listUsers();
+  } catch (error) {
+    console.error("[auth] Could not validate live Zoho user", {
+      uid: s.uid,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+  const live = liveUsers.find((u) => u.id === s.uid);
   return live ?? null;
 }
 

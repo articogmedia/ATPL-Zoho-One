@@ -48,7 +48,7 @@ describe("Zoho products catalogue", () => {
 
     const products = await zohoRepository.listProducts();
 
-    expect(products.map((product) => product.model)).toEqual(["Cassette AC", "Split AC"]);
+    expect(products.map((product) => product.model)).toEqual(["Split AC", "Cassette AC", ""]);
     expect(list.mock.calls.map((call) => call[1])).toEqual([
       ["Product_Name", "Product_Code", "Description", "Unit_Price", "Usage_Unit", "Product_Active"],
       ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],

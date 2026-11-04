@@ -417,9 +417,8 @@ export const zohoRepository: CrmRepository = {
             sort_order: "asc",
           });
           const products = raw
-            .filter((product) => product.Product_Active !== false && String(product.Product_Name ?? "").trim().length > 0)
-            .map(mapProduct)
-            .sort((a, b) => a.model.localeCompare(b.model));
+            .filter((product) => product.Product_Active !== false)
+            .map(mapProduct);
           if (products.length === 0) invalidate("products");
           return products;
         } catch (error) {
@@ -435,8 +434,6 @@ export const zohoRepository: CrmRepository = {
             code,
             field,
           });
-          const invalidField = /invalid/i.test(code ?? "") || Boolean(field);
-          if (status !== 400 && !invalidField) throw error;
         }
       }
       throw lastError;

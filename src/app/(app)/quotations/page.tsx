@@ -1,6 +1,7 @@
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
 import { nextOfferNo, todayIST, visibleFor } from "@/lib/domain";
+import type { Product } from "@/lib/domain";
 import { QuotationsClient } from "./QuotationsClient";
 
 export const metadata = { title: "Create Quotation" };
@@ -11,12 +12,26 @@ export default async function QuotationsPage({ searchParams }: { searchParams: P
   const user = await requireSection("quotations");
   const { lead } = await searchParams;
   const repo = crm();
-  const [leads, products, quotes] = await Promise.all([repo.listLeads(), repo.listProducts(), repo.listQuotes()]);
+  const [leads, quotes] = await Promise.all([repo.listLeads(), repo.listQuotes()]);
+  let products: Product[] = [];
+  let productError = "";
+  try {
+    products = await repo.listProducts();
+  } catch (error) {
+    productError = error instanceof Error ? error.message : "Unable to load Zoho Products.";
+    console.error("[page] quotations products failed", { error: productError });
+    products = [];
+  }
   console.info(`[page] quotations ${Date.now() - started}ms`);
 
   return (
     <>
       <h1 className="mb-5 text-2xl font-bold">Create Quotation</h1>
+      {productError && (
+        <div role="alert" className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          Unable to load products: {productError}
+        </div>
+      )}
       <QuotationsClient
         leads={visibleFor(user, leads)}
         products={products}

@@ -3,7 +3,7 @@ import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normali
 import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
-import { matchPortalUserToZohoUser, missingPortalUsers, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
+import { matchPortalUserToZohoUser, missingPortalUsers, resolvePortalUserZohoId, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
 
 describe("offer numbering", () => {
   it("derives the Indian financial year", () => {
@@ -103,7 +103,13 @@ describe("zoho mapping", () => {
     const portal = { username: "pavan", name: "Pavan", role: "Sales" as const, email: " PAVAN@ATPL.COM ", zohoUserId: "fallback", passwordEnv: "P" };
     const match = matchPortalUserToZohoUser(portal, [{ id: " live-1 ", name: "Pavan", role: "Sales Executive", email: "pavan@atpl.com" }]);
     expect(match?.id.trim()).toBe("live-1");
-    expect(matchPortalUserToZohoUser({ ...portal, email: "missing@atpl.com" }, [{ id: "live-1", name: "Pavan", role: "Sales Executive", email: "pavan@atpl.com" }])).toBeNull();
+    expect(matchPortalUserToZohoUser({ ...portal, name: "Different User", email: "missing@atpl.com" }, [{ id: "live-1", name: "Pavan", role: "Sales Executive", email: "pavan@atpl.com" }])).toBeNull();
+  });
+  it("resolves sandbox CRM ids by configured id, email, exact name, and first name", () => {
+    const portal = { username: "pavan", name: "Pavan Kumar", role: "Sales" as const, email: "pavan@atpl.com", zohoUserId: "production-id", passwordEnv: "P" };
+    expect(resolvePortalUserZohoId(portal, [{ id: "sandbox-email", name: "Pavan K", role: "Sales Executive", email: "pavan@atpl.com" }])).toBe("sandbox-email");
+    expect(resolvePortalUserZohoId(portal, [{ id: "sandbox-name", name: "Pavan Kumar", role: "Sales Executive" }])).toBe("sandbox-name");
+    expect(resolvePortalUserZohoId(portal, [{ id: "sandbox-prefix", name: "Pavan Singh", role: "Sales Executive" }])).toBe("sandbox-prefix");
   });
   it("reports portal users without a matching Zoho email", () => {
     const portal = [{ username: "pavan", name: "Pavan", role: "Sales" as const, email: "pavan@atpl.com", zohoUserId: "fallback", passwordEnv: "P" }];

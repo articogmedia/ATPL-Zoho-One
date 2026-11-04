@@ -51,10 +51,21 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     return <Offer lead={lead} offerNo={offerNo} setOfferNo={setOfferNo} items={items} onBack={() => setPreview(false)} onSave={save} saving={pending} />;
   }
 
-  const productSelect = (r: Row, i: number) => <input aria-label="Search product" list="zoho-products" className={fieldClass} value={byId.get(r.productId)?.model ?? ""} placeholder="Search products" onChange={(e) => {
-    const product = products.find((item) => item.model === e.target.value);
-    if (product) upd(i, { productId: product.id });
-  }} />;
+  const productSelect = (r: Row, i: number) => (
+    <select
+      aria-label="Product"
+      className={fieldClass}
+      value={r.productId}
+      onChange={(event) => upd(i, { productId: event.target.value })}
+    >
+      <option value="">Select product</option>
+      {products.map((product) => (
+        <option key={product.id} value={product.id}>
+          {product.model} · {formatINR(product.price)}
+        </option>
+      ))}
+    </select>
+  );
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
 
@@ -113,7 +124,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
 
       <section className="space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 2 · Products</h2>
-        {products.length === 0 && <p className="text-sm text-destructive">No products found in the catalogue. Ask an administrator to add products in Zoho CRM.</p>}
+        {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
@@ -150,7 +161,6 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         </div>
         <Button variant="outline" size="lg" className="h-12 w-full sm:w-auto" disabled={rows.length >= 50 || !products.length}
           onClick={() => setRows([...rows, { productId: products[0]!.id, qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add Row</Button>
-        <datalist id="zoho-products">{products.map((product) => <option key={product.id} value={product.model}>{formatINR(product.price)}</option>)}</datalist>
         <Totals t={t} />
         <div className="fixed inset-x-0 bottom-16 z-20 border-t bg-card p-3 shadow-[0_-8px_24px_rgba(15,23,42,.12)] sm:hidden">
           <div className="mx-auto flex max-w-md items-center gap-3">
