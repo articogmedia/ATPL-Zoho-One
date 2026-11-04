@@ -35,8 +35,11 @@ export async function middleware(req: NextRequest) {
       });
       return response;
     } catch {
-      /* fall through to redirect */
+      /* Fall through to the appropriate unauthenticated response below. */
     }
+  }
+  if (req.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
   return NextResponse.redirect(new URL("/login", req.url));
 }
@@ -44,6 +47,6 @@ export async function middleware(req: NextRequest) {
 export const config = {
   matcher: [
     "/home/:path*", "/leads/:path*", "/quotations/:path*", "/visits/:path*", "/performance/:path*",
-    "/api/admin/:path*", "/api/quotations/:path*", "/api/warm",
+    "/api/admin/:path*", "/api/leads/:path*", "/api/quotations/:path*", "/api/warm",
   ],
 };

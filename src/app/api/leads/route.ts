@@ -41,13 +41,14 @@ export async function GET(request: NextRequest) {
     const visibleLeads = visibleFor(user, allLeads);
     const filters = { owner: parsed.data.owner, stage: parsed.data.stage, from: parsed.data.from, to: parsed.data.to };
     const source = parsed.data.source;
-    const allForTab = (tab: LeadTab) => leadsForTab(user, visibleLeads, tab, parsed.data.search, source, filters);
+    const allForTab = (tab: LeadTab) => leadsForTab(user, allLeads, tab, parsed.data.search, source, filters);
     const filtered = allForTab(parsed.data.tab);
+    const tabCounts = Object.fromEntries(TABS.map((tab) => [tab, allForTab(tab).length])) as Record<LeadTab, number>;
     const offset = (parsed.data.page - 1) * PAGE_SIZE;
     return NextResponse.json({
       leads: filtered.slice(offset, offset + PAGE_SIZE).map(listFields),
       total: filtered.length,
-      tabCounts: Object.fromEntries(TABS.map((tab) => [tab, allForTab(tab).length])),
+      tabCounts,
       todaysFollowUps: allForTab("callback").filter((lead) => lead.followUp === todayIST()).length,
       hasAnyLeads: visibleLeads.length > 0,
     }, { headers: { "Cache-Control": "private, no-store" } });

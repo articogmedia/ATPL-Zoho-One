@@ -50,6 +50,25 @@ const TABS: { id: LeadTab; label: string }[] = [
   { id: "all", label: "All Leads" },
 ];
 
+type LeadsResponse = {
+  error?: string;
+  leads: Lead[];
+  total: number;
+  tabCounts: Record<LeadTab, number>;
+  todaysFollowUps?: number;
+  hasAnyLeads?: boolean;
+};
+
+function isLeadsResponse(value: unknown): value is LeadsResponse {
+  if (!value || typeof value !== "object") return false;
+  const response = value as Partial<LeadsResponse>;
+  const counts = response.tabCounts;
+  return Array.isArray(response.leads) &&
+    typeof response.total === "number" &&
+    !!counts &&
+    TABS.every(({ id }) => Number.isInteger(counts[id]) && counts[id] >= 0);
+}
+
 export function LeadsClient({ user, leads, executives, owners, canAssign, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
   const router = useRouter();
   const [leadRows, setLeadRows] = useState(leads);
@@ -116,7 +135,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
   }, [isExec, leadRows, pendingAddedId, user.role]);
 
   const visible = mergedLeadRows;
-  const requestPage = useCallback(async (requestedPage: number, append: boolean) => {
+  const requestPage = useCallback(async (requestedPage: number, append: boolean, isCurrent: () => boolean = () => true) => {
     const params = new URLSearchParams({
       tab, page: String(requestedPage), search: debouncedSearch, source,
       owner: filters.owner ?? "All", stage: filters.stage ?? "All",
@@ -124,19 +143,52 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
     if (filters.from) params.set("from", filters.from);
     if (filters.to) params.set("to", filters.to);
     const response = await fetch(`/api/leads?${params.toString()}`, { cache: "no-store" });
-    const result = await response.json() as {
-      error?: string; leads?: Lead[]; total?: number; tabCounts?: Record<LeadTab, number>;
-      todaysFollowUps?: number; hasAnyLeads?: boolean;
-    };
-    if (!response.ok || !result.leads || !result.tabCounts) throw new Error(result.error ?? "Unable to load leads right now.");
+    const body = await response.text();
+    let result: unknown;
+    try {
+      result = JSON.parse(body);
+    } catch {
+      console.error("[leads] GET /api/leads response", { status: response.status, body });
+      throw new Error("Unable to load leads right now.");
+    }
+    if (!response.ok || !isLeadsResponse(result)) {
+      console.error("[leads] GET /api/leads response", { status: response.status, body: result });
+      const error = result && typeof result === "object" && "error" in result && typeof result.error === "string"
+        ? result.error
+        : "Unable to load leads right now.";
+      throw new Error(error);
+    }
+    if (result.leads.length === 0) {
+      console.info("[leads] GET /api/leads response", { status: response.status, body: result });
+    }
+    if (!isCurrent()) return;
     setLeadRows((current) => append
-      ? [...current, ...result.leads!.filter((lead) => !current.some((item) => item.id === lead.id))]
-      : result.leads!);
-    setTotal(result.total ?? 0);
+      ? [...current, ...result.leads.filter((lead) => !current.some((item) => item.id === lead.id))]
+      : result.leads);
+    setTotal(result.total);
     setTabCounts(result.tabCounts);
     setTodaysFollowUps(result.todaysFollowUps ?? 0);
     setHasAnyLeads(result.hasAnyLeads ?? false);
   }, [tab, debouncedSearch, source, filters]);
+  const runRequest = useCallback(async function runRequest(requestedPage: number, append: boolean, isCurrent: () => boolean = () => true) {
+    if (append) setLoadingMore(true);
+    else setLoadingRows(true);
+    try {
+      await requestPage(requestedPage, append, isCurrent);
+    } catch (error) {
+      if (isCurrent()) {
+        const message = error instanceof Error ? error.message : "Unable to load leads right now.";
+        toast.error(message, {
+          action: { label: "Retry", onClick: () => { if (isCurrent()) void runRequest(requestedPage, append, isCurrent); } },
+        });
+      }
+    } finally {
+      if (isCurrent()) {
+        setLoadingRows(false);
+        setLoadingMore(false);
+      }
+    }
+  }, [requestPage]);
   const initializedQuery = useRef(false);
   useEffect(() => {
     if (!initializedQuery.current) {
@@ -144,21 +196,11 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
       return;
     }
     let active = true;
-    setLoadingRows(true);
-    void requestPage(1, false).catch((error: unknown) => {
-      if (active) toast.error(error instanceof Error ? error.message : "Unable to load leads right now.");
-    }).finally(() => { if (active) setLoadingRows(false); });
+    void runRequest(1, false, () => active);
     return () => { active = false; };
-  }, [requestPage]);
+  }, [runRequest]);
   const loadMore = async () => {
-    setLoadingMore(true);
-    try {
-      await requestPage(Math.floor(leadRows.length / 50) + 1, true);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Unable to load more leads.");
-    } finally {
-      setLoadingMore(false);
-    }
+    await runRequest(Math.floor(leadRows.length / 50) + 1, true);
   };
   const availableTabs = TABS.filter((item) =>
     user.role === "Calling Team" ? item.id === "fresh" || item.id === "callback"
