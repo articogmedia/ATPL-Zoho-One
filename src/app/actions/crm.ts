@@ -32,15 +32,15 @@ async function run<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
     if (err instanceof z.ZodError) return { ok: false, error: "Please check the form values." };
     console.error("Action failed", {
       action: "addLead",
+      message: err instanceof Error ? err.message : String(err),
       zohoStatus: err instanceof ZohoError ? err.status : undefined,
       zohoCode: err instanceof ZohoError ? err.code : undefined,
       zohoField: err instanceof ZohoError ? err.field : undefined,
+      zohoOperation: err instanceof ZohoError ? err.operation : undefined,
     });
     return {
       ok: false,
-      error: err instanceof ZohoError
-        ? `${err.message}${err.field ? ` (field: ${err.field})` : ""}${err.code ? ` (code: ${err.code})` : ""}${err.operation ? ` [${err.operation}]` : ""}`
-        : "Something went wrong. Please try again.",
+      error: "Unable to complete the request. Please try again.",
     };
   }
 }

@@ -47,4 +47,19 @@ describe("static login lockout", () => {
     expect(navigation.redirect).toHaveBeenCalledWith("/leads");
     await expect(loginAction(null, form("wrong"))).resolves.toEqual({ error: "Invalid username or password" });
   });
+
+  it("does not allow the correct password while the account is locked", async () => {
+    const users = await import("@/lib/auth/users");
+    vi.mocked(users.verifyStaticCredentials).mockImplementation((_username, password) =>
+      password === "correct" ? { username: "locked", name: "Locked", role: "Sales", passwordEnv: "ATPL_LOCKED_PASSWORD" } : null);
+    const { loginAction } = await import("@/app/actions/auth");
+    const form = (password: string) => {
+      const data = new FormData();
+      data.set("username", "locked");
+      data.set("password", password);
+      return data;
+    };
+    for (let attempt = 0; attempt < 5; attempt++) await loginAction(null, form("wrong"));
+    await expect(loginAction(null, form("correct"))).resolves.toEqual({ error: "Too many attempts, try again in a few minutes" });
+  });
 });

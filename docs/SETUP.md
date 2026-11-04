@@ -48,6 +48,10 @@ For static portal login, set `ATPL_RESHMA_PASSWORD`, `ATPL_PAVAN_PASSWORD`, and
 `ATPL_SAIKIRAN_PASSWORD`. The static users in `src/lib/auth/users.ts` use the
 matching active CRM user ids. The static login
 uses the same signed session and server-side role checks as Zoho login.
+Optional explicit Zoho user mappings are `ATPL_RESHMA_ZOHO_USER_ID`,
+`ATPL_PAVAN_ZOHO_USER_ID`, and `ATPL_SAIKIRAN_ZOHO_USER_ID`. When set, these
+are resolved before portal email/name matching. If unset, the portal resolves
+the CRM user from `ATPL_*_EMAIL`, exact name, or first name.
 `ALLOW_DEMO_LOGIN=true` is required to show the sandbox demo-user buttons.
 
 Managers can check the live configuration at `/api/admin/diagnostics`; it reports

@@ -259,7 +259,7 @@ export function perfStats(
 export type Section = "home" | "leads" | "quotations" | "visits" | "performance";
 export const ACCESS: Record<Role, Section[]> = {
   "Calling Team": ["leads"],
-  "Sales Executive": ["leads", "quotations", "visits", "performance"],
+  "Sales Executive": ["leads", "quotations", "visits"],
   Manager: ["leads", "quotations", "visits", "performance"],
 };
 

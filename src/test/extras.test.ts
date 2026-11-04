@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, todayIST } from "@/lib/domain";
+import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, quoteTotals, todayIST } from "@/lib/domain";
 import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
 import { matchPortalUserToZohoUser, missingPortalUsers, resolvePortalUserZohoId, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
 
 describe("offer numbering", () => {
+  it("applies discounts before GST and totals correctly", () => {
+    expect(quoteTotals([
+      { model: "AC", unit: "Nos", qty: 2, price: 50000, discount: 5000 },
+      { model: "Stand", unit: "Nos", qty: 1, price: 10000, discount: 0 },
+    ])).toEqual({ subtotal: 110000, discount: 5000, gst: 0, total: 105000 });
+  });
   it("derives the Indian financial year", () => {
     expect(financialYear("2026-10-29")).toBe("26-27");
     expect(financialYear("2027-03-31")).toBe("26-27");
@@ -50,9 +56,9 @@ describe("zoho mapping", () => {
   describe("static login", () => {
     it("uses the configured Zoho IDs for the static users", () => {
       expect(STATIC_USERS.map((user) => user.zohoUserId)).toEqual([
-        "1394515000000464001",
-        "1394515000001147001",
-        "1394515000001126001",
+        process.env.ATPL_RESHMA_ZOHO_USER_ID,
+        process.env.ATPL_PAVAN_ZOHO_USER_ID,
+        process.env.ATPL_SAIKIRAN_ZOHO_USER_ID,
       ]);
     });
     it("accepts a configured password and rejects invalid credentials", () => {

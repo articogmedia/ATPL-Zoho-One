@@ -1,111 +1,204 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { z } from "zod";
+import { currentUser } from "@/lib/auth/guard";
+import { crm } from "@/lib/crm";
+import { COMPANY } from "@/lib/company";
+import { formatINR, quoteTotals, todayIST, visibleFor } from "@/lib/domain";
 
-const escapePdf = (value: string) => value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+export const runtime = "nodejs";
 
-function text(x: number, y: number, value: string, size = 10, bold = false) {
-  return `BT /F${bold ? 2 : 1} ${size} Tf 1 0 0 1 ${x} ${y} Tm (${escapePdf(value)}) Tj ET`;
-}
+const bodySchema = z.object({
+  leadId: z.string().trim().min(1),
+  offerNo: z.string().trim().regex(/^\d{1,4}\/\d{2}-\d{2}$/),
+  subject: z.string().trim().min(1).max(300),
+  items: z.array(z.object({
+    productId: z.string().trim().min(1),
+    qty: z.number().int().positive().max(10000),
+    discount: z.number().nonnegative().max(100000000).optional(),
+  }).strict()).min(1).max(100),
+}).strict();
 
-function line(x1: number, y1: number, x2: number, y2: number) {
-  return `${x1} ${y1} m ${x2} ${y2} l S`;
-}
-
-function rect(x: number, y: number, width: number, height: number) {
-  return `${x} ${y} m ${x + width} ${y} l ${x + width} ${y + height} l ${x} ${y + height} l h S`;
-}
-
-function pdfDocument(commands: string[]) {
-  const stream = commands.join("\n");
-  const objects = [
-    "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
-    "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
-    "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>\nendobj\n",
-    `4 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}\nendstream\nendobj\n`,
-    "5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
-    "6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n",
-  ];
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  for (const object of objects) {
-    offsets.push(pdf.length);
-    pdf += object;
+const wrap = (font: { widthOfTextAtSize(text: string, size: number): number }, text: string, size: number, maxWidth: number) => {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) line = candidate;
+    else {
+      if (line) lines.push(line);
+      line = word;
+    }
   }
-  const xref = pdf.length;
-  pdf += `xref\n0 7\n0000000000 65535 f \n`;
-  for (let i = 1; i <= 6; i++) pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
-  pdf += `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
-  return pdf;
-}
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
+};
 
-export function GET(request: NextRequest) {
-  const { searchParams } = request.nextUrl;
-  const offerNo = searchParams.get("offerNo")?.trim() || "OFFER";
-  if (!/^\d{1,4}\/\d{2}-\d{2}$/.test(offerNo)) {
-    return NextResponse.json({ error: "Offer number must use 1-4 digits/YY-YY." }, { status: 400 });
+export async function POST(request: NextRequest) {
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+
+  let parsed: z.infer<typeof bodySchema>;
+  try {
+    parsed = bodySchema.parse(await request.json());
+  } catch {
+    return NextResponse.json({ error: "Please check the quotation details." }, { status: 400 });
   }
-  const customer = searchParams.get("customer") ?? "";
-  const leadName = searchParams.get("leadName") ?? "";
-  const date = searchParams.get("date") ?? "";
-  const address = searchParams.get("address") ?? "";
-  const subject = searchParams.get("subject")?.trim() || "Your requirement - reg.";
-  const items = Array.from(searchParams.entries())
-    .filter(([key]) => /^item\d+$/.test(key))
-    .map(([, value]) => {
-      try { return JSON.parse(value) as { model?: string; unit?: string; qty?: number; price?: number; discount?: number }; }
-      catch { return null; }
-    })
-    .filter((item): item is { model: string; unit: string; qty: number; price: number; discount?: number } => !!item);
-  const total = items.reduce((sum, item) => sum + item.qty * item.price - (item.discount ?? 0), 0);
-  const money = (value: number) => `Rs. ${Math.round(value).toLocaleString("en-IN")}.00`;
-  const commands = [
-    text(185, 810, "Air Trendz Pvt. Ltd.", 16, true),
-    text(105, 793, "ATPL House, Plot no. 33/C, B K Guda, S R Nagar, Hyderabad, Telangana, India, 500038", 8),
-    text(250, 778, "GSTIN - 36AANCA9304M2Z7", 9, true),
-    line(40, 765, 555, 765),
-    text(40, 748, "Stage", 8, true), text(40, 735, "Draft", 9),
-    text(145, 748, "Valid Till", 8, true), text(145, 735, "30 days from offer", 9),
-    text(250, 748, "Sales Person", 8, true), text(250, 735, "Reshma", 9),
-    text(385, 748, "Amount", 8, true), text(385, 735, money(total), 9, true),
-    text(250, 710, "OFFER", 18, true),
-    text(250, 692, offerNo, 12, true),
-    text(385, 692, `Date: ${date}`, 8),
-    text(40, 708, "Bill To", 8, true),
-    text(40, 694, customer || leadName, 9),
-    text(40, 682, address, 8),
-    text(40, 670, "Ship To", 8, true),
-    text(40, 656, customer || leadName, 9),
-    line(40, 635, 555, 635),
-    text(40, 618, "Dear Sir,", 10),
-    text(40, 602, `Sub: ${subject}`, 9, true),
-    text(40, 584, "We thank you very much for your enquiry. We are pleased to submit herewith our offer.", 8),
-    text(40, 570, "Terms & Conditions", 9, true),
-    text(40, 555, "Item & Description", 8, true),
-    text(300, 555, "List Price", 8, true),
-    text(365, 555, "Qty", 8, true),
-    text(420, 555, "Discount", 8, true),
-    text(500, 555, "Amount", 8, true),
-  ];
-  commands.push(rect(40, 80, 515, 462));
-  commands.push(line(40, 545, 555, 545));
-  let y = 530;
-  items.forEach((item, index) => {
-    commands.push(text(45, y, String(index + 1), 8));
-    commands.push(text(65, y, `${item.model}`, 8));
-    commands.push(text(300, y, money(item.price), 8));
-    commands.push(text(365, y, `${item.qty} ${item.unit}`, 8));
-    commands.push(text(420, y, money(item.discount ?? 0), 8));
-    commands.push(text(490, y, money(item.qty * item.price - (item.discount ?? 0)), 8));
-    y -= 22;
+
+  const repository = crm();
+  const [lead, products] = await Promise.all([repository.getLead(parsed.leadId), repository.listProducts()]);
+  if (!lead || visibleFor(user, [lead]).length === 0) {
+    return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
+  }
+  const byId = new Map(products.map((product) => [product.id, product]));
+  const items = parsed.items.map((row, index) => {
+    const product = byId.get(row.productId);
+    if (!product) throw new Error(`Product not found at row ${index + 1}.`);
+    return { model: product.model, description: product.description ?? "", unit: product.unit, qty: row.qty, price: product.price, discount: row.discount ?? 0 };
   });
-  commands.push(line(40, 80, 555, 80));
-  commands.push(text(360, 64, "Sub Total", 9, true), text(480, 64, money(total), 9));
-  commands.push(text(360, 48, "GST", 9, true), text(480, 48, "Rs. 0.00", 9));
-  commands.push(text(360, 32, "Grand Total", 10, true), text(480, 32, money(total), 10, true));
-  commands.push(text(40, 14, `for Air Trendz Pvt. Ltd. / Reshma / 9490172222 / 9989789222`, 8, true));
-  return new NextResponse(pdfDocument(commands), {
+  const totals = quoteTotals(items);
+  const date = todayIST();
+  const validTill = new Date(`${date}T12:00:00+05:30`);
+  validTill.setDate(validTill.getDate() + 30);
+  const formatDate = (value: Date) => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" }).format(value);
+  const formatOfferDate = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" })
+    .format(new Date(`${date}T12:00:00+05:30`).getTime()).replaceAll("/", ".");
+
+  const pdf = await PDFDocument.create();
+  const regular = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const blue = rgb(79 / 255, 148 / 255, 205 / 255);
+  const dark = rgb(30 / 255, 41 / 255, 59 / 255);
+  const border = rgb(203 / 255, 213 / 255, 225 / 255);
+  const width = 595.28;
+  const height = 841.89;
+  const margin = 36;
+  const money = (value: number) => formatINR(Math.round(value));
+
+  let logo: Awaited<ReturnType<typeof pdf.embedPng>> | null = null;
+  try {
+    const logoBytes = await readFile(path.join(process.cwd(), "public", "brand", "atpl-logo.png"));
+    logo = await pdf.embedPng(logoBytes);
+  } catch (error) {
+    console.warn("[pdf] logo unavailable", error instanceof Error ? error.message : String(error));
+  }
+
+  const newPage = () => {
+    const page = pdf.addPage([width, height]);
+    page.drawRectangle({ x: 0, y: 0, width, height, color: rgb(1, 1, 1) });
+    return page;
+  };
+  const drawText = (page: ReturnType<typeof pdf.addPage>, value: string, x: number, y: number, size = 9, font = regular, color = dark) =>
+    page.drawText(value.replaceAll("₹", "Rs."), { x, y, size, font, color });
+
+  const drawHeader = (page: ReturnType<typeof pdf.addPage>) => {
+    if (logo) {
+      const scale = Math.min(130 / logo.width, 52 / logo.height);
+      page.drawImage(logo, { x: margin, y: height - 82, width: logo.width * scale, height: logo.height * scale });
+    }
+    drawText(page, COMPANY.name, 330, height - 42, 14, bold);
+    drawText(page, COMPANY.address, 330, height - 58, 8);
+    drawText(page, COMPANY.contact, 330, height - 70, 8);
+    drawText(page, `GSTIN - ${COMPANY.gstin}`, 330, height - 82, 9, bold);
+    page.drawLine({ start: { x: margin, y: height - 96 }, end: { x: width - margin, y: height - 96 }, thickness: 0.7, color: border });
+  };
+
+  const page = newPage();
+  drawHeader(page);
+  let y = height - 116;
+  drawText(page, "OFFER", margin, y, 18, bold);
+  drawText(page, parsed.offerNo, margin, y - 18, 12, bold);
+  drawText(page, `Date: ${formatOfferDate}`, margin, y - 34, 9);
+  drawText(page, "Stage: Draft", margin + 180, y, 9);
+  drawText(page, `Valid Till: ${formatDate(validTill)}`, margin + 180, y - 18, 9);
+  drawText(page, `Sales Person: ${COMPANY.signatory}`, margin + 180, y - 34, 9);
+  drawText(page, `Amount: ${money(totals.total)}`, margin + 180, y - 50, 9, bold);
+  drawText(page, "Bill To", 390, y, 9, bold);
+  drawText(page, lead.company || lead.name, 390, y - 16, 9);
+  drawText(page, lead.address || lead.area || "", 390, y - 30, 8);
+  drawText(page, "Ship To", 390, y - 52, 9, bold);
+  drawText(page, lead.company || lead.name, 390, y - 68, 9);
+  drawText(page, lead.address || lead.area || "", 390, y - 82, 8);
+  y -= 112;
+  page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 0.7, color: border });
+  y -= 18;
+  drawText(page, "Dear Sir,", margin, y);
+  y -= 16;
+  drawText(page, `Sub: ${parsed.subject}`, margin, y, 9, bold);
+  y -= 26;
+  const intro = wrap(regular, "We thank you very much for your enquiry. We are pleased to submit herewith our offer. Our detailed Bill of quantities are as follows.", 8, width - margin * 2);
+  intro.forEach((line) => { drawText(page, line, margin, y, 8); y -= 11; });
+  y -= 10;
+
+  const columns = [
+    { label: "Item & Description", x: margin, width: 245 },
+    { label: "List Price", x: 281, width: 80 },
+    { label: "Qty", x: 361, width: 45 },
+    { label: "Discount", x: 406, width: 70 },
+    { label: "Amount", x: 476, width: 83 },
+  ];
+  const drawTableHeader = (target: ReturnType<typeof pdf.addPage>, top: number) => {
+    target.drawRectangle({ x: margin, y: top - 20, width: width - margin * 2, height: 20, color: blue });
+    columns.forEach((column) => drawText(target, column.label, column.x, top - 13, 8, bold, rgb(1, 1, 1)));
+    return top - 20;
+  };
+  y = drawTableHeader(page, y);
+  let currentPage = page;
+  items.forEach((item, index) => {
+    const descriptionLines = wrap(regular, item.description, 7, 225);
+    const rowHeight = Math.max(30, 14 + descriptionLines.length * 8);
+    if (y - rowHeight < 110) {
+      currentPage = newPage();
+      drawHeader(currentPage);
+      y = height - 116;
+      y = drawTableHeader(currentPage, y);
+    }
+    drawText(currentPage, `${index + 1}. ${item.model}`, margin + 3, y - 12, 8, bold);
+    descriptionLines.forEach((line, lineIndex) => drawText(currentPage, line, margin + 3, y - 22 - lineIndex * 8, 7, regular, border));
+    drawText(currentPage, money(item.price), columns[1]!.x, y - 12, 8);
+    drawText(currentPage, `${item.qty} ${item.unit}`, columns[2]!.x, y - 12, 8);
+    drawText(currentPage, money(item.discount ?? 0), columns[3]!.x, y - 12, 8);
+    drawText(currentPage, money(item.qty * item.price - (item.discount ?? 0)), columns[4]!.x, y - 12, 8);
+    currentPage.drawLine({ start: { x: margin, y: y - rowHeight }, end: { x: width - margin, y: y - rowHeight }, thickness: 0.4, color: border });
+    y -= rowHeight;
+  });
+
+  const totalY = Math.max(175, y - 10);
+  drawText(currentPage, "Sub Total", 390, totalY, 9, bold);
+  drawText(currentPage, money(totals.subtotal), 485, totalY, 9);
+  drawText(currentPage, "Discount", 390, totalY - 14, 9, bold);
+  drawText(currentPage, money(totals.discount), 485, totalY - 14, 9);
+  drawText(currentPage, "GST (Rs. 0)", 390, totalY - 28, 9, bold);
+  drawText(currentPage, "Rs. 0.00", 485, totalY - 28, 9);
+  currentPage.drawRectangle({ x: 380, y: totalY - 48, width: 179, height: 16, color: rgb(100 / 255, 116 / 255, 139 / 255) });
+  drawText(currentPage, "Grand Total", 390, totalY - 42, 9, bold, rgb(1, 1, 1));
+  drawText(currentPage, money(totals.total), 485, totalY - 42, 9, bold, rgb(1, 1, 1));
+
+  let termsY = totalY - 76;
+  const terms = [
+    "NOTE: Quantities are tentative.",
+    "ITEMS EXCLUDED: Civil, electrical and structural work unless specifically listed.",
+    "TERMS & CONDITIONS",
+    "Validity: 30 days from the date of offer.",
+    "Delivery: 1-2 weeks from the date of order.",
+    "Payment Terms: 100% advance for equipment; 60% advance for Part B and 40% on completion.",
+    `for ${COMPANY.name}`,
+    `${COMPANY.signatory}`,
+    COMPANY.phones,
+  ];
+  terms.forEach((term) => {
+    drawText(currentPage, term, margin, termsY, term === "TERMS & CONDITIONS" ? 9 : 8, term === "TERMS & CONDITIONS" || term.startsWith("NOTE") || term.startsWith("ITEMS") || term.startsWith("for ") ? bold : regular);
+    termsY -= term.startsWith("for ") ? 16 : 11;
+  });
+
+  const bytes = await pdf.save();
+  return new NextResponse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="offer-${offerNo.replace("/", "-")}.pdf"`,
+      "Content-Disposition": `attachment; filename="offer-${parsed.offerNo.replace("/", "-")}.pdf"`,
       "Cache-Control": "private, no-store",
     },
   });

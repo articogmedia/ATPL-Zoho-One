@@ -116,8 +116,8 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
             <h1 className="text-xl font-semibold sm:text-2xl sm:font-bold">Manage Leads</h1>
             <Button className="h-10 rounded-lg px-4 sm:hidden" onClick={() => setAdding((value) => !value)}><Plus /> Add</Button>
           </div>
-          <p className="mt-1 truncate text-sm text-slate-500 sm:text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
-          {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-slate-500 sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
+          <p className="mt-1 truncate text-sm text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
+          {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-muted-foreground sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
         </div>
         <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
           <Button className="h-11 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button>
@@ -138,7 +138,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
             role="tab"
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
-            className={`h-11 shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-[480px]:h-10 ${tab === item.id ? "bg-primary text-primary-foreground max-[480px]:bg-white max-[480px]:text-blue-700 max-[480px]:shadow-sm" : "bg-secondary text-muted-foreground hover:bg-secondary/80 hover:text-foreground max-[480px]:bg-slate-100 max-[480px]:text-slate-600"}`}
+            className={`h-11 shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "bg-secondary text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
           >
             <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.id === "assigned" ? "Assigned" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>

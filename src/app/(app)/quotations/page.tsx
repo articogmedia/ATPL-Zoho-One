@@ -18,8 +18,10 @@ export default async function QuotationsPage({ searchParams }: { searchParams: P
   try {
     products = await repo.listProducts();
   } catch (error) {
-    productError = error instanceof Error ? error.message : "Unable to load Zoho Products.";
-    console.error("[page] quotations products failed", { error: productError });
+    console.error("[page] quotations products failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    productError = "Unable to load products. Please try again or contact your administrator.";
     products = [];
   }
   console.info(`[page] quotations ${Date.now() - started}ms`);
@@ -29,7 +31,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: P
       <h1 className="mb-5 text-2xl font-bold">Create Quotation</h1>
       {productError && (
         <div role="alert" className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          Unable to load products: {productError}
+          {productError}
         </div>
       )}
       <QuotationsClient

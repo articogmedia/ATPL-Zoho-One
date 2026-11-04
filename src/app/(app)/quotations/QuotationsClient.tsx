@@ -324,7 +324,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
           <div className="text-right">
             <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Sub Total</span><span>{formatINR(t.subtotal)}</span></div>
             <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>GST</span><span>{formatINR(0)}</span></div>
-            <div className="mt-1 grid grid-cols-[1fr_auto] gap-6 bg-slate-500 px-2 py-2 font-bold text-white"><span>Grand Total</span><span>{formatINR(t.subtotal)}</span></div>
+            <div className="mt-1 grid grid-cols-[1fr_auto] gap-6 bg-muted px-2 py-2 font-bold text-foreground"><span>Grand Total</span><span>{formatINR(t.subtotal)}</span></div>
           </div>
         </div>
 

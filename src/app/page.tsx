@@ -57,7 +57,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
   if (await currentUser()) redirect("/home");
   const error = (await searchParams)?.error;
   const demo = demoLoginAllowed();
-  const users = demo ? STATIC_USERS.map((user) => ({ id: user.zohoUserId ?? "", name: user.name, role: portalRole(user.role) })) : [];
+  const users = demo ? STATIC_USERS.map((user) => ({ id: user.zohoUserId?.trim() || user.username, name: user.name, role: portalRole(user.role) })) : [];
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-[#F3F6FA] px-4 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">

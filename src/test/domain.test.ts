@@ -12,7 +12,7 @@ describe("access rules", () => {
     expect(canAccess("Calling Team", "visits")).toBe(false);
   });
   it("only managers see performance", () => {
-    expect(canAccess("Sales Executive", "performance")).toBe(true);
+    expect(canAccess("Sales Executive", "performance")).toBe(false);
     expect(canAccess("Manager", "performance")).toBe(true);
   });
   it("every role lands on home", () => {
@@ -27,7 +27,7 @@ describe("access rules", () => {
   it("managers get the performance card on home", () => {
     expect(canAccess("Manager", "home")).toBe(true);
     expect(canAccess("Manager", "performance")).toBe(true);
-    expect(canAccess("Sales Executive", "performance")).toBe(true);
+    expect(canAccess("Sales Executive", "performance")).toBe(false);
   });
   it("executives see only their own leads", () => {
     expect(visibleFor(u("anil"), SAMPLE_LEADS).every((l) => l.assignedTo === "Anil")).toBe(true);
