@@ -244,7 +244,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
         <Button variant="outline" className="h-12" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
       </div>
       <article className="print-area offer-document mx-auto max-w-3xl rounded-xl bg-card p-5 text-[11px] leading-snug shadow-sm sm:p-8">
-        <header className="flex items-start justify-between gap-4 border-b border-slate-300 pb-4">
+        <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
           <Image src="/brand/atpl-logo.png" alt="Air Trendz" width={150} height={60} className="h-auto w-36 object-contain" priority />
           <div className="text-right">
             <div className="text-lg font-bold">Air Trendz Pvt. Ltd.</div>
@@ -253,8 +253,8 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
             <div className="mt-1 text-[10px] font-semibold">GSTIN - {COMPANY.gstin}</div>
           </div>
         </header>
-        <div className="grid grid-cols-2 gap-4 py-4">
-          <div className="offer-no-break space-y-1 border-r border-slate-300 pr-4">
+        <div className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2">
+          <div className="offer-no-break space-y-1 border-slate-300 sm:border-r sm:pr-4">
             <div className="text-base font-bold">OFFER</div>
             <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
               <input aria-label="Offer reference" className="h-8 rounded border border-input px-2 font-medium" pattern="\d{3}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />
@@ -293,7 +293,8 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
           <p className="mt-2 text-justify">We thank you very much for your enquiry. We are pleased to submit herewith our offer. Our detailed Bill of quantities are as follows.</p>
         </section>
 
-        <table className="mt-4 w-full border-collapse text-[10px]">
+        <div className="overflow-x-auto">
+        <table className="mt-4 min-w-[520px] w-full border-collapse text-[10px]">
           <thead><tr className="bg-[#4f94cd] text-white">
             <th className="px-2 py-2 text-left">Item &amp; Description</th>
             <th className="px-2 py-2 text-right">List Price</th>
@@ -311,8 +312,9 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
             </tr>
           ))}</tbody>
         </table>
+        </div>
 
-        <div className="offer-no-break mt-4 grid grid-cols-2 gap-8">
+        <div className="offer-no-break mt-4 grid grid-cols-1 gap-8 sm:grid-cols-2">
           <div>
             <div className="font-bold">Authority Signature</div>
             <div className="mt-5">for {COMPANY.name}</div>
