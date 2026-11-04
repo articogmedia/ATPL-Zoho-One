@@ -2,6 +2,7 @@
 
 import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import { useActionState, useEffect, useRef, useState } from "react";
+import { useFormStatus } from "react-dom";
 import { loginAction } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
 
@@ -85,8 +86,14 @@ export function LoginForm() {
       </label>
       {state?.error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{state.error}</p>}
       {timedOut && <div role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">Sign-in is taking too long. Check your connection and try again.<Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={() => { setTimedOut(false); setRetried(true); if (formRef.current) action(new FormData(formRef.current)); }}>Retry</Button></div>}
-      <Button type="submit" disabled={pending} className="min-h-12 w-full rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Signing in..." : "Sign in"}</Button>
+      <LoginSubmit pending={pending} />
       <p className="text-center text-[13px] text-slate-500">Forgot your password? Contact your manager.</p>
     </form>
   );
+}
+
+function LoginSubmit({ pending: actionPending }: { pending: boolean }) {
+  const { pending } = useFormStatus();
+  const isPending = pending || actionPending;
+  return <Button type="submit" disabled={isPending} className="min-h-12 w-full rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">{isPending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{isPending ? "Signing in..." : "Sign in"}</Button>;
 }

@@ -15,7 +15,7 @@ export type ZLead = {
   City?: string; Street?: string; Lead_Source?: string; Lead_Status?: string; Owner?: Ref; Description?: string;
   Created_Time?: string; Created_By?: Ref; Modified_By?: Ref;
 };
-export type ZProduct = { id: string; Product_Name: string; Description?: string; Unit_Price?: number; Usage_Unit?: string };
+export type ZProduct = { id: string; Product_Name: string; Product_Code?: string; Description?: string; Unit_Price?: number; Usage_Unit?: string };
 export type ZQuote = { id: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; [k: string]: unknown };
 export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; [k: string]: unknown };
 export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
@@ -121,7 +121,7 @@ export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutiv
 }
 
 export function mapProduct(z: ZProduct): Product {
-  return { id: z.id, model: z.Product_Name, description: z.Description?.trim() || undefined, price: z.Unit_Price ?? 0, unit: z.Usage_Unit || "Nos" };
+  return { id: z.id, model: z.Product_Name, code: z.Product_Code?.trim() || undefined, description: z.Description?.trim() || undefined, price: z.Unit_Price ?? 0, unit: z.Usage_Unit || "Nos" };
 }
 
 export function mapQuote(z: ZQuote, leadsById: ReadonlyMap<string, Lead>): Quotation {

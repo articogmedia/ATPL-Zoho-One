@@ -50,7 +50,9 @@ export async function currentUser(): Promise<User | null> {
 
 /** For pages: redirect to login if signed out. */
 export async function requireUser(): Promise<User> {
+  const started = Date.now();
   const user = await currentUser();
+  console.info(`[auth] requireUser ${user ? "authenticated" : "anonymous"} ${Date.now() - started}ms`);
   if (!user) redirect("/login");
   return user;
 }

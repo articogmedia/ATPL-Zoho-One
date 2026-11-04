@@ -1,8 +1,18 @@
 import "server-only";
 import { revalidateTag, unstable_cache } from "next/cache";
 
-const g = globalThis as unknown as { __atplCache?: { inflight: Map<string, Promise<unknown>> } };
-const store = (g.__atplCache ??= { inflight: new Map() });
+type CacheEntry = {
+  value: unknown;
+  expiresAt: number;
+  ttlMs: number;
+  load: () => Promise<unknown>;
+  refresh?: Promise<unknown>;
+};
+
+const g = globalThis as unknown as {
+  __atplCache?: { inflight: Map<string, Promise<unknown>>; values: Map<string, CacheEntry> };
+};
+const store = (g.__atplCache ??= { inflight: new Map(), values: new Map() });
 
 const tagFor = (key: string) => {
   const tag = ["leads", "users", "products", "quotes", "visits"].find((candidate) => key.startsWith(candidate));
@@ -15,23 +25,55 @@ const tagFor = (key: string) => {
  * Per-process only; if you scale to several server instances, swap for Redis/Upstash.
  */
 export async function cached<T>(key: string, ttlMs: number, load: () => Promise<T>): Promise<T> {
+  const cachedValue = store.values.get(key) as CacheEntry | undefined;
+  if (cachedValue) {
+    cachedValue.load = load;
+    cachedValue.ttlMs = ttlMs;
+    if (cachedValue.expiresAt <= Date.now()) refreshInBackground(key, cachedValue);
+    return cachedValue.value as T;
+  }
   const pending = store.inflight.get(key);
   if (pending) return pending as Promise<T>;
   const get = unstable_cache(load, ["atpl", key], {
     revalidate: Math.max(1, Math.ceil(ttlMs / 1000)),
     tags: [tagFor(key)],
   });
-  const p = get()
-    .finally(() => store.inflight.delete(key));
+  const p = get().then((value) => {
+    store.values.set(key, { value, expiresAt: Date.now() + ttlMs, ttlMs, load });
+    return value;
+  }).finally(() => store.inflight.delete(key));
   store.inflight.set(key, p);
   return p;
 }
 
+function refreshInBackground(key: string, entry: CacheEntry) {
+  if (entry.refresh) return;
+  entry.refresh = entry.load().then((value) => {
+    entry.value = value;
+    entry.expiresAt = Date.now() + entry.ttlMs;
+    return value;
+  }).catch((error: unknown) => {
+    console.error("[cache] background refresh failed", {
+      key,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }).finally(() => { entry.refresh = undefined; });
+}
+
 export function invalidate(...prefixes: string[]) {
   for (const prefix of prefixes) {
-    for (const key of store.inflight.keys()) {
-      if (key === prefix || key.startsWith(`${prefix}:`)) store.inflight.delete(key);
+    for (const [key, entry] of store.values) {
+      if (key === prefix || key.startsWith(`${prefix}:`)) {
+        entry.expiresAt = 0;
+        refreshInBackground(key, entry);
+      }
     }
+
     revalidateTag(tagFor(prefix));
   }
+}
+
+export function resetMemoryCache() {
+  store.inflight.clear();
+  store.values.clear();
 }

@@ -1,8 +1,8 @@
 "use server";
 
-import { revalidatePath, revalidateTag } from "next/cache";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
+import { invalidate } from "@/lib/cache";
 import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { ZohoError } from "@/lib/zoho/client";
@@ -24,11 +24,13 @@ class DuplicateLeadError extends Error {
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
 async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Promise<ActionResult<T>> {
+  const started = Date.now();
   try {
     const data = await fn();
-    revalidatePath("/", "layout");
+    console.info(`[action] completed ${Date.now() - started}ms`);
     return { ok: true, data };
   } catch (err) {
+    console.info(`[action] failed ${Date.now() - started}ms`);
     if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
     if (err instanceof ForbiddenError) return { ok: false, error: err.message };
     if (err instanceof z.ZodError) return { ok: false, error: "Please check the form values." };
@@ -120,10 +122,7 @@ export async function addLeadAction(input: unknown) {
     if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     if (assignee && !(await assignableNames()).includes(assignee)) throw new ForbiddenError("Choose a team member.");
     const lead = await crm().createLead(data, user, assignee, forceCreate);
-    revalidateTag("leads");
-    revalidateTag("visits");
-    revalidatePath("/leads");
-    revalidateTag("users");
+    invalidate("leads", "visits");
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
   }, () => submittedForceCreate ? "" : submittedPhone);
 }
@@ -147,7 +146,7 @@ export async function updateLeadAction(input: unknown) {
       status: p.status, remarks: p.remarks,
     };
     await crm().updateLead(p.id, patch, user);
-    revalidateTag("leads");
+    invalidate("leads");
     return { zohoUrl: zohoLeadUrl(p.id) };
   });
 }
@@ -162,8 +161,7 @@ export async function reassignLeadAction(input: unknown) {
     await ownLeadOrThrow(user, p.id);
     if (!(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     const assignment = await crm().assignLead(p.id, p.assignedTo, user);
-    revalidateTag("leads");
-    revalidateTag("users");
+    invalidate("leads");
     return { ...assignment, zohoUrl: zohoLeadUrl(p.id) };
   });
 }
@@ -177,8 +175,7 @@ export async function deleteLeadAction(input: unknown) {
     const p = deleteLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
     await crm().deleteLead(p.id);
-    revalidateTag("leads");
-    revalidateTag("users");
+    invalidate("leads");
   });
 }
 
@@ -192,8 +189,7 @@ export async function saveLeadUpdateAction(input: unknown) {
       if (p.assignedTo && !(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     }
     await crm().updateLead(p.id, { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo }, user);
-    revalidateTag("leads");
-    revalidateTag("users");
+    invalidate("leads");
     return { zohoUrl: zohoLeadUrl(p.id) };
   });
 }
@@ -223,8 +219,7 @@ export async function logCallAction(input: unknown) {
       throw new ForbiddenError("Call Back Later requires a follow-up date and time.");
     }
     await crm().logCall(data, user);
-    revalidateTag("leads");
-    revalidateTag("visits");
+    invalidate("leads", "visits");
   });
 }
 
@@ -233,8 +228,7 @@ export async function fixAssignedLeadsAction() {
     const user = await requireActionUser("leads");
     if (user.role !== "Manager") throw new ForbiddenError("Only managers can fix assigned leads.");
     const changed = await crm().fixAssignedLeads(user);
-    revalidateTag("leads");
-    revalidatePath("/leads");
+    invalidate("leads");
     return { changed };
   });
 }
@@ -273,8 +267,7 @@ export async function createQuoteAction(input: unknown) {
     const lead = await ownLeadOrThrow(user, q.leadId);
     const executive = lead.assignedTo ?? user.name;
     const quote = await crm().createQuote(q, user, executive);
-    revalidateTag("quotes");
-    revalidateTag("leads");
+    invalidate("quotes", "leads");
     return quote;
   });
 }
@@ -301,7 +294,7 @@ export async function scheduleVisitAction(input: unknown) {
     const executive = isExecutive(user) ? user.name : v.executive;
     if (!executive || !(await assignableNames()).includes(executive)) throw new ForbiddenError("Choose a team member.");
     await crm().createVisit({ ...v, executive }, user);
-    revalidateTag("visits");
+    invalidate("visits");
   });
 }
 
@@ -318,6 +311,6 @@ export async function updateVisitAction(input: unknown) {
     const visit = await crm().getVisit(p.id);
     if (!visit || visibleFor(user, [visit]).length === 0) throw new ForbiddenError("You can only update your own work.");
     await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user);
-    revalidateTag("visits");
+    invalidate("visits");
   });
 }

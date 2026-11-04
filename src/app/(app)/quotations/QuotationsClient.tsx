@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Image from "next/image";
-import { ArrowLeft, Check, Eye, MessageCircle, Minus, Plus, Printer, Search, Trash2, UserPlus } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Eye, MessageCircle, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/ui-bits";
@@ -21,10 +21,11 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const [leadId, setLeadId] = useState(presetLeadId);
   const [adding, setAdding] = useState(false);
   const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: "Direct Call" as LeadSource });
-  const [rows, setRows] = useState<Row[]>([{ productId: products[0]?.id ?? "", qty: 1, discount: 0 }]);
+  const [rows, setRows] = useState<Row[]>([{ productId: "", qty: 1, discount: 0 }]);
   const [offerNo, setOfferNo] = useState(suggestedOfferNo);
   const [preview, setPreview] = useState(false);
   const [pending, start] = useTransition();
+  const previousPreview = useRef(false);
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ productId: p.id, model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
@@ -34,8 +35,18 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     const product = byId.get(row.productId);
     return !!product && validateQuoteLine(row.qty, row.discount, product.price) === null;
   }).length;
-  const productsValid = rows.length > 0 && validLineCount === rows.length && items.length > 0;
+  const productsValid = items.length > 0 && validLineCount === items.length;
   const upd = (i: number, p: Partial<Row>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
+
+  useEffect(() => {
+    if (preview) {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      requestAnimationFrame(() => document.getElementById("offer-heading")?.focus({ preventScroll: true }));
+    } else if (previousPreview.current) {
+      requestAnimationFrame(() => document.getElementById("quote-step-products")?.scrollIntoView({ behavior: "instant", block: "start" }));
+    }
+    previousPreview.current = preview;
+  }, [preview]);
 
   const matches = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -50,7 +61,9 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
 
   const save = () => start(async () => {
     if (!lead) return;
-    const res = await createQuoteAction({ offerNo, leadId: lead.id, items: rows });
+    const selectedRows = rows.filter((row) => row.productId && byId.has(row.productId) &&
+      validateQuoteLine(row.qty, row.discount, byId.get(row.productId)!.price) === null);
+    const res = await createQuoteAction({ offerNo, leadId: lead.id, items: selectedRows });
     if (res.ok) { toast.success("Quotation saved"); } else toast.error(res.error);
   });
 
@@ -58,21 +71,6 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     return <Offer lead={lead} offerNo={offerNo} setOfferNo={setOfferNo} items={items} onBack={() => setPreview(false)} onSave={save} saving={pending} />;
   }
 
-  const productSelect = (r: Row, i: number) => (
-    <select
-      aria-label="Product"
-      className={fieldClass}
-      value={r.productId}
-      onChange={(event) => upd(i, { productId: event.target.value })}
-    >
-      <option value="">Select product</option>
-      {products.map((product) => (
-        <option key={product.id} value={product.id}>
-          {product.model} · {formatINR(product.price)}
-        </option>
-      ))}
-    </select>
-  );
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
   const scrollToStep = (id: string) => {
@@ -81,7 +79,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const currentStep = !lead ? 0 : productsValid ? 2 : 1;
 
   return (
-    <div className={`space-y-6 ${lead && productsValid ? "pb-28 sm:pb-6" : "pb-6"}`}>
+    <div className={`space-y-6 ${lead && productsValid ? "pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
       <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
         {["Customer", "Products", "Preview"].map((label, index) => {
           const completed = index === 0 ? !!lead : index === 1 ? productsValid : preview;
@@ -153,7 +151,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
                 <tr key={i} className="border-b">
                   <td className="p-2">{i + 1}</td>
-                  <td className="p-2">{productSelect(r, i)}</td>
+                  <td className="p-2"><ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} />{!p && <p className="mt-1 text-xs text-muted-foreground">Select a product</p>}</td>
                   <td className="p-2">{p?.unit}</td>
                   <td className="p-2"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
                   <td className="p-2 text-right">{formatINR(p?.price ?? 0)}</td>
@@ -169,7 +167,8 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
             <div key={i} className="space-y-3 rounded-xl border border-border bg-card p-3 shadow-sm">
               <div className="flex min-h-11 items-center justify-between"><span className="font-semibold">Item {i + 1}</span>
                 <Button variant="ghost" size="icon" className="h-11 w-11" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></div>
-              <MobileProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} />
+              <ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} />
+              {!p && <p className="text-sm text-muted-foreground">Select a product</p>}
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Quantity ({p?.unit || "Unit"})</span><div className="grid grid-cols-[44px_1fr_44px]"><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-r-none" aria-label={`Decrease quantity for item ${i + 1}`} onClick={() => setQty(i, String(Math.max(1, r.qty - 1)))}><Minus /></Button><input aria-label={`Quantity for item ${i + 1}`} type="number" min={1} inputMode="numeric" className={`${fieldClass} min-h-11 rounded-none text-center text-base`} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-l-none" aria-label={`Increase quantity for item ${i + 1}`} onClick={() => setQty(i, String(r.qty + 1))}><Plus /></Button></div></label>
                 <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Discount</span><input aria-label={`Discount for item ${i + 1}`} type="number" min={0} inputMode="numeric" className={`${fieldClass} min-h-11 text-base`} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></label>
@@ -180,15 +179,15 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
             </div>); })}
         </div>
         <Button variant="outline" size="lg" className="h-12 w-full border-dashed sm:w-auto" disabled={rows.length >= 50 || !products.length}
-          onClick={() => setRows([...rows, { productId: products[0]!.id, qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add item</Button>
+          onClick={() => setRows([...rows, { productId: "", qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add item</Button>
         <Totals t={t} />
         <div className={`fixed inset-x-0 bottom-16 z-20 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-sm sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
           <div className="mx-auto flex max-w-md items-center gap-3">
             <div className="min-w-0 flex-1"><div className="text-xs text-muted-foreground">Grand total</div><div className="truncate font-bold">{formatINR(t.total)}</div></div>
-            <Button size="lg" className="h-12 shrink-0 px-5" disabled={!lead || !items.length} onClick={() => setPreview(true)}>Preview</Button>
+            <Button size="lg" className="h-12 shrink-0 px-5" disabled={!lead || !productsValid} onClick={() => setPreview(true)}>Preview</Button>
           </div>
         </div>
-        <Button size="lg" className="hidden h-14 w-full text-base sm:flex" disabled={!lead || !items.length} onClick={() => setPreview(true)}><Eye className="h-5 w-5" /> Preview Offer</Button>
+        <Button size="lg" className="hidden h-14 w-full text-base sm:flex" disabled={!lead || !productsValid} onClick={() => setPreview(true)}><Eye className="h-5 w-5" /> Preview Offer</Button>
         {!lead && <p className="text-center text-sm text-muted-foreground">Choose a customer first.</p>}
       </section>
 
@@ -206,24 +205,98 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   );
 }
 
-function MobileProductPicker({ products, value, onChange, label }: { products: Product[]; value: string; onChange: (value: string) => void; label: string }) {
+function ProductPicker({ products, value, onChange, label }: { products: Product[]; value: string; onChange: (value: string) => void; label: string }) {
+  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const selected = products.find((product) => product.id === value);
-  const matches = products.filter((product) => `${product.model} ${product.description ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const normalizedQuery = query.trim().toLowerCase();
+  const matches = products.filter((product) =>
+    `${product.model} ${product.code ?? ""} ${product.description ?? ""}`.toLowerCase().includes(normalizedQuery),
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    const trigger = triggerRef.current;
+    document.body.style.overflow = "hidden";
+    searchRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      trigger?.focus();
+    };
+  }, [open]);
+
   return (
-    <div className="space-y-2">
-      <label htmlFor={`${label}-search`} className="text-xs font-medium text-muted-foreground">{label}</label>
-      <input id={`${label}-search`} className={`${fieldClass} min-h-11 text-base`} type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={selected ? `${selected.model} · ${formatINR(selected.price)}` : "Search products"} />
-      {query && <div className="max-h-56 overflow-y-auto rounded-lg border border-border bg-card shadow-sm" role="listbox" aria-label={`${label} results`}>
-        {matches.map((product) => (
-          <button key={product.id} type="button" role="option" aria-selected={product.id === value} className="min-h-16 w-full border-b border-border px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={() => { onChange(product.id); setQuery(""); }}>
-            <span className="block text-sm font-medium">{product.model}</span>
-            <span className="block text-xs text-muted-foreground">{product.unit} · {formatINR(product.price)}</span>
-          </button>
-        ))}
-        {!matches.length && <p className="p-3 text-sm text-muted-foreground">No products found.</p>}
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={label}
+        aria-haspopup="dialog"
+        onClick={() => { setQuery(""); setOpen(true); }}
+        className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-input bg-background px-3 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <span className="min-w-0">
+          {selected ? <><span className="block truncate font-medium">{selected.model}</span><span className="block text-xs text-muted-foreground">{formatINR(selected.price)}</span></> : <span className="text-muted-foreground">Select product</span>}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      </button>
+      {open && <div
+        className="fixed inset-0 z-[60] flex items-end bg-black/40 md:items-center md:justify-center md:p-4"
+        onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}
+      >
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="product-picker-title"
+          className="flex max-h-[85dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl md:max-w-lg md:rounded-2xl"
+        >
+          <header className="flex min-h-14 shrink-0 items-center justify-between border-b border-border px-4">
+            <h2 id="product-picker-title" className="font-semibold">Choose product</h2>
+            <Button type="button" variant="ghost" size="icon" className="h-11 w-11" aria-label="Close product picker" onClick={() => setOpen(false)}><X /></Button>
+          </header>
+          <div className="shrink-0 p-4 pb-2">
+            <label htmlFor={`product-search-${label.replace(/\W/g, "-")}`} className="sr-only">Search products by name, code or description</label>
+            <input
+              ref={searchRef}
+              id={`product-search-${label.replace(/\W/g, "-")}`}
+              className={`${fieldClass} min-h-11 text-base`}
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search name, code or description"
+            />
+            <p className="mt-2 text-xs text-muted-foreground">{matches.length} {matches.length === 1 ? "product" : "products"}</p>
+          </div>
+          <div className="min-h-0 max-h-[60dvh] flex-1 overflow-y-auto overscroll-contain px-4 pb-4" role="listbox" aria-label="Products">
+            {matches.map((product) => (
+              <button
+                key={product.id}
+                type="button"
+                role="option"
+                aria-selected={product.id === value}
+                onClick={() => { onChange(product.id); setOpen(false); }}
+                className={`min-h-16 w-full border-b border-border px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${product.id === value ? "bg-secondary text-secondary-foreground" : "hover:bg-secondary/60"}`}
+              >
+                <span className="block break-words text-sm font-medium">{product.model}</span>
+                <span className="block text-xs text-muted-foreground">{product.unit} · {formatINR(product.price)}</span>
+              </button>
+            ))}
+            {!matches.length && <p className="p-4 text-sm text-muted-foreground">No products found</p>}
+          </div>
+        </section>
       </div>}
-    </div>
+    </>
   );
 }
 
@@ -311,7 +384,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6">
       <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
         <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf}><Printer className="h-5 w-5" /> Download PDF</Button>
@@ -330,7 +403,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
         </header>
         <div className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2">
           <div className="offer-no-break space-y-1 border-slate-300 sm:border-r sm:pr-4">
-            <div className="text-base font-bold">OFFER</div>
+            <h1 id="offer-heading" tabIndex={-1} className="text-base font-bold outline-none">OFFER</h1>
             <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
               <input aria-label="Offer reference" className="h-8 rounded border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />
             </label>

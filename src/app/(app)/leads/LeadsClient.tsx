@@ -2,19 +2,24 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
-import { CalendarPlus, ChevronLeft, ChevronRight, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import { CalendarPlus, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
 import { Button } from "@/components/ui/button";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getLeadTimelineAction, logCallAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, leadsForTab, normalizePhone, todayIST,
+  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, normalizePhone, todayIST,
   type CallOutcome, type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
 } from "@/lib/domain";
 
-type Props = { user: User; leads: Lead[]; executives: string[]; owners: string[]; canAssign: boolean; fixableLeads: { id: string; name: string; ownerName: string }[] };
+type Props = {
+  user: User; leads: Lead[]; executives: string[]; owners: string[]; canAssign: boolean;
+  fixableLeads: { id: string; name: string; ownerName: string }[];
+  initialTab: LeadTab; initialCount: number; tabCounts: Record<LeadTab, number>;
+  todaysFollowUps: number; hasAnyLeads: boolean;
+};
 type DrawerMode = "edit" | "history" | "schedule";
 type LeadAction = { type: "call" | "edit" | "reassign" | "delete"; lead: Lead } | null;
 
@@ -45,24 +50,31 @@ const TABS: { id: LeadTab; label: string }[] = [
   { id: "all", label: "All Leads" },
 ];
 
-export function LeadsClient({ user, leads, executives, owners, canAssign, fixableLeads }: Props) {
+export function LeadsClient({ user, leads, executives, owners, canAssign, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
   const router = useRouter();
   const [leadRows, setLeadRows] = useState(leads);
+  const [total, setTotal] = useState(initialCount);
+  const [tabCounts, setTabCounts] = useState(initialTabCounts);
+  const [todaysFollowUps, setTodaysFollowUps] = useState(initialFollowUps);
+  const [hasAnyLeads, setHasAnyLeads] = useState(initialHasAnyLeads);
+  const [loadingRows, setLoadingRows] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [justAdded, setJustAdded] = useState<Lead | null>(null);
   const isExec = user.role === "Sales Executive";
-  const [tab, setTab] = useState<LeadTab>(user.role === "Manager" && leadsForTab(user, leads, "fresh").length === 0 ? "all" : isExec ? "mine" : "fresh");
+  const [tab, setTab] = useState<LeadTab>(initialTab);
   const tabListRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [source, setSource] = useState<LeadSource | "All">("All");
   const [filters, setFilters] = useState<LeadFilters>({ stage: "All", owner: "All" });
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const [pendingAddedId, setPendingAddedId] = useState<string | null>(null);
   const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Lead | null>(null);
   const [action, setAction] = useState<LeadAction>(null);
+  const selectLead = useCallback((lead: Lead) => setSelected(lead), []);
+  const startLeadAction = useCallback((type: "call" | "edit" | "reassign" | "delete", lead: Lead) => setAction({ type, lead }), []);
 
   const mergedLeadRows = useMemo(() => {
     if (!justAdded) return leadRows;
@@ -79,7 +91,6 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
     return () => window.clearTimeout(timer);
   }, [search]);
 
-  useEffect(() => setPage(1), [tab, debouncedSearch, source, filters]);
   useEffect(() => {
     tabListRef.current?.querySelector<HTMLButtonElement>(`[data-tab="${tab}"]`)?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   }, [tab]);
@@ -104,17 +115,55 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
     });
   }, [isExec, leadRows, pendingAddedId, user.role]);
 
-  const filtered = useMemo(
-    () => leadsForTab(user, mergedLeadRows, tab, debouncedSearch, source, filters),
-    [user, mergedLeadRows, tab, debouncedSearch, source, filters],
-  );
-  const pageCount = Math.max(1, Math.ceil(filtered.length / 25));
-  const visible = filtered.slice((page - 1) * 25, page * 25);
+  const visible = mergedLeadRows;
+  const requestPage = useCallback(async (requestedPage: number, append: boolean) => {
+    const params = new URLSearchParams({
+      tab, page: String(requestedPage), search: debouncedSearch, source,
+      owner: filters.owner ?? "All", stage: filters.stage ?? "All",
+    });
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    const response = await fetch(`/api/leads?${params.toString()}`, { cache: "no-store" });
+    const result = await response.json() as {
+      error?: string; leads?: Lead[]; total?: number; tabCounts?: Record<LeadTab, number>;
+      todaysFollowUps?: number; hasAnyLeads?: boolean;
+    };
+    if (!response.ok || !result.leads || !result.tabCounts) throw new Error(result.error ?? "Unable to load leads right now.");
+    setLeadRows((current) => append
+      ? [...current, ...result.leads!.filter((lead) => !current.some((item) => item.id === lead.id))]
+      : result.leads!);
+    setTotal(result.total ?? 0);
+    setTabCounts(result.tabCounts);
+    setTodaysFollowUps(result.todaysFollowUps ?? 0);
+    setHasAnyLeads(result.hasAnyLeads ?? false);
+  }, [tab, debouncedSearch, source, filters]);
+  const initializedQuery = useRef(false);
+  useEffect(() => {
+    if (!initializedQuery.current) {
+      initializedQuery.current = true;
+      return;
+    }
+    let active = true;
+    setLoadingRows(true);
+    void requestPage(1, false).catch((error: unknown) => {
+      if (active) toast.error(error instanceof Error ? error.message : "Unable to load leads right now.");
+    }).finally(() => { if (active) setLoadingRows(false); });
+    return () => { active = false; };
+  }, [requestPage]);
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      await requestPage(Math.floor(leadRows.length / 50) + 1, true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load more leads.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
   const availableTabs = TABS.filter((item) =>
     user.role === "Calling Team" ? item.id === "fresh" || item.id === "callback"
     : !(item.id === "fresh" && isExec) && !(item.id === "all" && user.role !== "Manager"));
-  const count = (id: LeadTab) => leadsForTab(user, leadRows, id, debouncedSearch, source, filters).length;
-  const todaysFollowUps = leadsForTab(user, leadRows, "callback").filter((lead) => lead.followUp === todayIST()).length;
+  const count = (id: LeadTab) => tabCounts[id] ?? 0;
   const fixableCount = fixableLeads.length;
   const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
 
@@ -187,12 +236,13 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         window.requestAnimationFrame(() => {
           (document.getElementById("leads-list-mobile") ?? document.getElementById("leads-list"))?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
-        router.refresh();
         window.setTimeout(() => router.refresh(), 2500);
       }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
-        <EmptyState hasLeads={leadRows.length > 0} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
+        loadingRows
+          ? <div role="status" className="space-y-2"><div className="h-20 animate-pulse rounded-xl bg-card" /><div className="h-20 animate-pulse rounded-xl bg-card" /></div>
+          : <EmptyState hasLeads={hasAnyLeads} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
           <div id="leads-list" className="hidden overflow-hidden rounded-xl border border-border bg-card shadow-sm md:block">
@@ -205,14 +255,18 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {visible.map((lead) => <DesktopRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} onOpen={() => setSelected(lead)} onAction={(type) => setAction({ type, lead })} />)}
+                {visible.map((lead) => <DesktopRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} onOpen={selectLead} onAction={startLeadAction} />)}
               </tbody>
             </table>
           </div>
           <div id="leads-list-mobile" className="space-y-2 max-[480px]:space-y-1.5 md:hidden">
-            {visible.map((lead) => <MobileRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} onOpen={() => setSelected(lead)} onAction={(type) => setAction({ type, lead })} />)}
+            {visible.map((lead) => <MobileRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} onOpen={selectLead} onAction={startLeadAction} />)}
           </div>
-          <Pagination page={page} pageCount={pageCount} total={filtered.length} onChange={setPage} />
+          {leadRows.length < total && <div className="flex flex-col items-center gap-2">
+            <p className="text-xs text-muted-foreground">Showing {leadRows.length} of {total} leads</p>
+            <Button type="button" variant="outline" className="h-11" disabled={loadingMore || loadingRows} onClick={loadMore}>{loadingMore ? "Loading…" : "Load more"}</Button>
+          </div>}
+          {loadingRows && <p role="status" className="text-center text-xs text-muted-foreground">Updating lead results…</p>}
         </>
       )}
 
@@ -223,10 +277,10 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
           canAssign={canAssignLeads(user.role)}
           onClose={() => setSelected(null)}
           onSaved={() => {
-            const fresh = leads.find((lead) => lead.id === selected.id);
+            const fresh = leadRows.find((lead) => lead.id === selected.id);
             if (fresh) setSelected(fresh);
           }}
-          onNext={(lead) => setSelected(lead)}
+          onNext={selectLead}
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
         />
       )}
@@ -265,42 +319,34 @@ function DesktopActionButtons({ lead, manager, onAction }: { lead: Lead; manager
   </div>;
 }
 
-function DesktopRow({ lead, manager, highlighted, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+const DesktopRow = memo(function DesktopRow({ lead, manager, highlighted, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
   return (
-    <tr className={`group cursor-pointer transition-colors hover:bg-secondary/50 ${highlighted ? "bg-success/10 ring-1 ring-inset ring-success" : ""}`} onClick={onOpen}>
+    <tr className={`group cursor-pointer transition-colors hover:bg-secondary/50 ${highlighted ? "bg-success/10 ring-1 ring-inset ring-success" : ""}`} onClick={() => onOpen(lead)}>
       <td className="max-w-56 px-4 py-3"><div className="truncate font-semibold">{lead.name}</div>{lead.company && <div className="truncate text-xs text-muted-foreground">{lead.company}</div>}</td>
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.phone || "—"}</td>
       <td className="whitespace-nowrap px-3 py-3">{lead.source}</td>
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.createdOn || "—"}</td>
       <td className="px-3 py-3"><StatusBadge status={lead.status} />{lead.followUp && lead.followUp <= todayIST() && <div className="mt-1 text-xs font-semibold text-destructive">Overdue</div>}</td>
       <td className="max-w-36 truncate px-3 py-3">{lead.assignedTo ?? "Unassigned"}</td>
-      <td className="w-px whitespace-nowrap px-4 py-3 text-right" onClick={(event) => event.stopPropagation()}><DesktopActionButtons lead={lead} manager={manager} onAction={onAction} /></td>
+      <td className="w-px whitespace-nowrap px-4 py-3 text-right" onClick={(event) => event.stopPropagation()}><DesktopActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} /></td>
     </tr>
   );
-}
+});
 
-function MobileRow({ lead, manager, highlighted, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; onOpen: () => void; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+const MobileRow = memo(function MobileRow({ lead, manager, highlighted, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
   const wa = whatsappUrl(lead.phone);
   return (
-    <div role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }} className={`rounded-xl border border-border bg-card p-4 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${highlighted ? "bg-success/10 ring-1 ring-success" : ""}`}>
+    <div role="button" tabIndex={0} onClick={() => onOpen(lead)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(lead); } }} className={`rounded-xl border border-border bg-card p-4 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${highlighted ? "bg-success/10 ring-1 ring-success" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0"><div className="truncate font-semibold">{lead.name}</div><div className="truncate text-xs text-muted-foreground">{lead.company || "No company"}</div></div>
         <StatusBadge status={lead.status} />
       </div>
       <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2">{lead.phone ? <a className="inline-flex min-h-11 items-center truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone}</a> : <span>No phone</span>}<span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
       {wa && <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={wa} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>}
-      <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={onAction} /></div>
+      <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} /></div>
     </div>
   );
-}
-
-function Pagination({ page, pageCount, total, onChange }: { page: number; pageCount: number; total: number; onChange: (page: number) => void }) {
-  if (total <= 25) return null;
-  return <nav className="flex items-center justify-between gap-3" aria-label="Lead pagination">
-    <span className="text-xs text-muted-foreground">Page {page} of {pageCount} · {total} leads</span>
-    <div className="flex gap-1"><Button variant="outline" size="icon" className="h-9 w-9" disabled={page === 1} onClick={() => onChange(page - 1)} aria-label="Previous page"><ChevronLeft /></Button><Button variant="outline" size="icon" className="h-9 w-9" disabled={page === pageCount} onClick={() => onChange(page + 1)} aria-label="Next page"><ChevronRight /></Button></div>
-  </nav>;
-}
+});
 
 function EmptyState({ hasLeads, filtered, onClear }: { hasLeads: boolean; filtered: boolean; onClear: () => void }) {
   const title = filtered ? "No leads match your filters" : hasLeads ? "No leads in this view" : "No leads yet";

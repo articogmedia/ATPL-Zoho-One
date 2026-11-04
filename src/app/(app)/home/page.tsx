@@ -8,6 +8,7 @@ export const metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
+  const started = Date.now();
   const user = await requireUser();
   const hour = hourIST();
   const part = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
@@ -27,6 +28,7 @@ export default async function Home() {
       desc: "Your assignments, site visits and follow-ups." },
     { s: "performance", to: "/performance", label: "Performance", icon: BarChart3, desc: "Lead sources, visits, conversions and executive results." },
   ];
+  console.info(`[page] home ${Date.now() - started}ms`);
 
   return (
     <>

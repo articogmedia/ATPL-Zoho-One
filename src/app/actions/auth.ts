@@ -5,17 +5,67 @@ import { demoLoginAllowed } from "@/lib/auth/demo";
 import { createSession, destroySession } from "@/lib/auth/session";
 import { STATIC_USERS, staticUserAsPortalUser, verifyStaticCredentials } from "@/lib/auth/users";
 import { loginAttemptStore } from "@/lib/auth/login-attempt-store";
+import { crm } from "@/lib/crm";
+import { canAccess, type User } from "@/lib/domain";
 
 const LOCKOUT_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
+
+function firstAllowedPage(user: User) {
+  if (!(["Calling Team", "Sales Executive", "Manager"] as const).includes(user.role)) return "/leads";
+  const first = (["leads", "quotations", "visits", "performance"] as const)
+    .find((section) => canAccess(user.role, section));
+  return first === "leads" ? "/leads"
+    : first === "quotations" ? "/quotations"
+    : first === "visits" ? "/visits"
+    : first === "performance" ? "/performance" : "/home";
+}
+
+async function prefetchLandingData(user: User, path: string) {
+  try {
+    const repo = crm();
+    const tasks: [string, Promise<unknown>][] = path === "/leads"
+      ? [
+        ["leads", repo.listLeads()],
+        ["assignable users", repo.listAssignableUsers()],
+        ...(user.role === "Manager" ? [["fixable leads", repo.listFixableAssignedLeads(user)] as [string, Promise<unknown>]] : []),
+        ]
+      : path === "/quotations"
+        ? [["leads", repo.listLeads()], ["quotes", repo.listQuotes()], ["products", repo.listProducts()]]
+        : path === "/visits"
+          ? [["visits", repo.listVisits()], ["assignable users", repo.listAssignableUsers()]]
+          : path === "/performance"
+            ? [["performance data", Promise.all([repo.listLeads(), repo.listQuotes(), repo.listVisits(), repo.listUsers()])]]
+            : [];
+    await Promise.all(tasks.map(async ([name, task]) => {
+      try {
+        await task;
+      } catch (error) {
+        console.error("[auth] landing data prefetch failed", {
+          path,
+          resource: name,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }));
+  } catch (error) {
+    console.error("[auth] landing data prefetch setup failed", {
+      path,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 export async function demoLogin(userId: string) {
   if (!demoLoginAllowed()) redirect("/login");
   const user = STATIC_USERS.find((candidate) =>
     candidate.username === userId || candidate.zohoUserId === userId);
   if (!user) redirect("/login");
-  await createSession(staticUserAsPortalUser(user), user.username);
-  redirect("/home");
+  const portalUser = staticUserAsPortalUser(user);
+  const destination = firstAllowedPage(portalUser);
+  await createSession(portalUser, user.username);
+  void prefetchLandingData(portalUser, destination);
+  redirect(destination);
 }
 
 export async function loginAction(_: unknown, formData: FormData) {
@@ -45,9 +95,12 @@ export async function loginAction(_: unknown, formData: FormData) {
     return { error: "Invalid username or password" };
   }
   await loginAttemptStore.delete(username);
-  await createSession(staticUserAsPortalUser(user), user.username);
+  const portalUser = staticUserAsPortalUser(user);
+  const destination = firstAllowedPage(portalUser);
+  await createSession(portalUser, user.username);
   console.info(`[auth] login success ${Date.now() - started}ms`);
-  redirect("/leads");
+  void prefetchLandingData(portalUser, destination);
+  redirect(destination);
 }
 
 export async function logoutAction(expired = false) {

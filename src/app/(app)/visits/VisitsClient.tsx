@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { CalendarClock, CheckCircle2, FileText, MapPin, Play } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -35,9 +35,13 @@ export function VisitsClient({ user, visits, executives, today, performance }: {
   const [tab, setTab] = useState<WorkTab>("assigned");
   const [exec, setExec] = useState("all");
   const isManager = user.role === "Manager";
-  const open = [...workForTab(user, visits, "assigned", today, exec), ...workForTab(user, visits, "progress", today, exec)];
+  const workByTab = useMemo(
+    () => Object.fromEntries(TABS.map(({ id }) => [id, workForTab(user, visits, id, today, exec)])) as Record<WorkTab, Visit[]>,
+    [user, visits, today, exec],
+  );
+  const open = [...workByTab.assigned, ...workByTab.progress];
   const todays = open.filter((v) => v.isVisit && v.date === today);
-  const list = workForTab(user, visits, tab, today, exec);
+  const list = workByTab[tab];
   const [range, setRange] = useState<PerfRange>("week");
   const summary = performance?.[range === "week" ? "week" : "month"];
 
@@ -80,7 +84,7 @@ export function VisitsClient({ user, visits, executives, today, performance }: {
       <div className="flex gap-2 overflow-x-auto">
         {TABS.map((t) => (
           <Button key={t.id} variant={tab === t.id ? "default" : "outline"} className="h-11 shrink-0" onClick={() => setTab(t.id)}>
-            {t.label} ({workForTab(user, visits, t.id, today, exec).length})
+            {t.label} ({workByTab[t.id].length})
           </Button>
         ))}
       </div>

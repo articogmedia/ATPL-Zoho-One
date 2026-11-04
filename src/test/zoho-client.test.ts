@@ -6,7 +6,9 @@ vi.mock("next/cache", () => ({
   unstable_cache: (load: () => unknown) => load,
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  const { resetMemoryCache } = await import("@/lib/cache");
+  resetMemoryCache();
   process.env.SESSION_SECRET = "test-session-secret-that-is-at-least-32-chars";
   process.env.ZOHO_DC = "in";
   process.env.DATA_SOURCE = "mock";
