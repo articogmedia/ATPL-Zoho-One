@@ -89,11 +89,13 @@ export async function addLeadAction(input: unknown) {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
     const duplicate = (await crm().listLeads()).find((lead) => normalizePhone(lead.phone) === data.phone);
-    if (duplicate && !(user.role === "Manager" && data.forceCreate)) {
+    const executive = isExecutive(user);
+    const forceCreate = !executive && user.role === "Manager" && data.forceCreate;
+    if (duplicate && !forceCreate) {
       throw new DuplicateLeadError({ id: duplicate.id, name: duplicate.name, owner: duplicate.assignedTo ?? "Unassigned", status: duplicate.status });
     }
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
-    const assignee = isExecutive(user) ? user.name : data.assignedTo ?? null;
+    const assignee = executive ? user.name : data.assignedTo ?? null;
     if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     if (assignee && !(await assignableNames()).includes(assignee)) throw new ForbiddenError("Choose a team member.");
     const lead = await crm().createLead(data, user, assignee);
@@ -259,7 +261,7 @@ export async function createQuoteAction(input: unknown) {
 export async function suggestOfferNoAction(): Promise<string> {
   await requireActionUser("quotations");
   const quotes = await crm().listQuotes();
-  return nextOfferNo(quotes.map((q) => q.offerNo), todayIST(), 1);
+  return nextOfferNo(quotes.map((q) => q.offerNo), todayIST());
 }
 
 // ---------- Work & site visits ----------

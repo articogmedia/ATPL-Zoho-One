@@ -135,15 +135,19 @@ export const zohoRepository: CrmRepository = {
   async getLead(id) { return (await leadMap()).get(id) ?? null; },
 
   async createLead(input, actor, assignTo) {
-    const owner = assignTo ? await userByName(assignTo) : null;
+    const executiveCreatesLead = actor.role === "Sales Executive";
+    const owner = executiveCreatesLead
+      ? await userByName(actor.name)
+      : assignTo ? await userByName(assignTo) : null;
     const queueOwner = !owner ? await queueOwnerId() : undefined;
     const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
+    const leadSource = executiveCreatesLead ? "Sales Executive" : input.source;
     const record: Record<string, unknown> = {
       Last_Name: input.name.trim(),
       ...(input.company.trim() ? { Company: input.company.trim() } : {}),
       Mobile: input.phone,
       ...(input.area.trim() ? { City: input.area.trim() } : {}),
-      Lead_Source: input.source,
+      Lead_Source: leadSource,
       Lead_Status: WRITE_LEAD_STATUS[status],
       ...(input.remarks.trim() ? { Description: input.remarks.trim() } : {}),
       ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner } }),

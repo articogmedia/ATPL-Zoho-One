@@ -29,7 +29,7 @@ describe("offer numbering", () => {
     expect(nextOfferNo(["225/26-27", "227/26-27", "226/26-27"], "2026-10-29")).toBe("228/26-27");
   });
   it("restarts in a new financial year and ignores malformed numbers", () => {
-    expect(nextOfferNo(["300/25-26", "abc"], "2026-10-29")).toBe("1/26-27");
+    expect(nextOfferNo(["300/25-26", "abc"], "2026-10-29")).toBe("239/26-27");
   });
   it("uses India's date, not the server's", () => {
     // 20:00 UTC on 28 Oct is already 29 Oct, 01:30 in India.

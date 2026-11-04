@@ -114,12 +114,16 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         <div className="w-full">
           <div className="flex items-center justify-between gap-3">
             <h1 className="text-xl font-semibold sm:text-2xl sm:font-bold">Manage Leads</h1>
-            {!isExec && <Button className="h-10 rounded-lg px-4 sm:hidden" onClick={() => setAdding((value) => !value)}><Plus /> Add</Button>}
+            <Button className="h-10 rounded-lg px-4 sm:hidden" onClick={() => setAdding((value) => !value)}><Plus /> Add</Button>
           </div>
           <p className="mt-1 truncate text-sm text-slate-500 sm:text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
-          {!isExec && <p className="mt-1 text-[13px] text-slate-500 sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
+          {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-slate-500 sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
         </div>
-        {!isExec && <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end"><Button className="h-11 shrink-0 max-[480px]:hidden" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button><span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {todaysFollowUps}</span>{user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeads} count={fixableCount} /></span>}</div>}
+        <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
+          <Button className="h-11 shrink-0" onClick={() => setAdding((value) => !value)}><Plus /> <span className="hidden sm:inline">Add Lead</span><span className="sm:hidden">Add</span></Button>
+          {(user.role === "Manager" || user.role === "Calling Team") && <span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {todaysFollowUps}</span>}
+          {user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeads} count={fixableCount} /></span>}
+        </div>
       </div>
 
       {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads leads={fixableLeads} count={fixableCount} compact /></div>}
@@ -167,7 +171,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         setLeadRows((current) => current.some((item) => item.id === lead.id) ? current : [lead, ...current]);
         setJustAdded(lead);
         setPendingAddedId(lead.id);
-        setTab(leadBucketForTab(lead));
+        setTab(isExec ? "mine" : leadBucketForTab(lead));
         setAdding(false);
         setHighlightedLeadId(lead.id);
         router.refresh();

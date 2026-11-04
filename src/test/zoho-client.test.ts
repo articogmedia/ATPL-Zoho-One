@@ -265,6 +265,41 @@ describe("Zoho hosts", () => {
 });
 
 describe("Zoho lead owner fallbacks", () => {
+  it("assigns an executive-created lead to that executive and marks it Assigned to Sales", async () => {
+    const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
+      if (path === "/Leads") {
+        expect(record.Owner).toEqual({ id: "exec-1" });
+        expect(record.Lead_Status).toBe("Assigned to Sales");
+        expect(record.Lead_Source).toBe("Sales Executive");
+      }
+      return "lead-exec";
+    });
+
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-exec"
+        ? { data: [{ id: "lead-exec", Full_Name: "Executive lead", Mobile: "9999999998", Lead_Source: "Sales Executive", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
+        : { users: [{ id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } }] }),
+      zohoList: vi.fn(async () => []),
+      zohoWrite: write,
+    }));
+    const { invalidate } = await import("@/lib/cache");
+    invalidate("users", "leads");
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.createLead(
+      { name: "Executive lead", company: "", phone: "9999999998", area: "", source: "Direct Call", remarks: "" },
+      { id: "exec-1", name: "Executive", role: "Sales Executive" },
+      "Other Executive",
+    );
+
+    expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.objectContaining({
+      Owner: { id: "exec-1" },
+      Lead_Status: "Assigned to Sales",
+      Lead_Source: "Sales Executive",
+    }), { trigger: ["workflow"] });
+  });
+
     it("uses an explicitly assigned executive as owner", async () => {
       const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
         if (path === "/Leads") {

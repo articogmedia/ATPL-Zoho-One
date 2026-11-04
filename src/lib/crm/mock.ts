@@ -35,8 +35,11 @@ export const mockRepository: CrmRepository = {
   async getLead(id) { return state.leads.find((l) => l.id === id) ?? null; },
   async listAssignableUsers() { return MOCK_USERS.filter((u) => isAssignable(u, env().ZOHO_QUEUE_OWNER_ID)); },
   async createLead(input, actor, assignTo) {
+    const selfAssigned = actor.role === "Sales Executive";
     const lead: Lead = {
-      ...input, id: `L${101 + state.leads.length}`, status: "Fresh Lead", assignedTo: assignTo,
+      ...input, id: `L${101 + state.leads.length}`, status: selfAssigned ? "Assigned to Sales" : "Fresh Lead",
+      assignedTo: selfAssigned ? actor.name : assignTo, assignedToId: selfAssigned ? actor.id : undefined,
+      source: selfAssigned ? "Direct Call" : input.source,
       createdOn: today(), address: "", touchedBy: [actor.name],
     };
     state.leads.unshift(lead);

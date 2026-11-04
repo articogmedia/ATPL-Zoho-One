@@ -40,13 +40,14 @@ function pdfDocument(commands: string[]) {
 export function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const offerNo = searchParams.get("offerNo")?.trim() || "OFFER";
-  if (!/^\d{3}\/\d{2}-\d{2}$/.test(offerNo)) {
-    return NextResponse.json({ error: "Offer number must use NNN/YY-YY." }, { status: 400 });
+  if (!/^\d{1,4}\/\d{2}-\d{2}$/.test(offerNo)) {
+    return NextResponse.json({ error: "Offer number must use 1-4 digits/YY-YY." }, { status: 400 });
   }
   const customer = searchParams.get("customer") ?? "";
   const leadName = searchParams.get("leadName") ?? "";
   const date = searchParams.get("date") ?? "";
   const address = searchParams.get("address") ?? "";
+  const subject = searchParams.get("subject")?.trim() || "Your requirement - reg.";
   const items = Array.from(searchParams.entries())
     .filter(([key]) => /^item\d+$/.test(key))
     .map(([, value]) => {
@@ -75,7 +76,7 @@ export function GET(request: NextRequest) {
     text(40, 656, customer || leadName, 9),
     line(40, 635, 555, 635),
     text(40, 618, "Dear Sir,", 10),
-    text(40, 602, "Sub: Your requirement for SAMSUNG MAKE INVERTOR Air Conditioners - reg.", 9, true),
+    text(40, 602, `Sub: ${subject}`, 9, true),
     text(40, 584, "We thank you very much for your enquiry. We are pleased to submit herewith our offer.", 8),
     text(40, 570, "Terms & Conditions", 9, true),
     text(40, 555, "Item & Description", 8, true),

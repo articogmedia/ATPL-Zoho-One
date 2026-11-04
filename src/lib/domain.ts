@@ -342,13 +342,15 @@ export function financialYear(date: string): string {
 }
 
 /** Next offer number in the "NNN/YY-YY" format, continuing from the highest existing number this financial year. */
-export function nextOfferNo(existing: string[], date: string, firstNumber = 1): string {
+export function nextOfferNo(existing: string[], date: string, firstNumber?: number): string {
   const fy = financialYear(date);
   const nums = existing
     .map((o) => /^(\d+)\/(\d{2}-\d{2})$/.exec(o.trim()))
     .filter((m): m is RegExpExecArray => !!m && m[2] === fy)
     .map((m) => Number(m[1]));
-  return `${nums.length ? Math.max(...nums) + 1 : firstNumber}/${fy}`;
+  const configuredFirstNumber = Number(process.env.ATPL_FIRST_OFFER_NO);
+  const startingNumber = firstNumber ?? (Number.isInteger(configuredFirstNumber) && configuredFirstNumber > 0 ? configuredFirstNumber : 239);
+  return `${nums.length ? Math.max(...nums) + 1 : startingNumber}/${fy}`;
 }
 
 export const isExecutive = (u: User) => u.role === "Sales Executive";

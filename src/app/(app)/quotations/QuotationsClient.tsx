@@ -257,7 +257,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
           <div className="offer-no-break space-y-1 border-slate-300 sm:border-r sm:pr-4">
             <div className="text-base font-bold">OFFER</div>
             <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
-              <input aria-label="Offer reference" className="h-8 rounded border border-input px-2 font-medium" pattern="\d{3}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />
+              <input aria-label="Offer reference" className="h-8 rounded border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />
             </label>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Stage</span><span>Draft</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Valid Till</span><span>{validTill}</span></div>

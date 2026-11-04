@@ -69,7 +69,7 @@ export function VisitsClient({ user, visits, executives, today, performance }: {
       <section className="rounded-xl border border-primary/30 bg-accent p-4 shadow-sm">
         <h2 className="mb-3 text-lg font-semibold">Today&apos;s visits ({todays.length})</h2>
         <div className="grid gap-3 md:grid-cols-2">
-          {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} />)}
+          {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} />)}
           {!todays.length && <p className="text-sm text-muted-foreground">No visits today.</p>}
         </div>
       </section>
@@ -83,14 +83,14 @@ export function VisitsClient({ user, visits, executives, today, performance }: {
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((v) => <Item key={v.id} v={v} showExec={isManager} />)}
+        {list.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} />)}
         {!list.length && <p className="text-sm text-muted-foreground">Nothing here.</p>}
       </div>
     </div>
   );
 }
 
-function Item({ v, showExec }: { v: Visit; showExec: boolean }) {
+function Item({ v, showExec, today }: { v: Visit; showExec: boolean; today: string }) {
   const [mode, setMode] = useState<"none" | "complete" | "reschedule">("none");
   const [notes, setNotes] = useState("");
   const [date, setDate] = useState(v.date);
@@ -111,10 +111,13 @@ function Item({ v, showExec }: { v: Visit; showExec: boolean }) {
           <div className="font-semibold">{v.customer}</div>
           <div className="flex items-start gap-1 text-sm text-muted-foreground"><MapPin className="mt-0.5 h-4 w-4 shrink-0" />{[v.address, v.area].filter(Boolean).join(", ") || "No address"}</div>
         </div>
-        <StatusBadge status={v.status} />
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          {v.date < today && v.status !== "Completed" && <span className="rounded-full bg-red-600 px-2 py-1 text-xs font-semibold text-white">Overdue</span>}
+          <StatusBadge status={v.status} />
+        </div>
       </div>
       <div className="text-sm">
-        <div><b>{v.type}</b> · {v.date} at {v.time}{showExec && ` · ${v.executive}`}</div>
+        <div><b>{v.type}</b> · {v.date}{v.time ? ` at ${v.time}` : ""}{showExec && ` · ${v.executive}`}</div>
         {(v.nextAction || v.followUp) && <div className="text-muted-foreground">Next: {v.nextAction}{v.followUp && ` (follow-up ${v.followUp})`}</div>}
         {v.notes && <div className="mt-1 italic">Notes: {v.notes}</div>}
       </div>
