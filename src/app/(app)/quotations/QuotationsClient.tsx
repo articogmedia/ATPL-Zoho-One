@@ -2,13 +2,13 @@
 
 import { useMemo, useState, useTransition } from "react";
 import Image from "next/image";
-import { ArrowLeft, Eye, MessageCircle, Plus, Printer, Search, Trash2, UserPlus } from "lucide-react";
+import { ArrowLeft, Check, Eye, MessageCircle, Minus, Plus, Printer, Search, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/ui-bits";
 import { addLeadAction, createQuoteAction } from "@/app/actions/crm";
 import { COMPANY, offerSubject } from "@/lib/company";
-import { LEAD_SOURCES, formatINR, quoteTotals, type Lead, type LeadSource, type Product, type Quotation } from "@/lib/domain";
+import { LEAD_SOURCES, formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
 type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; suggestedOfferNo: string; presetLeadId: string };
@@ -29,6 +29,11 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
   const t = quoteTotals(items);
   const lead = myLeads.find((l) => l.id === leadId);
+  const validLineCount = rows.filter((row) => {
+    const product = byId.get(row.productId);
+    return !!product && validateQuoteLine(row.qty, row.discount, product.price) === null;
+  }).length;
+  const productsValid = rows.length > 0 && validLineCount === rows.length && items.length > 0;
   const upd = (i: number, p: Partial<Row>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
 
   const matches = useMemo(() => {
@@ -72,20 +77,21 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const scrollToStep = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
-  const currentStep = !lead ? 0 : items.length > 0 ? 1 : 1;
+  const currentStep = !lead ? 0 : productsValid ? 2 : 1;
 
   return (
-    <div className="space-y-6">
+    <div className={`space-y-6 ${lead && productsValid ? "pb-28 sm:pb-6" : "pb-6"}`}>
       <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
         {["Customer", "Products", "Preview"].map((label, index) => {
-          const disabled = index === 1 ? !lead : index === 2 ? !lead || items.length === 0 : false;
+          const completed = index === 0 ? !!lead : index === 1 ? productsValid : preview;
+          const disabled = index === 1 ? !lead : index === 2 ? !lead || !productsValid : false;
           const active = index === currentStep && !preview;
           const selectStep = () => {
             if (index === 0) scrollToStep("quote-step-customer");
             if (index === 1) scrollToStep("quote-step-products");
             if (index === 2) setPreview(true);
           };
-          return <button type="button" key={label} disabled={disabled} onClick={selectStep} className={`min-h-11 cursor-pointer rounded-lg px-2 py-2 text-center text-xs font-semibold transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={active ? "step" : undefined}>{index + 1}. {label}</button>;
+          return <button type="button" key={label} disabled={disabled} onClick={selectStep} className={`flex min-h-11 cursor-pointer items-center justify-center gap-1 rounded-lg px-2 py-2 text-center text-xs font-semibold transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={active ? "step" : undefined}>{completed && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}<span>{index + 1}. {label}</span></button>;
         })}
       </nav>
       <section id="quote-step-customer" className="scroll-mt-20 space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
@@ -133,13 +139,14 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         )}
       </section>
 
-      <section id="quote-step-products" className="scroll-mt-20 space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6">
+      <section id="quote-step-products" className={`scroll-mt-20 space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6 ${!lead ? "hidden sm:block" : ""}`}>
         <h2 className="text-lg font-semibold">Step 2 · Products</h2>
+        {!lead && <p className="text-sm text-muted-foreground">Choose a customer in Step 1 before adding products.</p>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
-              <tr><th className="w-12 p-2">S.No</th><th className="p-2">Model</th><th className="w-20 p-2">Unit</th><th className="w-28 p-2">Qty</th><th className="w-32 p-2 text-right">Rate</th><th className="w-36 p-2 text-right">Amount</th><th className="w-12" /></tr>
+              <tr><th className="w-12 p-2">S.No</th><th className="p-2">Product</th><th className="w-20 p-2">Unit</th><th className="w-28 p-2">Qty</th><th className="w-32 p-2 text-right">Rate</th><th className="w-36 p-2 text-right">Discount</th><th className="w-36 p-2 text-right">Amount</th><th className="w-12" /></tr>
             </thead>
             <tbody>
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
@@ -150,7 +157,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
                   <td className="p-2"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
                   <td className="p-2 text-right">{formatINR(p?.price ?? 0)}</td>
                   <td className="p-2"><input aria-label="Discount" type="number" min={0} className={fieldClass} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
-                  <td className="p-2 text-right font-semibold">{formatINR((p?.price ?? 0) * r.qty)}</td>
+                  <td className="p-2 text-right font-semibold">{formatINR((p?.price ?? 0) * r.qty - r.discount)}</td>
                   <td className="p-2"><Button variant="ghost" size="icon" aria-label="Remove row" onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></td>
                 </tr>); })}
             </tbody>
@@ -158,22 +165,23 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         </div>
         <div className="space-y-3 lg:hidden">
           {rows.map((r, i) => { const p = byId.get(r.productId); return (
-            <div key={i} className="space-y-2 rounded-lg border p-3">
-              <div className="flex items-center justify-between"><span className="font-semibold">#{i + 1}</span>
-                <Button variant="ghost" size="sm" onClick={() => remove(i)}><Trash2 className="h-4 w-4" /> Remove</Button></div>
-              {productSelect(r, i)}
-              <div className="grid grid-cols-3 gap-2 text-sm">
-                <label className="space-y-1"><span>Quantity ({p?.unit})</span><input type="number" min={1} inputMode="numeric" className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></label>
-                <div className="space-y-1"><span>Rate</span><div className="flex h-12 items-center">{formatINR(p?.price ?? 0)}</div></div>
-                <label className="space-y-1"><span>Discount</span><input type="number" min={0} className={fieldClass} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></label>
+            <div key={i} className="space-y-3 rounded-xl border border-border bg-card p-3 shadow-sm">
+              <div className="flex min-h-11 items-center justify-between"><span className="font-semibold">Item {i + 1}</span>
+                <Button variant="ghost" size="icon" className="h-11 w-11" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></div>
+              <MobileProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} />
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Quantity ({p?.unit || "Unit"})</span><div className="grid grid-cols-[44px_1fr_44px]"><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-r-none" aria-label={`Decrease quantity for item ${i + 1}`} onClick={() => setQty(i, String(Math.max(1, r.qty - 1)))}><Minus /></Button><input aria-label={`Quantity for item ${i + 1}`} type="number" min={1} inputMode="numeric" className={`${fieldClass} min-h-11 rounded-none text-center text-base`} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-l-none" aria-label={`Increase quantity for item ${i + 1}`} onClick={() => setQty(i, String(r.qty + 1))}><Plus /></Button></div></label>
+                <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Discount</span><input aria-label={`Discount for item ${i + 1}`} type="number" min={0} inputMode="numeric" className={`${fieldClass} min-h-11 text-base`} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></label>
               </div>
-              <div className="flex justify-between font-semibold"><span>Amount</span><span>{formatINR((p?.price ?? 0) * r.qty)}</span></div>
+              <div className="text-sm"><span className="text-xs font-medium text-muted-foreground">Rate</span><div className="mt-1 min-h-11 rounded-lg border border-border bg-secondary px-3 py-2.5">{formatINR(p?.price ?? 0)}</div></div>
+              {validateQuoteLine(r.qty, r.discount, p?.price ?? 0) && <p className="text-xs font-medium text-destructive">{validateQuoteLine(r.qty, r.discount, p?.price ?? 0)}</p>}
+              <div className="text-right font-semibold"><span>Amount: </span>{r.discount > 0 && <span className="mr-2 text-sm text-muted-foreground">-{formatINR(r.discount)}</span>}<span>{formatINR(Math.max(0, (p?.price ?? 0) * r.qty - r.discount))}</span></div>
             </div>); })}
         </div>
-        <Button variant="outline" size="lg" className="h-12 w-full sm:w-auto" disabled={rows.length >= 50 || !products.length}
-          onClick={() => setRows([...rows, { productId: products[0]!.id, qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add Row</Button>
+        <Button variant="outline" size="lg" className="h-12 w-full border-dashed sm:w-auto" disabled={rows.length >= 50 || !products.length}
+          onClick={() => setRows([...rows, { productId: products[0]!.id, qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add item</Button>
         <Totals t={t} />
-        <div className="fixed inset-x-0 bottom-16 z-20 border-t bg-card p-3 shadow-[0_-8px_24px_rgba(15,23,42,.12)] sm:hidden">
+        <div className={`fixed inset-x-0 bottom-16 z-20 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-sm sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
           <div className="mx-auto flex max-w-md items-center gap-3">
             <div className="min-w-0 flex-1"><div className="text-xs text-muted-foreground">Grand total</div><div className="truncate font-bold">{formatINR(t.total)}</div></div>
             <Button size="lg" className="h-12 shrink-0 px-5" disabled={!lead || !items.length} onClick={() => setPreview(true)}>Preview</Button>
@@ -193,6 +201,27 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
           </div>
         ))}
       </section>
+    </div>
+  );
+}
+
+function MobileProductPicker({ products, value, onChange, label }: { products: Product[]; value: string; onChange: (value: string) => void; label: string }) {
+  const [query, setQuery] = useState("");
+  const selected = products.find((product) => product.id === value);
+  const matches = products.filter((product) => `${product.model} ${product.description ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+  return (
+    <div className="space-y-2">
+      <label htmlFor={`${label}-search`} className="text-xs font-medium text-muted-foreground">{label}</label>
+      <input id={`${label}-search`} className={`${fieldClass} min-h-11 text-base`} type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={selected ? `${selected.model} · ${formatINR(selected.price)}` : "Search products"} />
+      {query && <div className="max-h-56 overflow-y-auto rounded-lg border border-border bg-card shadow-sm" role="listbox" aria-label={`${label} results`}>
+        {matches.map((product) => (
+          <button key={product.id} type="button" role="option" aria-selected={product.id === value} className="min-h-16 w-full border-b border-border px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" onClick={() => { onChange(product.id); setQuery(""); }}>
+            <span className="block text-sm font-medium">{product.model}</span>
+            <span className="block text-xs text-muted-foreground">{product.unit} · {formatINR(product.price)}</span>
+          </button>
+        ))}
+        {!matches.length && <p className="p-3 text-sm text-muted-foreground">No products found.</p>}
+      </div>}
     </div>
   );
 }
@@ -237,16 +266,16 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
 
   return (
     <div className="space-y-4">
-      <div className="no-print flex flex-wrap gap-2">
-        <Button variant="outline" className="h-12" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
-        <Button className="h-12" onClick={() => window.print()}><Printer className="h-5 w-5" /> Print / PDF</Button>
-        <Button asChild variant="secondary" className="h-12"><a href={wa} target="_blank" rel="noreferrer"><MessageCircle className="h-5 w-5" /> Share on WhatsApp</a></Button>
-        <Button variant="outline" className="h-12" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
+      <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+        <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
+        <Button className="h-12 w-full sm:w-auto" onClick={() => window.print()}><Printer className="h-5 w-5" /> Print / PDF</Button>
+        <Button asChild variant="secondary" className="h-12 w-full sm:w-auto"><a className="flex items-center justify-center gap-2" href={wa} target="_blank" rel="noreferrer"><MessageCircle className="h-5 w-5" /> WhatsApp</a></Button>
+        <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
       </div>
-      <article className="print-area offer-document mx-auto max-w-3xl rounded-xl bg-card p-5 text-[11px] leading-snug shadow-sm sm:p-8">
+      <article className="print-area offer-document mx-auto max-w-full overflow-hidden rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
-          <Image src="/brand/atpl-logo.png" alt="Air Trendz" width={150} height={60} className="h-auto w-36 object-contain" priority />
-          <div className="text-right">
+          <Image src="/brand/atpl-logo.png" alt="Air Trendz" width={150} height={60} sizes="150px" className="h-auto max-w-full object-contain" priority />
+          <div className="max-w-full text-right">
             <div className="text-lg font-bold">Air Trendz Pvt. Ltd.</div>
             <div className="mt-1 text-[10px]">{COMPANY.address}</div>
             <div className="text-[10px]">{COMPANY.contact}</div>
@@ -293,7 +322,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
           <p className="mt-2 text-justify">We thank you very much for your enquiry. We are pleased to submit herewith our offer. Our detailed Bill of quantities are as follows.</p>
         </section>
 
-        <div className="overflow-x-auto">
+        <div className="max-w-full overflow-x-auto">
         <table className="mt-4 min-w-[520px] w-full border-collapse text-[10px]">
           <thead><tr className="bg-[#4f94cd] text-white">
             <th className="px-2 py-2 text-left">Item &amp; Description</th>
