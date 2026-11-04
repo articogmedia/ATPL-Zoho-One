@@ -359,7 +359,10 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
     "", `Grand Total: ${formatINR(t.total)}`, "", `for ${COMPANY.name}, ${COMPANY.signatory}, ${COMPANY.phones}`,
   ].join("\n");
   const wa = `https://wa.me/91${lead.phone.replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(msg)}`;
+  const [downloading, setDownloading] = useState(false);
   const downloadPdf = async () => {
+    if (downloading) return;
+    setDownloading(true);
     try {
       const response = await fetch("/api/quotations/pdf", {
         method: "POST",
@@ -372,14 +375,38 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
         }),
       });
       if (!response.ok) throw new Error("Unable to create the PDF.");
-      const url = URL.createObjectURL(await response.blob());
+      const blob = new Blob([await response.blob()], { type: "application/pdf" });
+      const fileName = `offer-${offerNo.replace("/", "-")}.pdf`;
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+        (navigator.userAgent.includes("Macintosh") && navigator.maxTouchPoints > 1);
+      if (isMobile) {
+        const file = new File([blob], fileName, { type: "application/pdf" });
+        if (navigator.canShare?.({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: fileName });
+            return;
+          } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") return;
+          }
+        }
+      }
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `offer-${offerNo.replace("/", "-")}.pdf`;
-      link.click();
-      URL.revokeObjectURL(url);
+      link.download = fileName;
+      link.rel = "noopener";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      try {
+        link.click();
+      } finally {
+        link.remove();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -387,7 +414,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
     <div className="space-y-4 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6">
       <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
-        <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf}><Printer className="h-5 w-5" /> Download PDF</Button>
+        <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf} disabled={downloading}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
         <Button asChild variant="secondary" className="h-12 w-full sm:w-auto"><a className="flex items-center justify-center gap-2" href={wa} target="_blank" rel="noreferrer"><MessageCircle className="h-5 w-5" /> WhatsApp</a></Button>
         <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
       </div>
