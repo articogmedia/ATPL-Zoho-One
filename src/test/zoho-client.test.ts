@@ -75,6 +75,30 @@ describe("Zoho lead actions", () => {
     expect(leadPhoneMatch({ Mobile: "09876543210" } as never, "9876543210")).toBe("Mobile");
   });
 
+  it("rejects unrelated search results, accepts Phone matches, and handles no content", async () => {
+    let searchRecords: unknown[] = [{ id: "wrong", Last_Name: "Wrong", Mobile: "9123456780", Lead_Status: "Fresh Lead" }];
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/Leads/search") return { data: searchRecords };
+      if (path === "/users") return { users: [] };
+      return {};
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho,
+      zohoList: vi.fn(async () => []),
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.findLeadByPhone("9491609192")).resolves.toBeNull();
+
+    searchRecords = [{ id: "phone-match", Last_Name: "Phone Match", Phone: "+91 94916 09192", Lead_Status: "Fresh Lead" }];
+    await expect(zohoRepository.findLeadByPhone("9491609192")).resolves.toMatchObject({ matchedField: "Phone", lead: { id: "phone-match" } });
+
+    searchRecords = [];
+    await expect(zohoRepository.findLeadByPhone("9491609192")).resolves.toBeNull();
+  });
+
   it("updates editable lead fields", async () => {
     const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
       if (path === "/Leads/lead-1") expect(record).toMatchObject({

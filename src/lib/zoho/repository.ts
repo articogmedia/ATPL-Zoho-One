@@ -19,6 +19,14 @@ export function leadPhoneMatch(record: ZLead, normalizedPhone: string): "Mobile"
   if (normalizePhone(String(record.Phone ?? "")) === normalizedPhone) return "Phone";
   return null;
 }
+
+export function leadPhoneSearchCriteria(normalizedPhone: string): string {
+  const variants = [normalizedPhone, `+91${normalizedPhone}`, `91${normalizedPhone}`, `0${normalizedPhone}`];
+  const fields = variants.flatMap((variant) =>
+    [`(Mobile:equals:${variant})`, `(Phone:equals:${variant})`],
+  );
+  return `(${fields.join("or")})`;
+}
 const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description", ...Object.values(FIELD.task)];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result"];
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
@@ -143,18 +151,17 @@ export const zohoRepository: CrmRepository = {
   async findLeadByPhone(phone) {
     const normalized = normalizePhone(phone);
     if (!normalized) return null;
-    for (const field of ["Mobile", "Phone"]) {
-      const result = await zoho<{ data?: ZLead[] }>("GET", "/Leads", {
-        query: { fields: LEAD_FIELDS.join(","), criteria: `(${field}:equals:${normalized})`, per_page: 1 },
-      }).catch(() => null);
-      const record = result?.data?.[0];
-      if (record) {
-        const assignable = await assignableIds();
-        return { lead: mapLead(record, assignable), matchedField: field as "Mobile" | "Phone" };
-      }
+    const result = await zoho<{ data?: ZLead[] }>("GET", "/Leads/search", {
+      query: { fields: LEAD_FIELDS.join(","), criteria: leadPhoneSearchCriteria(normalized), per_page: 200 },
+    }).catch(() => null);
+    for (const record of result?.data ?? []) {
+      const matchedField = leadPhoneMatch(record, normalized);
+      if (!matchedField) continue;
+      const assignable = await assignableIds();
+      return { lead: mapLead(record, assignable), matchedField };
     }
     const search = await zoho<{ data?: ZLead[] }>("GET", "/Leads/search", {
-      query: { phone: normalized },
+      query: { fields: LEAD_FIELDS.join(","), phone: normalized, per_page: 200 },
     }).catch(() => null);
     for (const record of search?.data ?? []) {
       const matchedField = leadPhoneMatch(record, normalized);

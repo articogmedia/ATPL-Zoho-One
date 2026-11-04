@@ -42,7 +42,9 @@ async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Prom
     });
     if (err instanceof ZohoError) {
       if (err.code === "DUPLICATE_DATA" && duplicatePhone) {
-        const existing = await crm().findLeadByPhone(duplicatePhone());
+        const duplicateLookupPhone = duplicatePhone();
+        if (!duplicateLookupPhone) return { ok: false, error: friendlyZohoError(err.status, err.code) };
+        const existing = await crm().findLeadByPhone(duplicateLookupPhone);
         if (existing) {
           return {
             ok: false,
@@ -101,6 +103,7 @@ const newLeadSchema = z.object({
 
 export async function addLeadAction(input: unknown) {
   let submittedPhone = "";
+  let submittedForceCreate = false;
   return run(async () => {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
@@ -108,6 +111,7 @@ export async function addLeadAction(input: unknown) {
     const duplicate = await crm().findLeadByPhone(data.phone);
     const executive = isExecutive(user);
     const forceCreate = !executive && user.role === "Manager" && data.forceCreate;
+    submittedForceCreate = !!forceCreate;
     if (duplicate && !forceCreate) {
       throw new DuplicateLeadError({ id: duplicate.lead.id, name: duplicate.lead.name, owner: duplicate.lead.assignedTo ?? "Unassigned", status: duplicate.lead.status, matchedField: duplicate.matchedField });
     }
@@ -121,7 +125,7 @@ export async function addLeadAction(input: unknown) {
     revalidatePath("/leads");
     revalidateTag("users");
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
-  }, () => submittedPhone);
+  }, () => submittedForceCreate ? "" : submittedPhone);
 }
 
 const updateLeadSchema = z.object({
