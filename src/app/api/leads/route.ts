@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth/guard";
 import { crm } from "@/lib/crm";
+import { ZohoError } from "@/lib/zoho/client";
+import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { LEAD_SOURCES, LEAD_STATUSES, leadsForTab, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
 
 export const dynamic = "force-dynamic";
@@ -53,7 +55,19 @@ export async function GET(request: NextRequest) {
       hasAnyLeads: visibleLeads.length > 0,
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
-    console.error("[api] lead page load failed", error);
-    return NextResponse.json({ error: "Unable to load leads right now." }, { status: 500 });
+    const reference = newErrorReference();
+    console.error("[api] lead page load failed", {
+      reference,
+      message: error instanceof Error ? error.message : String(error),
+      status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      field: error instanceof ZohoError ? error.field : undefined,
+      details: error instanceof ZohoError ? error.details : undefined,
+      operation: error instanceof ZohoError ? error.operation : undefined,
+    });
+    const message = error instanceof ZohoError
+      ? friendlyZohoError(error.status, error.code, error.message, error.field, reference)
+      : `Unable to load leads right now. (Ref: ${reference})`;
+    return NextResponse.json({ error: message, reference }, { status: 500 });
   }
 }

@@ -1,4 +1,19 @@
-import type { CallOutcome, LeadStatus, Role, VisitStatus } from "@/lib/domain";
+import type { CallOutcome, LeadSource, LeadStatus, Role, VisitStatus } from "@/lib/domain";
+
+const LEAD_SOURCE_ALIASES: Record<LeadSource, string[]> = {
+  "Meta Ads": ["meta ads", "facebook ads", "facebook", "instagram", "advertisement", "social media"],
+  "Google Ads": ["google ads", "google adwords", "adwords", "google", "web research"],
+  "Direct Call": ["direct call", "cold call", "telephone", "phone", "call"],
+};
+
+export function zohoLeadSource(source: LeadSource, configuredValues: string[]): string | null {
+  const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const values = configuredValues.filter((value) => !!value.trim()).map((value) => ({ value, normalized: normalize(value) }));
+  const aliases = LEAD_SOURCE_ALIASES[source].map(normalize);
+  return values.find(({ normalized }) => aliases.includes(normalized))?.value
+    ?? values.find(({ normalized }) => aliases.some((alias) => normalized.includes(alias) || alias.includes(normalized)))?.value
+    ?? null;
+}
 
 /**
  * Everything that depends on how ATPL's Zoho org is configured lives in this one file.

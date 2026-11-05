@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, quoteTotals, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
-import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
+import { CALL_STATUS_BY_OUTCOME, zohoLeadSource } from "@/lib/zoho/fields";
 import { mapLead, mapQuote, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
 import { matchPortalUserToZohoUser, missingPortalUsers, resolvePortalUserZohoId, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
@@ -166,6 +166,22 @@ describe("zoho mapping", () => {
     const overrides = parseRoleOverrides("a@example.com:Calling Team");
     expect(mapUser({ id: "1", full_name: "A", email: "A@EXAMPLE.COM", role: { name: "Manager" } }, overrides)?.role).toBe("Calling Team");
     expect(mapUser({ id: "2", full_name: "B", role: { name: "Unknown" } })).toBeNull();
+  });
+  it("normalizes duplicated Zoho user name parts", () => {
+    expect(mapUser({
+      id: "1", full_name: "Pavan Pavan Kumar", first_name: "Pavan", last_name: "Pavan Kumar",
+      role: { name: "Sales Executive" },
+    })?.name).toBe("Pavan Kumar");
+    expect(mapUser({
+      id: "2", full_name: "Pavan Pavan Kumar", role: { name: "Sales Executive" },
+    })?.name).toBe("Pavan Kumar");
+  });
+  it("maps portal sources to values configured in Zoho", () => {
+    const values = ["Advertisement", "Web Research", "Cold Call"];
+    expect(zohoLeadSource("Meta Ads", values)).toBe("Advertisement");
+    expect(zohoLeadSource("Google Ads", values)).toBe("Web Research");
+    expect(zohoLeadSource("Direct Call", values)).toBe("Cold Call");
+    expect(zohoLeadSource("Meta Ads", ["Website"])).toBeNull();
   });
   it("maps tasks to visits using the linked lead's address", () => {
     const lead = mapLead({ id: "L1", Last_Name: "Ramesh", Company: "Clinic", Street: "Plot 45", City: "Kukatpally", Owner: { id: "u1", name: "Anil Kumar" } }, execs);

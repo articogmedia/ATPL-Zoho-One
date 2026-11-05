@@ -5,11 +5,14 @@ import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf
 import { z } from "zod";
 import { currentUser } from "@/lib/auth/guard";
 import { crm } from "@/lib/crm";
+import { ZohoError } from "@/lib/zoho/client";
+import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT } from "@/lib/company";
 import { formatINR, quoteTotals, todayIST, visibleFor } from "@/lib/domain";
 import { quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
 
 export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const bodySchema = z.object({
   leadId: z.string().trim().min(1),
@@ -45,10 +48,14 @@ export async function POST(request: NextRequest) {
   let parsed: z.infer<typeof bodySchema>;
   try {
     parsed = bodySchema.parse(await request.json());
-  } catch {
-    return NextResponse.json({ error: "Please check the quotation details." }, { status: 400 });
+  } catch (error) {
+    const message = error instanceof z.ZodError
+      ? error.issues[0]?.message ?? "Please check the quotation details."
+      : "Please provide valid quotation details.";
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 
+  try {
   const repository = crm();
   const [lead, products] = await Promise.all([repository.getLead(parsed.leadId), repository.listProducts()]);
   if (!lead || visibleFor(user, [lead]).length === 0) {
@@ -71,12 +78,7 @@ export async function POST(request: NextRequest) {
   const width = 595.28;
   const height = 841.89;
   const margin = 36;
-  let logo = null;
-  try {
-    logo = await pdf.embedPng(await readFile(path.join(process.cwd(), "public", "brand", "atpl-logo.png")));
-  } catch {
-    logo = null;
-  }
+  const logo = await pdf.embedPng(await readFile(path.join(process.cwd(), "public", "brand", "atpl-logo.png")));
 
   const text = (page: PDFPage, value: string, x: number, y: number, size = 8, font = regular) =>
     page.drawText(value.replaceAll("₹", "Rs."), { x, y, size, font, color: rgb(0.12, 0.16, 0.22) });
@@ -108,9 +110,35 @@ export async function POST(request: NextRequest) {
   text(page, "CLIENT", margin, y, 8, bold);
   text(page, lead.company || lead.name, margin + 75, y, 9);
   y -= 30;
+  text(page, "STAGE", margin, y, 8, bold);
+  text(page, "Draft", margin + 75, y, 9);
+  y -= 18;
+  text(page, "BILL TO", margin, y, 8, bold);
+  text(page, lead.company || lead.name, margin + 75, y, 8);
+  text(page, "SHIP TO", 320, y, 8, bold);
+  text(page, lead.company || lead.name, 375, y, 8);
+  y -= 14;
+  text(page, "Contact", margin, y, 7, bold);
+  text(page, lead.name, margin + 75, y, 7);
+  text(page, lead.phone, 375, y, 7);
+  y -= 14;
+  text(page, "Address", margin, y, 7, bold);
+  text(page, lead.address || lead.area || "-", margin + 75, y, 7);
+  text(page, lead.address || lead.area || "-", 375, y, 7);
+  y -= 22;
   text(page, "EQUIPMENT REQUIRED", margin, y, 9, bold);
   text(page, `Total Units: ${presentation.totalUnits}`, 430, y, 9, bold);
   y -= 18;
+  const equipmentSummary = items.filter((item) => !/^B\s*-\s*/i.test(item.model));
+  for (const item of equipmentSummary) {
+    const lines = wrap(regular, `${item.model} / ${item.qty} / ${item.unit}`, 7, width - margin * 2);
+    for (const line of lines) {
+      if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
+      text(page, line, margin, y, 7);
+      y -= 10;
+    }
+  }
+  y -= 8;
   text(page, `Dear Sir,  Sub: ${parsed.subject}`, margin, y, 9, bold);
   y -= 16;
   wrap(regular, OFFER_TEXT.enquiry, 8, width - margin * 2).forEach((line) => { text(page, line, margin, y, 8); y -= 10; });
@@ -175,6 +203,22 @@ export async function POST(request: NextRequest) {
   return new NextResponse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
     headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="offer-${parsed.offerNo.replace("/", "-")}.pdf"`, "Cache-Control": "private, no-store" },
   });
+  } catch (error) {
+    const reference = newErrorReference();
+    console.error("[api] quotation PDF generation failed", {
+      reference,
+      message: error instanceof Error ? error.message : String(error),
+      status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      field: error instanceof ZohoError ? error.field : undefined,
+      details: error instanceof ZohoError ? error.details : undefined,
+      operation: error instanceof ZohoError ? error.operation : undefined,
+    });
+    const message = error instanceof ZohoError
+      ? friendlyZohoError(error.status, error.code, error.message, error.field, reference)
+      : `Unable to create the PDF. (Ref: ${reference})`;
+    return NextResponse.json({ error: message, reference }, { status: 500 });
+  }
 }
 
 function formatOfferDate(value: string) {

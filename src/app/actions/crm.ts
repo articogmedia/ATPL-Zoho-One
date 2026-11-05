@@ -6,10 +6,10 @@ import { invalidate } from "@/lib/cache";
 import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { ZohoError } from "@/lib/zoho/client";
-import { friendlyZohoError } from "@/lib/crm-action-errors";
+import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
+  LEAD_SOURCES, LEAD_STATUSES, canAdvanceLeadStatus, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
   normalizePhone, type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
 } from "@/lib/domain";
 
@@ -18,8 +18,24 @@ export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; 
 
 class DuplicateLeadError extends Error {
   constructor(readonly lead: DuplicateLeadResult) {
-    super("A lead with this number already exists");
+    super("Mobile number already exists.");
   }
+}
+
+function reportActionFailure(action: string, error: unknown, fallback: string): string {
+  const reference = newErrorReference();
+  console.error(`[action] ${action} failed`, {
+    reference,
+    message: error instanceof Error ? error.message : String(error),
+    zohoStatus: error instanceof ZohoError ? error.status : undefined,
+    zohoCode: error instanceof ZohoError ? error.code : undefined,
+    zohoField: error instanceof ZohoError ? error.field : undefined,
+    zohoDetails: error instanceof ZohoError ? error.details : undefined,
+    zohoOperation: error instanceof ZohoError ? error.operation : undefined,
+  });
+  return error instanceof ZohoError
+    ? friendlyZohoError(error.status, error.code, error.message, error.field, reference)
+    : `${fallback} (Ref: ${reference})`;
 }
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
@@ -33,33 +49,31 @@ async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Prom
     console.info(`[action] failed ${Date.now() - started}ms`);
     if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
     if (err instanceof ForbiddenError) return { ok: false, error: err.message };
-    if (err instanceof z.ZodError) return { ok: false, error: "Please check the form values." };
-    console.error("Action failed", {
-      action: "addLead",
-      message: err instanceof Error ? err.message : String(err),
-      zohoStatus: err instanceof ZohoError ? err.status : undefined,
-      zohoCode: err instanceof ZohoError ? err.code : undefined,
-      zohoField: err instanceof ZohoError ? err.field : undefined,
-      zohoOperation: err instanceof ZohoError ? err.operation : undefined,
-    });
+    if (err instanceof z.ZodError) return { ok: false, error: err.issues[0]?.message ?? "Please check the form values." };
     if (err instanceof ZohoError) {
-      if (err.code === "DUPLICATE_DATA" && duplicatePhone) {
+      const error = reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.");
+      if ((err.code === "DUPLICATE_DATA" || err.code === "DUPLICATE_LEAD") && duplicatePhone) {
         const duplicateLookupPhone = duplicatePhone();
-        if (!duplicateLookupPhone) return { ok: false, error: friendlyZohoError(err.status, err.code) };
-        const existing = await crm().findLeadByPhone(duplicateLookupPhone);
-        if (existing) {
-          return {
-            ok: false,
-            error: friendlyZohoError(err.status, err.code),
-            duplicate: { id: existing.lead.id, name: existing.lead.name, owner: existing.lead.assignedTo ?? "Unassigned", status: existing.lead.status, matchedField: existing.matchedField },
-          };
+        if (duplicateLookupPhone) {
+          try {
+            const existing = await crm().findLeadByPhone(duplicateLookupPhone);
+            if (existing) {
+              return {
+                ok: false,
+                error,
+                duplicate: { id: existing.lead.id, name: existing.lead.name, owner: existing.lead.assignedTo ?? "Unassigned", status: existing.lead.status, matchedField: existing.matchedField },
+              };
+            }
+          } catch (lookupError) {
+            reportActionFailure("duplicate lead lookup", lookupError, "Could not verify the duplicate lead.");
+          }
         }
       }
-      return { ok: false, error: friendlyZohoError(err.status, err.code) };
+      return { ok: false, error };
     }
     return {
       ok: false,
-      error: "Something went wrong. Please try again.",
+      error: reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support."),
     };
   }
 }
@@ -99,7 +113,7 @@ async function ownLeadOrThrow(user: User, leadId: string) {
 // ---------- Leads ----------
 
 const newLeadSchema = z.object({
-  name: text(120).min(1), company: text(160), phone, area: text(120), source, remarks: text(500),
+  name: text(120).min(1, "Lead name is required."), company: text(160), phone, area: text(120), source, remarks: text(500),
   assignedTo: text(120).nullable().optional(), forceCreate: z.boolean().optional(),
 });
 
@@ -133,22 +147,32 @@ const updateLeadSchema = z.object({
 
 const editLeadSchema = z.object({
   id, name: text(120).min(1), company: text(160), phone, source,
-  status: status.optional(), remarks: text(500).optional(),
+  status: status.optional(), remarks: text(500).optional(), followUp: isoDate.optional(),
 });
 
 export async function updateLeadAction(input: unknown) {
+  let submittedPhone = "";
   return run(async () => {
     const user = await requireActionUser("leads");
     const p = editLeadSchema.parse(input);
+    submittedPhone = p.phone;
     await ownLeadOrThrow(user, p.id);
+    const duplicate = await crm().findLeadByPhone(p.phone);
+    if (duplicate && duplicate.lead.id !== p.id) {
+      throw new DuplicateLeadError({
+        id: duplicate.lead.id, name: duplicate.lead.name,
+        owner: duplicate.lead.assignedTo ?? "Unassigned", status: duplicate.lead.status,
+        matchedField: duplicate.matchedField,
+      });
+    }
     const patch: LeadPatch = {
       name: p.name, company: p.company, phone: p.phone, source: p.source,
-      status: p.status, remarks: p.remarks,
+      status: p.status, remarks: p.remarks, followUp: p.followUp,
     };
     await crm().updateLead(p.id, patch, user);
     invalidate("leads");
     return { zohoUrl: zohoLeadUrl(p.id) };
-  });
+  }, () => submittedPhone);
 }
 
 const reassignLeadSchema = z.object({ id, assignedTo: text(120).min(1) });
@@ -200,8 +224,9 @@ export async function getLeadHistoryAction(leadId: string): Promise<ActionResult
     await ownLeadOrThrow(user, id.parse(leadId));
     return { ok: true, data: await crm().getLeadHistory(leadId) };
   } catch (err) {
-    console.error("History failed", err);
-    return { ok: false, error: err instanceof ForbiddenError ? err.message : "Could not load history." };
+    if (err instanceof ForbiddenError) return { ok: false, error: err.message };
+    if (err instanceof z.ZodError) return { ok: false, error: "Lead not found." };
+    return { ok: false, error: reportActionFailure("lead history", err, "Could not load lead history.") };
   }
 }
 
@@ -247,8 +272,9 @@ export async function getLeadTimelineAction(leadId: string): Promise<ActionResul
     await ownLeadOrThrow(user, id.parse(leadId));
     return { ok: true, data: await crm().getLeadTimeline(leadId) };
   } catch (err) {
-    console.error("Timeline failed", err);
-    return { ok: false, error: err instanceof ForbiddenError ? err.message : "Could not load timeline." };
+    if (err instanceof ForbiddenError) return { ok: false, error: err.message };
+    if (err instanceof z.ZodError) return { ok: false, error: "Lead not found." };
+    return { ok: false, error: reportActionFailure("lead timeline", err, "Could not load lead timeline.") };
   }
 }
 
@@ -257,6 +283,7 @@ export async function getLeadTimelineAction(leadId: string): Promise<ActionResul
 const quoteSchema = z.object({
   offerNo: text(30).min(1),
   leadId: id,
+  subject: text(300).optional(),
   items: z.array(z.object({ productId: id, qty: z.number().int().min(1).max(10_000), discount: z.number().min(0).default(0) })).min(1).max(50),
 });
 
@@ -269,6 +296,24 @@ export async function createQuoteAction(input: unknown) {
     const quote = await crm().createQuote(q, user, executive);
     invalidate("quotes", "leads");
     return quote;
+  });
+}
+
+const quotationSentSchema = z.object({ leadId: id });
+
+export async function markQuotationSentAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("quotations");
+    const { leadId } = quotationSentSchema.parse(input);
+    const lead = await ownLeadOrThrow(user, leadId);
+    if (lead.status !== "Quotation Sent") {
+      if (!canAdvanceLeadStatus(lead.status, "Quotation Sent")) {
+        throw new ForbiddenError("A closed lead cannot be marked as quotation sent.");
+      }
+      await crm().updateLead(lead.id, { status: "Quotation Sent" }, user);
+      invalidate("leads", "quotes");
+    }
+    return { status: "Quotation Sent" as const };
   });
 }
 
@@ -285,17 +330,18 @@ export async function getQuoteDetailAction(rawId: string): Promise<ActionResult<
   } catch (error) {
     if (error instanceof ForbiddenError) return { ok: false, error: error.message };
     if (error instanceof z.ZodError) return { ok: false, error: "Quotation not found." };
-    console.error("[action] getQuoteDetail failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return { ok: false, error: "Could not load quotation details. Please try again." };
+    return { ok: false, error: reportActionFailure("quotation detail", error, "Could not load quotation details.") };
   }
 }
 
 export async function suggestOfferNoAction(): Promise<string> {
   await requireActionUser("quotations");
-  const quotes = await crm().listQuotes();
-  return nextOfferNo(quotes.map((q) => q.offerNo), todayIST());
+  try {
+    const quotes = await crm().listQuotes();
+    return nextOfferNo(quotes.map((q) => q.offerNo), todayIST());
+  } catch (error) {
+    throw new Error(reportActionFailure("suggest offer number", error, "Could not suggest an offer number."));
+  }
 }
 
 // ---------- Work & site visits ----------

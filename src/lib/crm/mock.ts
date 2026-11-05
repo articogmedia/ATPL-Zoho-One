@@ -87,7 +87,14 @@ export const mockRepository: CrmRepository = {
       parts.push(p.assignedTo ? `Assigned to ${p.assignedTo}` : "Unassigned");
       l.assignedTo = p.assignedTo;
     }
-    if (p.remarks?.trim()) { parts.push(`"${p.remarks.trim()}"`); l.remarks = p.remarks.trim(); }
+    if (p.remarks !== undefined && p.remarks.trim() !== l.remarks) {
+      parts.push(p.remarks.trim() ? `"${p.remarks.trim()}"` : "Remarks cleared");
+      l.remarks = p.remarks.trim();
+    }
+    if (p.followUp && p.followUp !== l.followUp) {
+      l.followUp = p.followUp;
+      parts.push(`Follow-up: ${p.followUp}`);
+    }
     if (!l.touchedBy.includes(actor.name)) l.touchedBy.push(actor.name);
     if (parts.length) note(id, actor.name, parts.join(" · "));
   },
@@ -130,7 +137,6 @@ export const mockRepository: CrmRepository = {
     };
     state.quotes.unshift(q);
     note(lead.id, actor.name, `Quotation ${q.offerNo} created`);
-    advanceMockLeadStatus(lead, "Quotation Sent");
     return q;
   },
 

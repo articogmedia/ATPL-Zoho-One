@@ -9,7 +9,10 @@ const ownerId = (id?: string | number) => (id === undefined || id === null ? und
 const warnedStatuses = new Set<string>();
 const warnedSources = new Set<string>();
 
-export type ZUser = { id: string | number; full_name: string; email?: string; role?: { name?: string }; profile?: { name?: string } };
+export type ZUser = {
+  id: string | number; full_name: string; first_name?: string; last_name?: string;
+  email?: string; role?: { name?: string }; profile?: { name?: string };
+};
 export type ZLead = {
   id: string | number; Last_Name?: string; First_Name?: string; Company?: string; Mobile?: string; Phone?: string;
   City?: string; Street?: string; Lead_Source?: string; Lead_Status?: string; Owner?: Ref; Description?: string;
@@ -65,16 +68,22 @@ export function mapRole(u: ZUser, overrides?: ReadonlyMap<string, Role>): Role |
 
 export function mapUser(u: ZUser, overrides?: ReadonlyMap<string, Role>): User | null {
   const role = mapRole(u, overrides);
-  return role ? { id: ownerId(u.id)!, name: u.full_name, role, email: u.email } : null;
+  const firstName = u.first_name?.trim();
+  const lastName = u.last_name?.trim();
+  const composed = [firstName, lastName].filter(Boolean).join(" ") || u.full_name.trim();
+  const name = composed.split(/\s+/).filter((part, index, parts) =>
+    index === 0 || part.toLowerCase() !== parts[index - 1]?.toLowerCase(),
+  ).join(" ");
+  return role ? { id: ownerId(u.id)!, name, role, email: u.email } : null;
 }
 
 /** Zoho lead sources are free-form (Facebook, Google AdWords, ...). Fold them into ATPL's three. */
 export function normalizeSource(raw?: string): LeadSource {
   const value = (raw ?? "").trim();
   const s = value.toLowerCase();
-  if (/meta|facebook|instagram|\bfb\b|\big\b/.test(s)) return "Meta Ads";
-  if (/google|adwords|youtube/.test(s)) return "Google Ads";
-  if (/phone|telephone|walk[- ]?in|direct call|direct|sales executive|inbound/.test(s)) return "Direct Call";
+  if (/meta|facebook|instagram|\bfb\b|\big\b|advertisement|social/.test(s)) return "Meta Ads";
+  if (/google|adwords|youtube|web research/.test(s)) return "Google Ads";
+  if (/phone|telephone|walk[- ]?in|direct call|direct|sales executive|inbound|cold call|^call$/.test(s)) return "Direct Call";
   if (value && !warnedSources.has(s)) {
     warnedSources.add(s);
     console.warn("[zoho] Unknown lead source; using Direct Call", { source: value });

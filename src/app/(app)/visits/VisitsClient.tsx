@@ -40,7 +40,7 @@ export function VisitsClient({ user, visits, executives, today, performance, cal
   const summary = performance?.[range === "week" ? "week" : "month"];
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 max-w-full space-y-6">
       <div>
         <h1 className="min-w-0 text-xl font-bold sm:text-2xl">My Work &amp; Site Visits</h1>
       </div>
@@ -66,23 +66,23 @@ export function VisitsClient({ user, visits, executives, today, performance, cal
         </label>
       )}
 
-      <section className="rounded-xl border border-primary/30 bg-accent p-4 shadow-sm">
+      <section className="min-w-0 rounded-xl border border-primary/30 bg-accent p-4 shadow-sm">
         <h2 className="mb-3 text-lg font-semibold">Today&apos;s visits ({todays.length})</h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 xl:grid-cols-3">
           {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} />)}
           {!todays.length && <p className="text-sm text-muted-foreground">No visits today.</p>}
         </div>
       </section>
 
-      <div className="flex gap-2 overflow-x-auto">
+      <div className="flex flex-wrap gap-2">
         {TABS.map((t) => (
-          <Button key={t.id} variant={tab === t.id ? "default" : "outline"} className="h-11 shrink-0" onClick={() => setTab(t.id)}>
+          <Button key={t.id} variant={tab === t.id ? "default" : "outline"} className="h-11" onClick={() => setTab(t.id)}>
             {t.label} ({workByTab[t.id].length})
           </Button>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div id="work-list" className="grid min-w-0 grid-cols-1 items-stretch gap-6 md:grid-cols-2 xl:grid-cols-3">
         {list.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} />)}
         {!list.length && <p className="text-sm text-muted-foreground">Nothing here.</p>}
       </div>
@@ -120,59 +120,68 @@ function Item({ v, showExec, today, onStatusChanged }: { v: Visit; showExec: boo
   const quote = linkedLeadId ? { pathname: "/quotations", query: { lead: linkedLeadId } } : null;
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm">
-      <div className="min-w-0">
-        <div className="min-w-0">
-          <div className="truncate font-semibold">{v.customer}</div>
-          {(v.address || v.area) && <div className="flex items-start gap-1 text-sm text-muted-foreground"><MapPin className="mt-0.5 h-4 w-4 shrink-0" /><span className="truncate">{[v.address, v.area].filter(Boolean).join(", ")}</span></div>}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-1">
+    <article className="flex h-full min-w-0 flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-sm">
+      <div className="min-w-0 break-words font-semibold">{v.customer}</div>
+      <div className="flex w-fit max-w-full flex-wrap items-center gap-1">
         {v.date < today && v.status !== "Completed" && <span className="rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700">Overdue</span>}
         <StatusBadge status={v.status} />
       </div>
-      <div className="space-y-0.5 text-sm">
-        <div className="font-medium">{v.type}</div>
-        <div className="text-muted-foreground">{v.date}{v.time ? ` · ${v.time}` : ""}{showExec && ` · ${v.executive}`}</div>
-        {(v.nextAction || v.followUp) && <div className="text-muted-foreground">Next: {v.nextAction}{v.followUp && ` (follow-up ${v.followUp})`}</div>}
-        {v.notes && <div className="mt-1 italic">Notes: {v.notes}</div>}
+      <div className="min-w-0 break-words font-medium">{v.type}</div>
+      <div className="min-w-0 break-words text-sm text-muted-foreground">
+        <div>{v.date}{v.time ? ` · ${v.time}` : ""}{showExec && ` · ${v.executive}`}</div>
+        {(v.address || v.area) && <div className="mt-1 flex min-w-0 items-start gap-1"><MapPin className="mt-0.5 h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{[v.address, v.area].filter(Boolean).join(", ")}</span></div>}
+        {v.nextAction && <div className="mt-1 break-words">Next: {v.nextAction}</div>}
+        {v.followUp && <div className="mt-1 break-words">Follow-up: {v.followUp}</div>}
+        {v.notes && <div className="mt-1 break-words italic">Notes: {v.notes}</div>}
       </div>
 
       {mode === "complete" && (
-        <div className="space-y-2">
-          <textarea className={`${fieldClass} h-20 py-2`} placeholder="Visit notes" value={notes} maxLength={1000} onChange={(e) => setNotes(e.target.value)} />
-          <Button variant="outline" className="h-11 w-full" disabled={savingAction !== null} onClick={() => void send({ status: "Completed", ...(notes.trim() ? { notes: notes.trim() } : {}) }, "Moved to Completed", "complete", "Completed")}>
-            {savingAction === "complete" && <LoaderCircle className="animate-spin" />}Save as completed
-          </Button>
+        <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingAction) setMode("none"); }}>
+          <section role="dialog" aria-modal="true" aria-labelledby={`complete-title-${v.id}`} className="w-full max-w-md space-y-3 rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-xl sm:pb-5">
+            <h3 id={`complete-title-${v.id}`} className="font-semibold">Mark this task completed?</h3>
+            <p className="text-sm text-muted-foreground">Confirm completion for {v.customer}.</p>
+            <textarea aria-label="Completion notes" className={`${fieldClass} min-h-20 py-2`} placeholder="Visit notes (optional)" value={notes} maxLength={1000} onChange={(e) => setNotes(e.target.value)} />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" className="h-11" disabled={savingAction !== null} onClick={() => setMode("none")}>Cancel</Button>
+              <Button type="button" className="h-11" disabled={savingAction !== null} onClick={() => void send({ status: "Completed", ...(notes.trim() ? { notes: notes.trim() } : {}) }, "Moved to Completed", "complete", "Completed")}>
+                {savingAction === "complete" && <LoaderCircle className="h-[18px] w-[18px] animate-spin" />}Confirm completed
+              </Button>
+            </div>
+          </section>
         </div>
       )}
       {mode === "reschedule" && (
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <input type="date" aria-label="New date" className={fieldClass} value={date} onChange={(e) => setDate(e.target.value)} />
-            <input type="time" aria-label="New time" className={fieldClass} value={time} onChange={(e) => setTime(e.target.value)} />
-            <input type="date" aria-label="Follow-up date" className={fieldClass} value={followUp} onChange={(e) => setFollowUp(e.target.value)} />
-          </div>
-          <Button variant="outline" className="h-11 w-full" disabled={savingAction !== null || !date || !time} onClick={() => void send({ date, time, followUp }, "Rescheduled", "reschedule")}>
-            {savingAction === "reschedule" && <LoaderCircle className="animate-spin" />}Save new time
-          </Button>
+        <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingAction) setMode("none"); }}>
+          <section role="dialog" aria-modal="true" aria-labelledby={`reschedule-title-${v.id}`} className="w-full max-w-md space-y-3 rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-xl sm:pb-5">
+            <h3 id={`reschedule-title-${v.id}`} className="font-semibold">Reschedule task</h3>
+            <label className="block text-sm font-medium">Visit date<input type="date" aria-label="New date" className={`${fieldClass} mt-1`} value={date} onChange={(e) => setDate(e.target.value)} /></label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block min-w-0 text-sm font-medium">Time<input type="time" aria-label="New time" className={`${fieldClass} mt-1 min-w-0`} value={time} onChange={(e) => setTime(e.target.value)} /></label>
+              <label className="block min-w-0 text-sm font-medium">Follow-up date<input type="date" aria-label="Follow-up date" className={`${fieldClass} mt-1 min-w-0`} value={followUp} onChange={(e) => setFollowUp(e.target.value)} /></label>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" className="h-11" disabled={savingAction !== null} onClick={() => setMode("none")}>Cancel</Button>
+              <Button type="button" className="h-11" disabled={savingAction !== null || !date || !time} onClick={() => void send({ date, time, followUp }, "Rescheduled", "reschedule")}>
+                {savingAction === "reschedule" && <LoaderCircle className="h-[18px] w-[18px] animate-spin" />}Save new date
+              </Button>
+            </div>
+          </section>
         </div>
       )}
 
       {quote
-        ? <Button asChild className="h-11 w-full"><Link href={quote}><FileText className="h-4 w-4" />Quotation</Link></Button>
-        : <Button className="h-11 w-full" disabled title="No customer linked to this task"><FileText className="h-4 w-4" />Quotation</Button>}
-      {v.status !== "Completed" && <div className="grid grid-cols-3 gap-2 max-[379px]:grid-cols-2">
-        <span title={v.status === "In Progress" ? "Work is already in progress" : undefined}>
-          <Button variant="outline" className="flex-col gap-1 px-2 py-2 text-xs" title={v.status === "In Progress" ? "Work is already in progress" : undefined} disabled={savingAction !== null || v.status === "In Progress"} onClick={() => void send({ status: "In Progress" }, "Moved to In Progress", "start", "In Progress")}>
-            {savingAction === "start" ? <LoaderCircle className="animate-spin" /> : <Play className="h-4 w-4" />}Start Work
+        ? <Button asChild className="h-11 w-full min-w-0 whitespace-normal"><Link href={quote}><FileText className="h-4 w-4" />Quotation</Link></Button>
+        : <Button className="h-11 w-full min-w-0 whitespace-normal" disabled title="No customer linked to this task"><FileText className="h-4 w-4" />Quotation</Button>}
+      {v.status !== "Completed" && <div className="mt-auto grid w-full min-w-0 grid-cols-3 gap-2">
+        <Button type="button" variant="outline" className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 whitespace-normal rounded-xl border px-2 text-center text-xs font-medium leading-tight transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed" title={v.status === "In Progress" ? "Work is already in progress" : undefined} disabled={savingAction !== null || v.status === "In Progress"} onClick={() => void send({ status: "In Progress" }, "Moved to In Progress", "start", "In Progress")}>
+            {savingAction === "start" ? <LoaderCircle className="!size-[18px] animate-spin" /> : <Play className="!size-[18px]" />}<span>Start Work</span>
           </Button>
-        </span>
-        <Button variant="outline" className="flex-col gap-1 px-2 py-2 text-xs" disabled={savingAction !== null} onClick={() => setMode(mode === "complete" ? "none" : "complete")}><CheckCircle2 className="h-4 w-4" />Mark Completed</Button>
-        <Button variant="outline" className="flex-col gap-1 px-2 py-2 text-xs" disabled={savingAction !== null} onClick={() => setMode(mode === "reschedule" ? "none" : "reschedule")}>
-          {savingAction === "reschedule" ? <LoaderCircle className="animate-spin" /> : <CalendarClock className="h-4 w-4" />}Reschedule
+        <Button type="button" variant="outline" className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 whitespace-normal rounded-xl border px-2 text-center text-xs font-medium leading-tight transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed" disabled={savingAction !== null} onClick={() => setMode(mode === "complete" ? "none" : "complete")}><CheckCircle2 className="!size-[18px]" /><span>Mark<br />Completed</span>
+        </Button>
+        <Button type="button" variant="outline" className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 whitespace-normal rounded-xl border px-2 text-center text-xs font-medium leading-tight transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed" disabled={savingAction !== null} onClick={() => setMode(mode === "reschedule" ? "none" : "reschedule")}>
+          {savingAction === "reschedule" ? <LoaderCircle className="!size-[18px] animate-spin" /> : <CalendarClock className="!size-[18px]" />}<span>Reschedule</span>
         </Button>
       </div>}
-    </div>
+    </article>
   );
 }

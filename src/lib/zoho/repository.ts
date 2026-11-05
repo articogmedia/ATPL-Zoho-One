@@ -5,7 +5,7 @@ import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
 import { zoho, zohoList, zohoWrite, ZohoError } from "./client";
-import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS } from "./fields";
+import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
   type ZCall, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
@@ -36,6 +36,26 @@ const LONG = 600_000;   // users, products
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
 const leadCreateLocks = new Map<string, Promise<unknown>>();
+const leadSourceValues = async () => cached("zoho:lead-source-values", LONG, async () => {
+  const response = await zoho<{
+    fields?: { api_name?: string; pick_list_values?: { actual_value?: string; display_value?: string }[] }[];
+  }>("GET", "/settings/fields", { query: { module: "Leads" } });
+  return response?.fields?.find((field) => field.api_name === "Lead_Source")?.pick_list_values
+    ?.map((item) => item.actual_value?.trim() || item.display_value?.trim() || "")
+    .filter(Boolean) ?? [];
+});
+const sourceValueForZoho = async (source: Lead["source"]) => {
+  const values = await leadSourceValues();
+  const value = zohoLeadSource(source, values);
+  if (!value) {
+    throw new ZohoError(
+      `The Zoho Lead_Source picklist has no value configured for "${source}". Add a matching value in Zoho CRM.`,
+      400, "INVALID_PICKLIST", "Lead_Source", source, "GET /settings/fields",
+      { availableValues: values },
+    );
+  }
+  return value;
+};
 const taskRows = cache(() => cached("visits:tasks", SHORT, async () => {
   try {
     return await zohoList<ZTask>("Tasks", TASK_FIELDS, 1000);
@@ -167,9 +187,14 @@ export const zohoRepository: CrmRepository = {
   async findLeadByPhone(phone) {
     const normalized = normalizePhone(phone);
     if (!normalized) return null;
-    const result = await zoho<{ data?: ZLead[] }>("GET", "/Leads/search", {
-      query: { fields: LEAD_FIELDS.join(","), criteria: leadPhoneSearchCriteria(normalized), per_page: 200 },
-    }).catch(() => null);
+    let result: { data?: ZLead[] } | null = null;
+    try {
+      result = await zoho<{ data?: ZLead[] }>("GET", "/Leads/search", {
+        query: { fields: LEAD_FIELDS.join(","), criteria: leadPhoneSearchCriteria(normalized), per_page: 200 },
+      });
+    } catch (error) {
+      if (!(error instanceof ZohoError) || error.status !== 400) throw error;
+    }
     for (const record of result?.data ?? []) {
       const matchedField = leadPhoneMatch(record, normalized);
       if (!matchedField) continue;
@@ -178,7 +203,7 @@ export const zohoRepository: CrmRepository = {
     }
     const search = await zoho<{ data?: ZLead[] }>("GET", "/Leads/search", {
       query: { fields: LEAD_FIELDS.join(","), phone: normalized, per_page: 200 },
-    }).catch(() => null);
+    });
     for (const record of search?.data ?? []) {
       const matchedField = leadPhoneMatch(record, normalized);
       if (record && matchedField) {
@@ -205,18 +230,17 @@ export const zohoRepository: CrmRepository = {
     const owner = executiveCreatesLead
       ? await userByName(actor.name)
       : assignTo ? await userByName(assignTo) : null;
-    const queueOwner = !owner ? await queueOwnerId() : undefined;
     const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
-    const leadSource = input.source;
+    const leadSource = await sourceValueForZoho(input.source);
     const record: Record<string, unknown> = {
       Last_Name: input.name.trim(),
-      ...(input.company.trim() ? { Company: input.company.trim() } : {}),
+      Company: input.company.trim() || input.name.trim(),
       Mobile: input.phone,
       ...(input.area.trim() ? { City: input.area.trim() } : {}),
       Lead_Source: leadSource,
       Lead_Status: WRITE_LEAD_STATUS[status],
       ...(input.remarks.trim() ? { Description: input.remarks.trim() } : {}),
-      ...(owner ? { Owner: { id: owner.id } } : { Owner: { id: queueOwner } }),
+      ...(owner ? { Owner: { id: owner.id } } : {}),
     };
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
     try {
@@ -265,9 +289,9 @@ export const zohoRepository: CrmRepository = {
       });
     }
     return {
-      id, name: input.name.trim(), company: input.company.trim(), phone: input.phone,
+      id, name: input.name.trim(), company: input.company.trim() || input.name.trim(), phone: input.phone,
       area: input.area.trim(), source: input.source, status: owner ? ASSIGNED_STAGE : "Fresh Lead",
-      assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id ?? queueOwner,
+      assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id,
       remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [actor.name],
     };
     } finally {
@@ -290,6 +314,12 @@ export const zohoRepository: CrmRepository = {
       try {
         await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
       } catch (error) {
+        if (error instanceof ZohoError) {
+          throw new ZohoError(
+            `Lead assignment failed while updating owner/status: ${error.message}`,
+            error.status, error.code, error.field, error.invalidValue, error.operation, error.details,
+          );
+        }
         throw new ZohoError(`Lead assignment failed while updating owner/status: ${error instanceof Error ? error.message : "Zoho rejected the update"}`);
       }
     }
@@ -367,6 +397,12 @@ export const zohoRepository: CrmRepository = {
       try {
         await zohoWrite("PUT", `/Leads/${lead.id}`, { Lead_Status: WRITE_LEAD_STATUS[ASSIGNED_STAGE] }, { trigger: ["workflow"] });
       } catch (error) {
+        if (error instanceof ZohoError) {
+          throw new ZohoError(
+            `Fix assigned leads failed for ${lead.name}: ${error.message}`,
+            error.status, error.code, error.field, error.invalidValue, error.operation, error.details,
+          );
+        }
         throw new ZohoError(`Fix assigned leads failed for ${lead.name}: ${error instanceof Error ? error.message : "Zoho rejected the update"}`);
       }
     }
@@ -401,7 +437,10 @@ export const zohoRepository: CrmRepository = {
     }
     if (p.company !== undefined && p.company.trim() !== current.company) { record.Company = p.company.trim() || "-"; parts.push("Company updated"); }
     if (p.phone?.trim() && p.phone.trim() !== current.phone) { record.Mobile = p.phone.trim(); parts.push("Phone updated"); }
-    if (p.source && p.source !== current.source) { record.Lead_Source = p.source; parts.push(`Source: ${p.source}`); }
+    if (p.source && p.source !== current.source) {
+      record.Lead_Source = await sourceValueForZoho(p.source);
+      parts.push(`Source: ${p.source}`);
+    }
 
     if (p.status && p.status !== current.status) {
       record.Lead_Status = WRITE_LEAD_STATUS[p.status];
@@ -416,11 +455,24 @@ export const zohoRepository: CrmRepository = {
         parts.push("Unassigned");
       }
     }
-    if (p.remarks?.trim()) { record.Description = p.remarks.trim(); parts.push(`"${p.remarks.trim()}"`); }
+    if (p.remarks !== undefined && p.remarks.trim() !== current.remarks) {
+      record.Description = p.remarks.trim() || null;
+      parts.push(p.remarks.trim() ? `"${p.remarks.trim()}"` : "Remarks cleared");
+    }
+    if (p.followUp && p.followUp !== current.followUp) parts.push(`Follow-up: ${p.followUp}`);
     if (!parts.length) return;
 
-    await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
+    if (Object.keys(record).length) await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
     await addNote(id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`);
+    if (p.followUp && p.followUp !== current.followUp) {
+      const owner = current.assignedTo ? await userByName(current.assignedTo) : actor;
+      await zohoWrite("POST", "/Tasks", {
+        Subject: `Follow-up call - ${current.name}`, Status: TASK_STATUS_WRITE.Assigned,
+        Due_Date: p.followUp, Owner: { id: owner.id }, ...relatedToLead(id),
+        [FIELD.task.isSiteVisit]: false, [FIELD.task.nextAction]: "Follow up call",
+        [FIELD.task.followUp]: p.followUp,
+      });
+    }
     invalidate("leads", "users");
   },
 
@@ -560,7 +612,7 @@ export const zohoRepository: CrmRepository = {
     const totals = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price, discount: l.discount })));
     const customer = lead.company || lead.name;
     const id = await zohoWrite("POST", "/Quotes", {
-      Subject: `Offer ${input.offerNo} - ${customer}`,
+      Subject: input.subject?.trim() || `Offer ${input.offerNo} - ${customer}`,
       [FIELD.quote.offerNo]: input.offerNo,
       [FIELD.quote.lead]: { id: lead.id },
       Owner: { id: owner.id },
@@ -571,7 +623,6 @@ export const zohoRepository: CrmRepository = {
       Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
     });
     await addNote(lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`);
-    await advanceLead(lead.id, lead.status, "Quotation Sent");
     invalidate("quotes", "leads");
     return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total: totals.total, status: "Draft", date: new Date().toISOString().slice(0, 10) };
   },

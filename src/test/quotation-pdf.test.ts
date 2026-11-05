@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-presentation";
 
+vi.mock("server-only", () => ({}));
+
 const currentUser = vi.fn();
 vi.mock("@/lib/auth/guard", () => ({ currentUser }));
 vi.mock("@/lib/crm", () => ({ crm: vi.fn(() => ({ getLead: vi.fn(() => Promise.resolve(null)), listProducts: vi.fn(() => []) })) }));

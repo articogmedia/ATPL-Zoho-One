@@ -6,6 +6,8 @@ import { createSession, destroySession } from "@/lib/auth/session";
 import { STATIC_USERS, staticUserAsPortalUser, verifyStaticCredentials } from "@/lib/auth/users";
 import { loginAttemptStore } from "@/lib/auth/login-attempt-store";
 import { crm } from "@/lib/crm";
+import { ZohoError } from "@/lib/zoho/client";
+import { newErrorReference } from "@/lib/crm-action-errors";
 import { canAccess, type User } from "@/lib/domain";
 
 const LOCKOUT_MS = 5 * 60 * 1000;
@@ -22,6 +24,17 @@ function firstAllowedPage(user: User) {
 }
 
 async function prefetchLandingData(user: User, path: string) {
+  const logFailure = (resource: string, error: unknown) => console.error("[auth] landing data prefetch failed", {
+    reference: newErrorReference(),
+    path,
+    resource,
+    message: error instanceof Error ? error.message : String(error),
+    status: error instanceof ZohoError ? error.status : undefined,
+    code: error instanceof ZohoError ? error.code : undefined,
+    field: error instanceof ZohoError ? error.field : undefined,
+    details: error instanceof ZohoError ? error.details : undefined,
+    operation: error instanceof ZohoError ? error.operation : undefined,
+  });
   try {
     const repo = crm();
     const tasks: [string, Promise<unknown>][] = path === "/leads"
@@ -41,18 +54,11 @@ async function prefetchLandingData(user: User, path: string) {
       try {
         await task;
       } catch (error) {
-        console.error("[auth] landing data prefetch failed", {
-          path,
-          resource: name,
-          message: error instanceof Error ? error.message : String(error),
-        });
+        logFailure(name, error);
       }
     }));
   } catch (error) {
-    console.error("[auth] landing data prefetch setup failed", {
-      path,
-      message: error instanceof Error ? error.message : String(error),
-    });
+    logFailure("setup", error);
   }
 }
 

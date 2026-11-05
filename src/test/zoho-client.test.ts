@@ -13,11 +13,20 @@ beforeEach(async () => {
   process.env.ZOHO_DC = "in";
   process.env.DATA_SOURCE = "mock";
   delete process.env.ZOHO_API_BASE_URL;
+  delete process.env.ZOHO_API_DOMAIN;
+  delete process.env.ZOHO_ACCOUNTS_URL;
   delete process.env.ZOHO_SANDBOX;
   delete process.env.ZOHO_QUEUE_OWNER_ID;
   vi.doUnmock("@/lib/zoho/client");
   vi.resetModules();
 });
+
+const leadSourceSettings = {
+  fields: [{
+    api_name: "Lead_Source",
+    pick_list_values: ["Meta Ads", "Google Ads", "Direct Call"].map((actual_value) => ({ actual_value })),
+  }],
+};
 
 describe("Zoho products catalogue", () => {
   it("retries invalid fields and filters inactive or unnamed products", async () => {
@@ -40,7 +49,7 @@ describe("Zoho products catalogue", () => {
     });
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: MockZohoError,
-      zoho: vi.fn(async () => ({ data: [] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? leadSourceSettings : ({ data: [] })),
       zohoList: list,
       zohoWrite: vi.fn(),
     }));
@@ -66,7 +75,7 @@ describe("Zoho lead actions", () => {
   it("matches +91, spaced, and leading-zero phone formats by phone field", async () => {
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
-      zoho: vi.fn(async () => ({ data: [] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? leadSourceSettings : ({ data: [] })),
       zohoList: vi.fn(async () => []),
       zohoWrite: vi.fn(),
     }));
@@ -101,6 +110,29 @@ describe("Zoho lead actions", () => {
     await expect(zohoRepository.findLeadByPhone("9491609192")).resolves.toBeNull();
   });
 
+  it("propagates phone-search failures instead of treating them as no duplicate", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status: number) {
+        super(message);
+      }
+    }
+    const zoho = vi.fn(async () => {
+      throw new MockZohoError("Zoho search unavailable", 401);
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      zoho,
+      zohoList: vi.fn(async () => []),
+      zohoWrite: vi.fn(),
+    }));
+    const { invalidate } = await import("@/lib/cache");
+    invalidate("leads", "users");
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.findLeadByPhone("9491609192")).rejects.toThrow("Zoho search unavailable");
+    expect(zoho).toHaveBeenCalledOnce();
+  });
+
   it("updates editable lead fields", async () => {
     const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
       if (path === "/Leads/lead-1") expect(record).toMatchObject({
@@ -112,7 +144,7 @@ describe("Zoho lead actions", () => {
 
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
-      zoho: vi.fn(async () => ({ data: [] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? leadSourceSettings : ({ data: [] })),
       zohoList: vi.fn(async () => [{ id: "lead-1", Last_Name: "Old Lead", Company: "Old Co", Mobile: "8888888888", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }]),
       zohoWrite: write,
     }));
@@ -302,6 +334,27 @@ describe("Zoho hosts", () => {
       });
     }
   });
+
+  it("uses explicit Zoho hosts only when they match the configured data centre", async () => {
+    process.env.ZOHO_DC = "com";
+    process.env.ZOHO_API_DOMAIN = "www.zohoapis.com";
+    process.env.ZOHO_ACCOUNTS_URL = "https://accounts.zoho.com";
+    const { hosts } = await import("@/lib/zoho/client");
+    expect(hosts()).toMatchObject({
+      accounts: "https://accounts.zoho.com",
+      api: "https://www.zohoapis.com",
+    });
+
+    vi.resetModules();
+    process.env.ZOHO_DC = "in";
+    const { env } = await import("@/lib/env");
+    expect(() => env()).toThrow("ZOHO_API_DOMAIN must use HTTPS and the in Zoho CRM data center");
+
+    vi.resetModules();
+    process.env.ZOHO_API_DOMAIN = "http://www.zohoapis.in";
+    const insecureEnv = await import("@/lib/env");
+    expect(() => insecureEnv.env()).toThrow("ZOHO_API_DOMAIN must use HTTPS");
+  });
 });
 
 describe("Zoho lead owner fallbacks", () => {
@@ -319,6 +372,7 @@ describe("Zoho lead owner fallbacks", () => {
       ZohoError: class extends Error {},
       zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-exec"
         ? { data: [{ id: "lead-exec", Full_Name: "Executive lead", Mobile: "9999999998", Lead_Source: "Direct Call", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
+        : path === "/settings/fields" ? leadSourceSettings
         : { users: [{ id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } }] }),
       zohoList: vi.fn(async () => []),
       zohoWrite: write,
@@ -353,6 +407,7 @@ describe("Zoho lead owner fallbacks", () => {
         ZohoError: class extends Error {},
         zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
           ? { data: [{ id: "lead-1", Full_Name: "New lead", Mobile: "9999999999", Lead_Source: "Direct Call", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
+          : path === "/settings/fields" ? leadSourceSettings
           : { users: [{ id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } }] }),
         zohoList: vi.fn(async () => []),
         zohoWrite: write,
@@ -372,11 +427,12 @@ describe("Zoho lead owner fallbacks", () => {
       expect(write).toHaveBeenCalledWith("POST", "/Tasks", expect.objectContaining({ Subject: "Call new lead", Owner: { id: "exec-1" } }));
     });
 
-    it("uses the active queue owner when creating without an assignee", async () => {
+    it("leaves a lead unassigned when no owner is selected", async () => {
       process.env.ZOHO_QUEUE_OWNER_ID = "queue-1";
       const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
         if (path === "/Leads") {
-          expect(record.Owner).toEqual({ id: "queue-1" });
+          expect(record).not.toHaveProperty("Owner");
+          expect(record.Company).toBe("New lead");
           expect(record.Lead_Status).toBe("Fresh Lead");
         }
         return "lead-1";
@@ -385,6 +441,7 @@ describe("Zoho lead owner fallbacks", () => {
         ZohoError: class extends Error {},
         zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
           ? { data: [{ id: "lead-1", Full_Name: "New lead", Mobile: "9999999999", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue Owner" } }] }
+          : path === "/settings/fields" ? leadSourceSettings
           : { users: [
               { id: "queue-1", full_name: "Queue Owner", role: { name: "Calling Team" } },
               { id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } },
@@ -430,12 +487,13 @@ describe("Zoho lead owner fallbacks", () => {
       expect(write).toHaveBeenCalledWith("PUT", "/Leads/lead-1", { Owner: { id: "queue-1" } }, { trigger: ["workflow"] });
     });
 
-    it("throws when the queue owner is missing or inactive", async () => {
+    it("does not require a queue owner to create an unassigned lead", async () => {
+      const write = vi.fn(async () => "lead-1");
       vi.doMock("@/lib/zoho/client", () => ({
         ZohoError: class extends Error {},
-        zoho: vi.fn(async () => ({ users: [] })),
+        zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? leadSourceSettings : ({ users: [] })),
         zohoList: vi.fn(async () => []),
-        zohoWrite: vi.fn(),
+        zohoWrite: write,
       }));
       const { invalidate } = await import("@/lib/cache");
       invalidate("users", "leads");
@@ -445,6 +503,7 @@ describe("Zoho lead owner fallbacks", () => {
         { name: "New lead", company: "", phone: "9999999999", area: "", source: "Direct Call", remarks: "" },
         { id: "actor-1", name: "Manager", role: "Manager" },
         null,
-      )).rejects.toThrow("Set ZOHO_QUEUE_OWNER_ID to an active Zoho user");
+      )).resolves.toMatchObject({ company: "New lead", assignedTo: null });
+      expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.not.objectContaining({ Owner: expect.anything() }), { trigger: ["workflow"] });
     });
 });

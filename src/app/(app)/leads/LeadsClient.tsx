@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { CalendarPlus, Clock3, History, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
@@ -39,6 +38,11 @@ function whatsappUrl(phone: string): string | null {
   return digits.length === 10 ? `https://wa.me/91${digits}` : null;
 }
 
+function phoneUrl(phone: string): string | null {
+  const digits = normalizePhone(phone);
+  return digits.length === 10 ? `tel:+91${digits}` : null;
+}
+
 function leadBucketForTab(lead: Lead): LeadTab {
   if (lead.status === "Fresh Lead") return lead.assignedToId || lead.assignedTo ? "assigned" : "fresh";
   return lead.status === "Assigned to Sales" ? "assigned" : "all";
@@ -72,7 +76,6 @@ function isLeadsResponse(value: unknown): value is LeadsResponse {
 }
 
 export function LeadsClient({ user, leads, executives, owners, canAssign, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
-  const router = useRouter();
   const [leadRows, setLeadRows] = useState(leads);
   const [total, setTotal] = useState(initialCount);
   const [tabCounts, setTabCounts] = useState(initialTabCounts);
@@ -106,6 +109,12 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
     setLeadRows(leads);
     if (justAdded && leads.some((lead) => lead.id === justAdded.id)) setJustAdded(null);
   }, [leads, justAdded]);
+  useEffect(() => {
+    setTotal(initialCount);
+    setTabCounts(initialTabCounts);
+    setTodaysFollowUps(initialFollowUps);
+    setHasAnyLeads(initialHasAnyLeads);
+  }, [initialCount, initialTabCounts, initialFollowUps, initialHasAnyLeads]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
@@ -137,9 +146,9 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
   }, [isExec, leadRows, pendingAddedId, user.role]);
 
   const visible = mergedLeadRows;
-  const requestPage = useCallback(async (requestedPage: number, append: boolean, isCurrent: () => boolean = () => true) => {
+  const requestPage = useCallback(async (requestedPage: number, append: boolean, isCurrent: () => boolean = () => true, requestedTab = tab) => {
     const params = new URLSearchParams({
-      tab, page: String(requestedPage), search: debouncedSearch, source,
+      tab: requestedTab, page: String(requestedPage), search: debouncedSearch, source,
       owner: filters.owner ?? "All", stage: filters.stage ?? "All",
     });
     if (filters.from) params.set("from", filters.from);
@@ -272,13 +281,16 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         setLeadRows((current) => current.some((item) => item.id === lead.id) ? current : [lead, ...current]);
         setJustAdded(lead);
         setPendingAddedId(lead.id);
-        setTab(user.role === "Manager" ? "all" : isExec ? "mine" : leadBucketForTab(lead));
+        const targetTab = user.role === "Manager" ? "all" : isExec ? "mine" : leadBucketForTab(lead);
+        setTab(targetTab);
         setAdding(false);
         setHighlightedLeadId(lead.id);
         window.requestAnimationFrame(() => {
           (document.getElementById("leads-list-mobile") ?? document.getElementById("leads-list"))?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
-        window.setTimeout(() => router.refresh(), 2500);
+        void requestPage(1, false, () => true, targetTab).catch((error: unknown) =>
+          toast.error(error instanceof Error ? error.message : "Unable to refresh leads."),
+        );
       }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
@@ -287,13 +299,13 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
           : <EmptyState hasLeads={hasAnyLeads} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
-          <div id="leads-list" className="hidden overflow-hidden rounded-xl border border-border bg-card shadow-sm md:block">
-            <table className="w-full text-left">
+          <div id="leads-list" className="hidden overflow-x-auto rounded-xl border border-border bg-card shadow-sm md:block">
+            <table className="w-full min-w-[900px] text-left">
               <thead className="bg-secondary text-xs uppercase tracking-wide text-secondary-foreground">
                 <tr>
                   <th className="px-4 py-3 font-semibold">Lead</th><th className="px-3 py-3 font-semibold">Phone</th>
                   <th className="px-3 py-3 font-semibold">Source</th><th className="px-3 py-3 font-semibold">Created</th>
-                  <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="w-px whitespace-nowrap px-4 py-3 text-right font-semibold">Action</th>
+                  <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="sticky right-0 w-px whitespace-nowrap bg-secondary px-4 py-3 text-right font-semibold">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -331,12 +343,16 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
           ? current.filter((lead) => lead.id !== action.lead.id)
           : current.map((lead) => lead.id === action.lead.id ? { ...lead, ...patch } : lead));
         setAction(null);
+        void requestPage(1, false).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Unable to refresh leads."));
       }} onAssigned={(name) => {
         setLeadRows((current) => current.map((lead) => lead.id === action.lead.id
-          ? { ...lead, assignedTo: name, assignedToId: executives.includes(name) ? lead.assignedToId : lead.assignedToId, status: lead.status === "Fresh Lead" ? "Assigned to Sales" : lead.status }
+          ? { ...lead, assignedTo: name, status: lead.status === "Fresh Lead" ? "Assigned to Sales" : lead.status }
           : lead));
         setAction(null);
         setTab("assigned");
+        void requestPage(1, false, () => true, "assigned").catch((error: unknown) =>
+          toast.error(error instanceof Error ? error.message : "Unable to refresh leads."),
+        );
         toast.success(`Assigned to ${name}. Moved to Assigned to Sales`, { action: { label: "Open tab", onClick: () => setTab("assigned") } });
       }} />}
     </div>
@@ -344,8 +360,11 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
 }
 
 function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+  const phone = phoneUrl(lead.phone);
+  const whatsapp = whatsappUrl(lead.phone);
   return <div className="flex justify-end gap-1">
-    <Button size="sm" variant="outline" className="w-auto md:w-9 md:px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`} title={`Log call for ${lead.name}`}><Phone /> <span className="md:hidden 2xl:inline">Call</span></Button>
+    {phone && <a href={phone} className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-input px-2 text-sm font-medium hover:bg-secondary" aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={(event) => event.stopPropagation()}><Phone /> <span className="md:hidden 2xl:inline">Call</span></a>}
+    {whatsapp && <a href={whatsapp} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-lg hover:bg-secondary" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
     <Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
     {manager && <><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
@@ -353,8 +372,9 @@ function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boole
 
 function DesktopActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   const whatsapp = whatsappUrl(lead.phone);
+  const phone = phoneUrl(lead.phone);
   return <div className="flex justify-end gap-1">
-    <Button size="sm" variant="outline" className="w-9 px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`} title={`Log call for ${lead.name}`}><Phone /> <span className="hidden 2xl:inline">Call</span></Button>
+    {phone && <a href={phone} className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-input px-2 text-sm font-medium hover:bg-secondary" aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`}><Phone /> <span className="hidden 2xl:inline">Call</span></a>}
     {whatsapp && <a className="grid h-9 w-9 place-items-center rounded-lg hover:bg-secondary" href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
     <Button size="icon" variant="ghost" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
     {manager && <><Button size="icon" variant="ghost" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
@@ -439,17 +459,18 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
   const [company, setCompany] = useState(action.lead.company);
   const [phone, setPhone] = useState(action.lead.phone);
   const [source, setSource] = useState<LeadSource>(action.lead.source);
+  const [status, setStatus] = useState<LeadStatus>(action.lead.status);
   const [assignee, setAssignee] = useState("");
   const [outcome, setOutcome] = useState<CallOutcome>("Connected");
-  const [remarks, setRemarks] = useState("");
-  const [followUp, setFollowUp] = useState("");
+  const [remarks, setRemarks] = useState(action.type === "edit" ? action.lead.remarks : "");
+  const [followUp, setFollowUp] = useState(action.lead.followUp ?? "");
   const [followUpTime, setFollowUpTime] = useState("");
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     start(async () => {
       const result = action.type === "edit"
-        ? await updateLeadAction({ id: action.lead.id, name, company, phone, source })
+        ? await updateLeadAction({ id: action.lead.id, name, company, phone, source, status, remarks, ...(followUp ? { followUp } : {}) })
         : action.type === "reassign"
           ? await reassignLeadAction({ id: action.lead.id, assignedTo: assignee })
           : action.type === "delete"
@@ -467,7 +488,7 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
           : outcome === "Call Back Later" ? "Callback in Future"
           : outcome === "Wrong Number" ? "Not Responsive" : "Attempted to Contact";
         onDone(action.type === "edit"
-          ? { name, company, phone, source }
+          ? { name, company, phone, source, status, remarks, ...(followUp ? { followUp } : {}) }
           : action.type === "call"
             ? { status, ...(followUp ? { followUp, followUpTime } : {}) }
             : {});
@@ -485,15 +506,18 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
         <label className="font-medium">Company<input className={`${fieldClass} mt-1 text-sm`} value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} /></label>
         <label className="font-medium">Phone<input className={`${fieldClass} mt-1 text-sm`} value={phone} onChange={(event) => setPhone(event.target.value)} required inputMode="tel" pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" /></label>
         <label className="font-medium">Source<SelectField className="mt-1" value={source} onValueChange={(value) => setSource(value as LeadSource)} options={LEAD_SOURCES.map((item) => ({ value: item, label: item }))} /></label>
+        <label className="font-medium">Status<SelectField className="mt-1" value={status} onValueChange={(value) => setStatus(value as LeadStatus)} options={LEAD_STATUSES.map((item) => ({ value: item, label: item }))} /></label>
+        <label className="font-medium">Follow-up date<input type="date" className={`${fieldClass} mt-1 text-sm`} value={followUp} onChange={(event) => setFollowUp(event.target.value)} /></label>
+        <label className="font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-24 py-2 text-sm`} value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
       </div>}
-      {action.type === "reassign" && <label className="block font-medium">Assign to<SelectField className="mt-1" value={assignee} onValueChange={setAssignee} required options={[{ value: "", label: "Select a team member" }, ...executives.map((name) => ({ value: name, label: name }))]} /></label>}
+      {action.type === "reassign" && <label className="block font-medium">Assign to<select className={`${fieldClass} mt-1 text-sm`} value={assignee} onChange={(event) => setAssignee(event.target.value)} required><option value="">Select a team member</option>{executives.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>}
       {action.type === "call" && <div className="grid gap-3">
         <label className="font-medium">Outcome<SelectField className="mt-1" value={outcome} onValueChange={(value) => setOutcome(value as CallOutcome)} options={["Connected", "No Answer", "Busy", "Wrong Number", "Call Back Later"].map((item) => ({ value: item, label: item }))} /></label>
         <label className="font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-24 py-2 text-sm`} value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
         <div className="grid grid-cols-2 gap-2"><label className="font-medium">Follow-up date<input type="date" className={`${fieldClass} mt-1 text-sm`} value={followUp} onChange={(event) => setFollowUp(event.target.value)} /></label><label className="font-medium">Time<input type="time" className={`${fieldClass} mt-1 text-sm`} value={followUpTime} onChange={(event) => setFollowUpTime(event.target.value)} disabled={!followUp} /></label></div>
       </div>}
       {action.type === "delete" && <p className="rounded-md bg-destructive/10 p-3 text-sm">This lead will be moved to the Zoho Recycle Bin.</p>}
-      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button><Button type="submit" variant={action.type === "delete" ? "destructive" : "default"} disabled={pending}>{pending ? "Saving..." : action.type === "delete" ? "Delete" : action.type === "reassign" ? "Confirm" : action.type === "call" ? "Log call" : "Save"}</Button></div>
+      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button><Button type="submit" variant={action.type === "delete" ? "destructive" : "default"} disabled={pending || (action.type === "reassign" && !assignee)}>{pending ? "Saving..." : action.type === "delete" ? "Delete" : action.type === "reassign" ? "Confirm" : action.type === "call" ? "Log call" : "Save"}</Button></div>
     </form>
   </div>;
 }
@@ -712,8 +736,9 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
           toast.error(result.error);
           submittedRef.current = false;
         }
-      } catch {
+      } catch (error) {
         submittedRef.current = false;
+        toast.error(error instanceof Error ? error.message : "Unable to add lead. Please try again.");
       }
     });
   }}>

@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { crm } from "@/lib/crm";
-import { env, ZOHO_HOSTS } from "@/lib/env";
+import { env } from "@/lib/env";
 import { createSession } from "@/lib/auth/session";
+import { hosts, ZohoError } from "@/lib/zoho/client";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
   if (e.AUTH_MODE !== "zoho" || !code || !state || !expected || state !== expected) return fail("state");
 
   try {
-    const accounts = ZOHO_HOSTS[e.ZOHO_DC].accounts;
+    const accounts = hosts().accounts;
     const tokenRes = await fetch(`${accounts}/oauth/v2/token`, {
       method: "POST", cache: "no-store", signal: AbortSignal.timeout(15_000),
       body: new URLSearchParams({
@@ -29,14 +30,34 @@ export async function GET(req: NextRequest) {
         client_secret: e.ZOHO_LOGIN_CLIENT_SECRET!, redirect_uri: e.ZOHO_LOGIN_REDIRECT_URI!,
       }),
     });
-    const token = (await tokenRes.json()) as { access_token?: string };
-    if (!token.access_token) return fail("token");
+    const token = (await tokenRes.json()) as {
+      access_token?: string; error?: string; error_description?: string; code?: string;
+      message?: string; details?: Record<string, unknown>; field?: string;
+    };
+    if (!tokenRes.ok || !token.access_token) {
+      console.error("[auth] Zoho authorization-code exchange rejected", {
+        status: tokenRes.status, code: token.code ?? token.error,
+        message: token.error_description ?? token.message ?? token.error,
+        details: token.details, field: token.field,
+      });
+      return fail("token");
+    }
 
     const infoRes = await fetch(`${accounts}/oauth/user/info`, {
       headers: { Authorization: `Zoho-oauthtoken ${token.access_token}` }, cache: "no-store", signal: AbortSignal.timeout(15_000),
     });
-    const info = (await infoRes.json()) as { Email?: string };
-    if (!info.Email) return fail("profile");
+    const info = (await infoRes.json()) as {
+      Email?: string; error?: string; error_description?: string; code?: string;
+      message?: string; details?: Record<string, unknown>; field?: string;
+    };
+    if (!infoRes.ok || !info.Email) {
+      console.error("[auth] Zoho user-info request rejected", {
+        status: infoRes.status, code: info.code ?? info.error,
+        message: info.error_description ?? info.message ?? info.error,
+        details: info.details, field: info.field,
+      });
+      return fail("profile");
+    }
 
     const user = await crm().findUserByEmail(info.Email);
     if (!user) return fail("no_access");
@@ -46,7 +67,14 @@ export async function GET(req: NextRequest) {
     res.cookies.delete({ name: "atpl_oauth_state", path: "/api/auth/zoho" });
     return res;
   } catch (err) {
-    console.error("Zoho sign-in failed", err);
+    console.error("Zoho sign-in failed", {
+      message: err instanceof Error ? err.message : String(err),
+      status: err instanceof ZohoError ? err.status : undefined,
+      code: err instanceof ZohoError ? err.code : undefined,
+      field: err instanceof ZohoError ? err.field : undefined,
+      details: err instanceof ZohoError ? err.details : undefined,
+      operation: err instanceof ZohoError ? err.operation : undefined,
+    });
     return fail("server");
   }
 }

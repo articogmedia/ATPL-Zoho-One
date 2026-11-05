@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("server-only", () => ({}));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("@/lib/auth/session", () => ({ createSession: vi.fn(), destroySession: vi.fn() }));
 vi.mock("@/lib/auth/users", () => ({

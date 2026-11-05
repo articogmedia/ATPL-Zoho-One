@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
-import { env, ZOHO_HOSTS } from "@/lib/env";
+import { env } from "@/lib/env";
+import { hosts } from "@/lib/zoho/client";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,7 @@ export async function GET() {
   if (e.AUTH_MODE !== "zoho") return NextResponse.redirect(new URL("/", e.ZOHO_LOGIN_REDIRECT_URI ?? "http://localhost:3000"));
 
   const state = randomBytes(24).toString("hex");
-  const url = new URL(`${ZOHO_HOSTS[e.ZOHO_DC].accounts}/oauth/v2/auth`);
+  const url = new URL(`${hosts().accounts}/oauth/v2/auth`);
   url.search = new URLSearchParams({
     scope: "AaaServer.profile.READ",
     client_id: e.ZOHO_LOGIN_CLIENT_ID!,

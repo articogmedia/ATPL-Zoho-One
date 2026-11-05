@@ -41,6 +41,11 @@ Set `DATA_SOURCE`, `AUTH_MODE`, `SESSION_SECRET`, `ALLOW_DEMO_LOGIN`, `ZOHO_DC`,
 `ZOHO_CLIENT_ID`, `ZOHO_CLIENT_SECRET`, `ZOHO_REFRESH_TOKEN`, and
 `ZOHO_QUEUE_OWNER_ID`. For Zoho sign-in also set
 `ZOHO_LOGIN_CLIENT_ID`, `ZOHO_LOGIN_CLIENT_SECRET`, and `ZOHO_LOGIN_REDIRECT_URI`.
+`ZOHO_DC` selects both the CRM API and OAuth accounts hosts (for example `in` uses
+`zohoapis.in` and `accounts.zoho.in`). Optional `ZOHO_API_BASE_URL`,
+`ZOHO_API_DOMAIN`, and `ZOHO_ACCOUNTS_URL` overrides must use HTTPS and match that
+data centre; mismatches fail environment validation instead of silently sending
+credentials or requests to another Zoho region.
 `ZOHO_ROLE_OVERRIDES` is optional. `ZOHO_CRM_WEB_BASE` is optional and enables
 the **Open in Zoho** link after lead create/assignment.
 
@@ -99,7 +104,7 @@ leads from ad forms should be owned by that user (Setup → Automation → Assig
 3. Assign it to an executive → leaves the Fresh tab, remains under **All Leads**; Owner changed in Zoho; a Note was added.
 4. Sign in as that executive → sees only their leads; cannot see others (try opening another lead id in devtools: must be refused).
 5. Schedule a site visit from the lead card → Task appears in Zoho; shows in **My Work & Site Visits**; Start / Complete / Reschedule update the Task.
-6. Create a quotation: choose a product → price equals the Zoho `Unit_Price`; Save → Quote exists in Zoho with line items and correct Grand Total; offer number increments.
+6. Create a quotation: choose a customer, then a product → price equals the Zoho `Unit_Price`; preview saves a Draft quote in Zoho with line items and correct Grand Total; download/share the PDF before the lead advances to `Quotation Sent`.
 7. Manager → Performance: numbers match a manual count for the same period.
 8. Deactivate a test user in Zoho → within ~5 minutes they are bounced to login.
 9. Submit a test Meta and Google lead form → appear in Fresh Leads with the right source label.
@@ -113,6 +118,6 @@ leads from ad forms should be owned by that user (Setup → Automation → Assig
 
 ## Remaining risks
 
-- Playwright UI automation is not bundled unless the project's approved Playwright package is installed; sandbox credentials and a dedicated test record are required for the end-to-end flow.
+- The bundled Playwright quotation test uses mock CRM data. Live Zoho write, PDF download, and WhatsApp sharing still require manual verification in a sandbox with a dedicated test record; Vercel environment values and hosted logs must be inspected by an authorized operator.
 - Zoho custom Task fields and user metadata can change independently of the portal; run `/api/admin/diagnostics` before acceptance testing.
 - Browser-close/session restoration behaviour differs across mobile browsers, so test on the actual target Android/iOS browser versions.

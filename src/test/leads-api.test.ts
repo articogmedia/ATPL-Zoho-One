@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { leadsForTab, type Lead, type LeadTab, type User } from "@/lib/domain";
 
+vi.mock("server-only", () => ({}));
+
 const mocks = vi.hoisted(() => ({
   currentUser: vi.fn(),
   listLeads: vi.fn(),

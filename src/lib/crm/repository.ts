@@ -5,9 +5,9 @@ import type {
 export type NewLead = { name: string; company: string; phone: string; area: string; source: LeadSource; remarks: string };
 export type LeadPatch = {
   name?: string; company?: string; phone?: string; source?: LeadSource;
-  status?: LeadStatus; remarks?: string; assignedTo?: string | null;
+  status?: LeadStatus; remarks?: string; assignedTo?: string | null; followUp?: string;
 };
-export type NewQuote = { offerNo: string; leadId: string; items: { productId: string; qty: number; discount: number }[] };
+export type NewQuote = { offerNo: string; leadId: string; subject?: string; items: { productId: string; qty: number; discount: number }[] };
 export type VisitPatch = { status?: VisitStatus; notes?: string; date?: string; time?: string; followUp?: string };
 export type LogCallInput = { leadId: string; outcome: CallOutcome; remarks: string; followUp?: string; followUpTime?: string };
 

@@ -4,7 +4,10 @@ import { env } from "@/lib/env";
 import { LEAD_SOURCES } from "@/lib/domain";
 import { FIELD, ROLE_BY_ZOHO_NAME, WRITE_LEAD_STATUS } from "@/lib/zoho/fields";
 import { hosts, zoho, zohoList } from "@/lib/zoho/client";
+import { ZohoError } from "@/lib/zoho/client";
+import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { mapRole, parseRoleOverrides, type ZLead, type ZUser } from "@/lib/zoho/mappers";
+import { zohoLeadSource } from "@/lib/zoho/fields";
 import { STATIC_USERS } from "@/lib/auth/users";
 import { siteVisitSchema } from "@/lib/zoho/site-visits";
 
@@ -17,7 +20,20 @@ const check = async <T>(fn: () => T | Promise<T>): Promise<CheckResult<T>> => {
   try {
     return await fn();
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "Diagnostic check failed" };
+    const reference = newErrorReference();
+    console.error("[api] Zoho diagnostics check failed", {
+      reference,
+      message: error instanceof Error ? error.message : String(error),
+      status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      field: error instanceof ZohoError ? error.field : undefined,
+      details: error instanceof ZohoError ? error.details : undefined,
+      operation: error instanceof ZohoError ? error.operation : undefined,
+    });
+    const message = error instanceof ZohoError
+      ? friendlyZohoError(error.status, error.code, error.message, error.field, reference)
+      : `Diagnostic check failed. (Ref: ${reference})`;
+    return { error: message };
   }
 };
 
@@ -151,7 +167,12 @@ export async function GET() {
       ? leadFields
       : {
           leadStatusMissing: missingPicklistValues(leadFields, "Lead_Status", Object.values(WRITE_LEAD_STATUS)),
-          leadSourceMissing: missingPicklistValues(leadFields, "Lead_Source", LEAD_SOURCES),
+          leadSourceMissing: LEAD_SOURCES.filter((source) => {
+            const field = leadFields.find((candidate) => candidate.api_name === "Lead_Source");
+            const values = (field?.pick_list_values ?? []).flatMap((item) => [item.actual_value, item.display_value])
+              .filter((value): value is string => !!value);
+            return !zohoLeadSource(source, values);
+          }),
         };
 
     const customFields = await check(async () => {
@@ -178,7 +199,20 @@ export async function GET() {
       knownRoleNames: Object.keys(ROLE_BY_ZOHO_NAME),
     });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Diagnostics failed" }, { status: 500 });
+    const reference = newErrorReference();
+    console.error("[api] Zoho diagnostics failed", {
+      reference,
+      message: error instanceof Error ? error.message : String(error),
+      status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      field: error instanceof ZohoError ? error.field : undefined,
+      details: error instanceof ZohoError ? error.details : undefined,
+      operation: error instanceof ZohoError ? error.operation : undefined,
+    });
+    const message = error instanceof ZohoError
+      ? friendlyZohoError(error.status, error.code, error.message, error.field, reference)
+      : `Diagnostics failed. (Ref: ${reference})`;
+    return NextResponse.json({ error: message, reference }, { status: 500 });
   }
 }
 

@@ -8,26 +8,73 @@ import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
-import { addLeadAction, createQuoteAction, getQuoteDetailAction } from "@/app/actions/crm";
+import { addLeadAction, createQuoteAction, getQuoteDetailAction, markQuotationSentAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { splitQuotationItems } from "@/lib/quotation-presentation";
 import { LEAD_SOURCES, formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
+type WizardState = {
+  step: 1 | 2 | 3;
+  leadId: string;
+  rows: Row[];
+  offerNo: string;
+  subject: string;
+  savedQuotation?: Quotation;
+  quotationSent: boolean;
+};
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
 type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+
+function QuotationStepper({ step, hasLead, productsValid, onStep }: {
+  step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; onStep: (step: 1 | 2 | 3) => void;
+}) {
+  return <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
+    {(["Customer", "Products", "Preview"] as const).map((label, index) => {
+      const stepNumber = (index + 1) as 1 | 2 | 3;
+      const completed = stepNumber < step || (stepNumber === 1 && hasLead) || (stepNumber === 2 && productsValid);
+      const disabled = stepNumber > step || (stepNumber === 2 && !hasLead) || (stepNumber === 3 && !productsValid);
+      const active = stepNumber === step;
+      return <button type="button" key={label} disabled={disabled} onClick={() => onStep(stepNumber)} className={`flex min-h-11 items-center justify-center gap-1 rounded-lg px-2 py-2 text-center text-xs font-semibold transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={active ? "step" : undefined}>
+        {completed && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}<span>{stepNumber}. {label}</span>
+      </button>;
+    })}
+  </nav>;
+}
 
 export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
   const [created, setCreated] = useState<Lead[]>([]);
   const myLeads = useMemo(() => [...created.filter((c) => !leads.some((l) => l.id === c.id)), ...leads], [created, leads]);
   const [q, setQ] = useState("");
-  const [leadId, setLeadId] = useState(String(presetLeadId).trim());
+  const [wizard, setWizard] = useState<WizardState>(() => {
+    const preset = String(presetLeadId).trim();
+    return {
+      step: preset && leads.some((lead) => lead.id === preset) ? 2 : 1,
+      leadId: preset,
+      rows: [{ productId: "", qty: 1, discount: 0 }],
+      offerNo: suggestedOfferNo,
+      subject: "",
+      quotationSent: false,
+    };
+  });
+  const { step, leadId, rows, offerNo } = wizard;
+  const setStep = (nextStep: 1 | 2 | 3) => setWizard((current) => ({ ...current, step: nextStep }));
+  const setLeadId = (nextLeadId: string) => setWizard((current) => ({
+    ...current, leadId: nextLeadId, subject: "", savedQuotation: undefined, quotationSent: false,
+  }));
+  const setRows = (nextRows: Row[] | ((currentRows: Row[]) => Row[])) => setWizard((current) => ({
+    ...current,
+    rows: typeof nextRows === "function" ? nextRows(current.rows) : nextRows,
+    subject: "",
+    savedQuotation: undefined,
+    quotationSent: false,
+  }));
+  const setOfferNo = (nextOfferNo: string) => setWizard((current) => ({
+    ...current, offerNo: nextOfferNo, savedQuotation: undefined, quotationSent: false,
+  }));
   const [adding, setAdding] = useState(false);
   const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: "Direct Call" as LeadSource });
   const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
-  const [rows, setRows] = useState<Row[]>([{ productId: "", qty: 1, discount: 0 }]);
-  const [offerNo, setOfferNo] = useState(suggestedOfferNo);
-  const [preview, setPreview] = useState(false);
   const [pending, start] = useTransition();
   const [savedQuotes, setSavedQuotes] = useState(quotes);
   const [savedOpen, setSavedOpen] = useState(false);
@@ -37,7 +84,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const panelRef = useRef<HTMLElement>(null);
   const savedSearchRef = useRef<HTMLInputElement>(null);
   const savedButtonRef = useRef<HTMLButtonElement>(null);
-  const previousPreview = useRef(false);
+  const previousStep = useRef(step);
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ productId: p.id, model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
@@ -51,14 +98,14 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const upd = (i: number, p: Partial<Row>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
 
   useEffect(() => {
-    if (preview) {
+    if (step === 3) {
       window.scrollTo({ top: 0, behavior: "instant" });
       requestAnimationFrame(() => document.getElementById("offer-heading")?.focus({ preventScroll: true }));
-    } else if (previousPreview.current) {
+    } else if (previousStep.current === 3) {
       requestAnimationFrame(() => document.getElementById("quote-step-products")?.scrollIntoView({ behavior: "instant", block: "start" }));
     }
-    previousPreview.current = preview;
-  }, [preview]);
+    previousStep.current = step;
+  }, [step]);
 
   useEffect(() => {
     if (!savedOpen) return;
@@ -126,6 +173,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
       setCreated((current) => [customer, ...current.filter((item) => item.id !== customer.id)]);
     }
     setLeadId(duplicate.id);
+    setStep(2);
     setDuplicateCustomer(null);
     setAdding(false);
     focusProducts();
@@ -136,6 +184,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     if (res.ok && res.data) {
       setCreated((current) => [res.data!, ...current.filter((item) => item.id !== res.data!.id)]);
       setLeadId(res.data.id);
+      setStep(2);
       setAdding(false);
       setDuplicateCustomer(null);
       setNl({ name: "", company: "", phone: "", area: "", source: "Direct Call" });
@@ -148,11 +197,17 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     }
   });
 
-  const save = () => start(async () => {
+  const previewOffer = () => start(async () => {
     if (!lead) return;
+    if (!productsValid) return;
+    if (wizard.savedQuotation) {
+      setStep(3);
+      return;
+    }
+    const subject = wizard.subject.trim() || offerSubject(items.map((item) => item.model));
     const selectedRows = rows.filter((row) => row.productId && byId.has(row.productId) &&
       validateQuoteLine(row.qty, row.discount, byId.get(row.productId)!.price) === null);
-    const res = await createQuoteAction({ offerNo, leadId: lead.id, items: selectedRows });
+    const res = await createQuoteAction({ offerNo, leadId: lead.id, subject, items: selectedRows });
     if (!res.ok) { toast.error(res.error); return; }
     if (!res.data) { toast.error("Quotation was saved but could not be loaded."); return; }
     const savedItems = selectedRows.flatMap((row) => {
@@ -169,10 +224,17 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     });
     const saved = { ...res.data, items: savedItems };
     setSavedQuotes((current) => [saved, ...current.filter((quote) => quote.id !== saved.id)]);
-    setPreview(false);
-    setSavedOpen(true);
-    toast.success("Quotation saved");
+    setWizard((current) => ({ ...current, subject, step: 3, savedQuotation: saved, quotationSent: false }));
+    toast.success("Quotation saved as Draft");
   });
+
+  const markQuotationSent = async () => {
+    if (!lead || wizard.quotationSent) return;
+    const result = await markQuotationSentAction({ leadId: lead.id });
+    if (!result.ok) throw new Error(result.error);
+    setWizard((current) => ({ ...current, quotationSent: true }));
+    toast.success("Lead stage updated to Quotation Sent");
+  };
 
   const viewSavedQuote = async (quoteId: string) => {
     if (loadingQuoteId) return;
@@ -217,85 +279,71 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
       offerNo={readOnlyQuote.offerNo}
       setOfferNo={() => undefined}
       items={readOnlyQuote.items ?? []}
+      subject={offerSubject((readOnlyQuote.items ?? []).map((item) => item.model))}
+      setSubject={() => undefined}
       onBack={() => setReadOnlyQuote(null)}
-      onSave={() => undefined}
-      saving={false}
+      onMarkSent={async () => undefined}
       readOnly
+      editableOfferNo={false}
       customer={readOnlyQuote.customer}
       offerDate={readOnlyQuote.date}
       status={readOnlyQuote.status ?? "Draft"}
     />;
   }
 
-  if (preview && lead) {
-    return <Offer lead={lead} offerNo={offerNo} setOfferNo={setOfferNo} items={items} onBack={() => setPreview(false)} onSave={save} saving={pending} />;
-  }
+  if (step === 3 && lead) return <div className="space-y-6">
+    <h1 className="text-2xl font-bold">Create Quotation</h1>
+    <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} onStep={setStep} />
+    <Offer lead={lead} offerNo={offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} />
+  </div>;
 
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
-  const scrollToStep = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-  const currentStep = !lead ? 0 : productsValid ? 2 : 1;
-
   return (
     <div className={`space-y-6 ${lead && productsValid ? "pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Create Quotation</h1>
-        <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={() => setSavedOpen(true)}>
+        {step !== 1 && <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={() => setSavedOpen(true)}>
           <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
-        </Button>
+        </Button>}
       </div>
-      <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
-        {["Customer", "Products", "Preview"].map((label, index) => {
-          const completed = index === 0 ? !!lead : index === 1 ? productsValid : preview;
-          const disabled = index === 1 ? !lead : index === 2 ? !lead || !productsValid : false;
-          const active = index === currentStep && !preview;
-          const selectStep = () => {
-            if (index === 0) scrollToStep("quote-step-customer");
-            if (index === 1) scrollToStep("quote-step-products");
-            if (index === 2) setPreview(true);
-          };
-          return <button type="button" key={label} disabled={disabled} onClick={selectStep} className={`flex min-h-11 cursor-pointer items-center justify-center gap-1 rounded-lg px-2 py-2 text-center text-xs font-semibold transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={active ? "step" : undefined}>{completed && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}<span>{index + 1}. {label}</span></button>;
-        })}
-      </nav>
-      <section id="quote-step-customer" className="scroll-mt-20 space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
+      <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} onStep={setStep} />
+      {step === 1 && <section id="quote-step-customer" className="scroll-mt-20 space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 1 · Choose customer</h2>
-        {lead ? (
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary p-3 text-secondary-foreground">
-            <div><div className="font-semibold">{lead.company || lead.name}</div><div className="text-sm">{lead.name} · {lead.phone} · {lead.area}</div></div>
-            <Button variant="outline" onClick={() => setLeadId("")}>Change</Button>
-          </div>
-        ) : adding ? (
+        {adding ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            <input className={fieldClass} placeholder="Contact name *" value={nl.name} onChange={(e) => setNl({ ...nl, name: e.target.value })} />
-            <input className={fieldClass} placeholder="Company" value={nl.company} onChange={(e) => setNl({ ...nl, company: e.target.value })} />
-            <input className={fieldClass} placeholder="Mobile number *" inputMode="tel" value={nl.phone} onChange={(e) => setNl({ ...nl, phone: e.target.value })} />
-            <input className={fieldClass} placeholder="Area" value={nl.area} onChange={(e) => setNl({ ...nl, area: e.target.value })} />
-            <SelectField value={nl.source} onValueChange={(value) => setNl({ ...nl, source: value as LeadSource })} options={LEAD_SOURCES.map((source) => ({ value: source, label: source }))} />
+            <input aria-label="Contact name" className={fieldClass} placeholder="Contact name *" value={nl.name} onChange={(e) => setNl({ ...nl, name: e.target.value })} />
+            <input aria-label="Company" className={fieldClass} placeholder="Company" value={nl.company} onChange={(e) => setNl({ ...nl, company: e.target.value })} />
+            <input aria-label="Mobile number" className={fieldClass} placeholder="Mobile number *" inputMode="tel" value={nl.phone} onChange={(e) => setNl({ ...nl, phone: e.target.value })} />
+            <input aria-label="Area" className={fieldClass} placeholder="Area" value={nl.area} onChange={(e) => setNl({ ...nl, area: e.target.value })} />
+            <SelectField aria-label="Source" value={nl.source} onValueChange={(value) => setNl({ ...nl, source: value as LeadSource })} options={LEAD_SOURCES.map((source) => ({ value: source, label: source }))} />
             {duplicateCustomer && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm sm:col-span-2">
               <p><span className="font-semibold">{duplicateCustomer.name}</span> already exists. Owner: {duplicateCustomer.owner}.</p>
               <Button type="button" variant="outline" className="mt-2" onClick={() => selectDuplicateCustomer(duplicateCustomer)}>Use this customer</Button>
             </div>}
             <div className="flex gap-2">
-              <Button className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>Add customer</Button>
-              <Button variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
+              <Button type="button" className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>{pending ? "Adding…" : "Add customer"}</Button>
+              <Button type="button" variant="ghost" onClick={() => { setAdding(false); setDuplicateCustomer(null); }} disabled={pending}>Cancel</Button>
             </div>
           </div>
         ) : (
           <>
             {presetLeadError && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{presetLeadError}</div>}
+            {lead && <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary p-3 text-secondary-foreground">
+              <div><div className="font-semibold">{lead.company || lead.name}</div><div className="text-sm">{lead.name} · {lead.phone} · {lead.area}</div></div>
+              <Button type="button" disabled={pending} onClick={() => { setStep(2); focusProducts(); }}>Next</Button>
+            </div>}
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
                 <input className={`${fieldClass} pl-10`} placeholder="Search name, company, mobile, area" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
-              <Button variant="outline" onClick={() => setAdding(true)}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
+              <Button type="button" variant="outline" onClick={() => setAdding(true)}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
             </div>
             <ul className="divide-y rounded-lg border">
               {matches.map((l) => (
                 <li key={l.id}>
-                  <button className="w-full p-3 text-left hover:bg-secondary" onClick={() => setLeadId(String(l.id).trim())}>
+                  <button type="button" aria-pressed={leadId === l.id} className={`w-full p-3 text-left hover:bg-secondary ${leadId === l.id ? "bg-secondary" : ""}`} onClick={() => setLeadId(String(l.id).trim())}>
                     <div className="font-medium">{l.company || l.name}</div>
                     <div className="text-sm text-muted-foreground">{l.name} · {l.phone} · {l.area}</div>
                   </button>
@@ -305,11 +353,10 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
             </ul>
           </>
         )}
-      </section>
+      </section>}
 
-      <section id="quote-step-products" className={`scroll-mt-20 space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6 ${!lead ? "hidden sm:block" : ""}`}>
+      {step === 2 && <section id="quote-step-products" className="scroll-mt-20 space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 2 · Products</h2>
-        {!lead && <p className="text-sm text-muted-foreground">Choose a customer in Step 1 before adding products.</p>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full text-sm">
@@ -353,12 +400,15 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         <div className={`fixed inset-x-0 bottom-16 z-20 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-sm sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
           <div className="mx-auto flex max-w-md items-center gap-3">
             <div className="min-w-0 flex-1"><div className="text-xs text-muted-foreground">Grand total</div><div className="truncate font-bold">{formatINR(t.total)}</div></div>
-            <Button size="lg" className="shrink-0" disabled={!lead || !productsValid} onClick={() => setPreview(true)}>Preview</Button>
+            <Button type="button" variant="outline" onClick={() => setStep(1)}>Back</Button>
+            <Button type="button" size="lg" className="shrink-0" disabled={pending || !productsValid} onClick={previewOffer}>Preview</Button>
           </div>
         </div>
-        <Button size="lg" className="hidden h-14 w-full text-base sm:flex" disabled={!lead || !productsValid} onClick={() => setPreview(true)}><Eye className="h-5 w-5" /> Preview Offer</Button>
-        {!lead && <p className="text-center text-sm text-muted-foreground">Choose a customer first.</p>}
-      </section>
+        <div className="hidden gap-3 sm:flex">
+          <Button type="button" variant="outline" className="h-14" onClick={() => setStep(1)}>Back</Button>
+          <Button type="button" size="lg" className="h-14 flex-1 text-base" disabled={pending || !productsValid} onClick={previewOffer}><Eye className="h-5 w-5" /> {pending ? "Saving…" : "Preview Offer"}</Button>
+        </div>
+      </section>}
 
       {savedOpen && <div className="fixed inset-0 z-50 bg-black/40" onMouseDown={(event) => {
         if (event.target === event.currentTarget) setSavedOpen(false);
@@ -526,12 +576,12 @@ function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; t
 
 type Item = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
 
-function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readOnly = false, customer: savedCustomer, offerDate, status = "Draft" }: {
-  lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; onBack: () => void; onSave: () => void; saving: boolean;
-  readOnly?: boolean; customer?: string; offerDate?: string; status?: string;
+function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, offerDate, status = "Draft" }: {
+  lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; subject: string; setSubject: (subject: string) => void;
+  onBack: () => void; onMarkSent: () => Promise<void>;
+  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; offerDate?: string; status?: string;
 }) {
   const t = quoteTotals(items);
-  const [subject, setSubject] = useState(() => offerSubject(items.map((item) => item.model)));
   const customer = savedCustomer ?? (lead.company || lead.name);
   const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date());
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
@@ -569,7 +619,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readO
       <div className="mt-1 text-center text-[10px] font-semibold">{gst}</div>
     </section>
   );
-  const shortMessage = `Dear Sir, please find our offer ${offerNo} for ${customer}. - ${COMPANY.name}`;
+  const shortMessage = `Offer ${offerNo} for ${customer}\nGrand total: ${formatINR(t.total)}\n${COMPANY.name}`;
   const wa = `https://wa.me/91${lead.phone.replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(shortMessage)}`;
   const [downloading, setDownloading] = useState(false);
   const buildPdfFile = async (): Promise<File> => {
@@ -583,7 +633,17 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readO
         items: items.map((item) => ({ productId: item.productId, qty: item.qty, discount: item.discount ?? 0 })),
       }),
     });
-    if (!response.ok) throw new Error("Unable to create the PDF.");
+    if (!response.ok) {
+      const body = await response.text();
+      let message: string | undefined;
+      try {
+        const parsed: unknown = JSON.parse(body);
+        if (parsed && typeof parsed === "object" && "error" in parsed && typeof parsed.error === "string") message = parsed.error;
+      } catch {
+        message = undefined;
+      }
+      throw new Error(message || `Unable to create the PDF (HTTP ${response.status}).`);
+    }
     const blob = new Blob([await response.blob()], { type: "application/pdf" });
     return new File([blob], `offer-${offerNo.replace("/", "-")}.pdf`, { type: "application/pdf" });
   };
@@ -607,6 +667,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readO
     setDownloading(true);
     try {
       downloadFile(await buildPdfFile());
+      await onMarkSent();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
     } finally {
@@ -620,17 +681,30 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readO
     try {
       const file = await buildPdfFile();
       if (navigator.canShare?.({ files: [file] })) {
-        whatsappWindow?.close();
-        await navigator.share({ files: [file], title: file.name, text: shortMessage });
-        return;
+        let shared = false;
+        try {
+          await navigator.share({ files: [file], title: file.name, text: shortMessage });
+          shared = true;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            whatsappWindow?.close();
+            return;
+          }
+          console.warn("[quotations] file sharing unavailable; falling back to WhatsApp summary", error);
+        }
+        if (shared) {
+          whatsappWindow?.close();
+          await onMarkSent();
+          return;
+        }
       }
       downloadFile(file);
       if (whatsappWindow) whatsappWindow.location.href = wa;
       else window.open(wa, "_blank", "noopener,noreferrer");
-      toast.info("PDF downloaded. Attach it in the WhatsApp chat (paperclip, Document).");
+      await onMarkSent();
+      toast.info("PDF downloaded. Attach it in WhatsApp; the offer summary is prefilled.");
     } catch (error) {
       whatsappWindow?.close();
-      if (error instanceof DOMException && error.name === "AbortError") return;
       toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
     } finally {
       setDownloading(false);
@@ -640,10 +714,9 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readO
   return (
     <div className="space-y-4 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6">
       <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-        <Button variant="outline" className="w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> {readOnly ? "Back to Create Quotation" : "Edit"}</Button>
+        <Button variant="outline" className="w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> {readOnly ? "Back to Create Quotation" : "Back to Products"}</Button>
         <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf} disabled={downloading}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
         <Button variant="outline" className="h-12 w-full bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 sm:w-auto" onClick={shareOnWhatsApp} disabled={downloading}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
-        {!readOnly && <Button variant="outline" className="w-full sm:w-auto" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>}
       </div>
       <article className="print-area offer-document mx-auto max-w-full overflow-hidden rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
@@ -659,7 +732,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readO
           <div className="offer-no-break space-y-1 border-slate-300 sm:border-r sm:pr-4">
             <h1 id="offer-heading" tabIndex={-1} className="text-base font-bold outline-none">OFFER</h1>
             <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
-              {readOnly ? <span className="font-medium">{offerNo}</span> : <input aria-label="Offer reference" className="h-8 rounded-lg border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />}
+              {readOnly || !editableOfferNo ? <span className="font-medium">{offerNo}</span> : <input aria-label="Offer reference" className="h-8 rounded-lg border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />}
             </label>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Stage</span><span>{status}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Valid Till</span><span>{validTill}</span></div>
@@ -685,7 +758,7 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readO
           <p>Dear Sir,</p>
           <div className="mt-2 flex items-baseline gap-1 font-semibold">
             <span>Sub:</span>
-            {readOnly ? <span>{subject}</span> : <input
+            {readOnly || !editableSubject ? <span>{subject}</span> : <input
                 aria-label="Quotation subject"
                 value={subject}
                 onChange={(event) => setSubject(event.target.value)}
