@@ -87,7 +87,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
           {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{ERRORS[error] ?? ERRORS.server}</p>}
 
           {env().AUTH_MODE === "zoho" && (
-            <Button asChild size="lg" className="mb-4 h-12 w-full justify-between rounded-lg bg-primary px-4 text-sm text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">
+            <Button asChild size="lg" className="mb-4 w-full justify-between rounded-lg bg-primary text-sm text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">
               <a href="/api/auth/zoho/start" aria-label="Sign in with Zoho">
                 <span>Sign in with Zoho</span>
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />

@@ -13,6 +13,17 @@ export default async function QuotationsPage({ searchParams }: { searchParams: P
   const { lead } = await searchParams;
   const repo = crm();
   const [leads, quotes] = await Promise.all([repo.listLeads(), repo.listQuotes()]);
+  const presetLeadId = String(lead ?? "").trim();
+  let presetLeadError = "";
+  let presetLead = presetLeadId
+    ? leads.find((item) => String(item.id).trim() === presetLeadId)
+    : undefined;
+  if (presetLeadId && !presetLead) presetLead = await repo.getLead(presetLeadId) ?? undefined;
+  if (presetLeadId && (!presetLead || visibleFor(user, [presetLead]).length === 0)) {
+    presetLeadError = "We couldn't find that customer. Please search for them.";
+  }
+  const quotationLeads = visibleFor(user, presetLead ? [...leads, presetLead] : leads)
+    .filter((item, index, list) => list.findIndex((candidate) => String(candidate.id).trim() === String(item.id).trim()) === index);
   let products: Product[] = [];
   let productError = "";
   try {
@@ -28,18 +39,18 @@ export default async function QuotationsPage({ searchParams }: { searchParams: P
 
   return (
     <>
-      <h1 className="mb-5 text-2xl font-bold">Create Quotation</h1>
       {productError && (
         <div role="alert" className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
           {productError}
         </div>
       )}
       <QuotationsClient
-        leads={visibleFor(user, leads)}
+        leads={quotationLeads}
         products={products}
         quotes={visibleFor(user, quotes)}
         suggestedOfferNo={nextOfferNo(quotes.map((q) => q.offerNo), todayIST())}
-        presetLeadId={lead ?? ""}
+        presetLeadId={presetLead && !presetLeadError ? String(presetLead.id).trim() : ""}
+        presetLeadError={presetLeadError}
       />
     </>
   );

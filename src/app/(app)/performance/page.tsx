@@ -12,8 +12,6 @@ const RANGES: { id: PerfRange; label: string }[] = [
   { id: "month", label: "This Month" },
   { id: "lastMonth", label: "Last Month" },
 ];
-const fmtDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
-
 export default async function PerformancePage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const started = Date.now();
   const viewer = await requireSection("performance");
@@ -64,7 +62,6 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
             {r.label}
           </Link>
         ))}
-        <span className="text-xs text-muted-foreground sm:ml-auto">{fmtDate(s.from)} – {fmtDate(s.to)}</span>
       </div>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

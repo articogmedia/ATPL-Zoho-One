@@ -58,7 +58,7 @@ export function canAdvanceLeadStatus(current: LeadStatus, target: "Site Visit Sc
 export const leadLabel = (l: Lead) => (l.company ? `${l.name} (${l.company})` : l.name);
 export const normalizePhone = (value: string): string => value.replace(/\D/g, "").slice(-10);
 
-export type QuoteItem = { model: string; unit: string; qty: number; price: number; discount?: number };
+export type QuoteItem = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
 export type Quotation = {
   id: string;
   offerNo: string;
@@ -69,6 +69,7 @@ export type Quotation = {
   date: string;
   status?: string;
   ownerId?: string;
+  items?: QuoteItem[];
 };
 
 export type VisitStatus = "Assigned" | "In Progress" | "Completed";

@@ -272,6 +272,26 @@ export async function createQuoteAction(input: unknown) {
   });
 }
 
+export async function getQuoteDetailAction(rawId: string): Promise<ActionResult<import("@/lib/domain").Quotation>> {
+  try {
+    const user = await requireActionUser("quotations");
+    const quoteId = id.parse(rawId);
+    const quote = await crm().getQuote(quoteId);
+    if (!quote) return { ok: false, error: "Quotation not found." };
+    if (visibleFor(user, [quote]).length === 0) {
+      return { ok: false, error: "You can only view your own quotations." };
+    }
+    return { ok: true, data: quote };
+  } catch (error) {
+    if (error instanceof ForbiddenError) return { ok: false, error: error.message };
+    if (error instanceof z.ZodError) return { ok: false, error: "Quotation not found." };
+    console.error("[action] getQuoteDetail failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false, error: "Could not load quotation details. Please try again." };
+  }
+}
+
 export async function suggestOfferNoAction(): Promise<string> {
   await requireActionUser("quotations");
   const quotes = await crm().listQuotes();

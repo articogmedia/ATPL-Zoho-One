@@ -4,7 +4,7 @@ import { needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-prese
 
 const currentUser = vi.fn();
 vi.mock("@/lib/auth/guard", () => ({ currentUser }));
-vi.mock("@/lib/crm", () => ({ crm: vi.fn(() => ({ getLead: vi.fn(), listProducts: vi.fn(() => []) })) }));
+vi.mock("@/lib/crm", () => ({ crm: vi.fn(() => ({ getLead: vi.fn(() => Promise.resolve(null)), listProducts: vi.fn(() => []) })) }));
 
 describe("quotation PDF route", () => {
   beforeEach(() => currentUser.mockReset());

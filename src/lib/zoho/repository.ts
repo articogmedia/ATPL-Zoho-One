@@ -147,7 +147,23 @@ export const zohoRepository: CrmRepository = {
   },
 
   listLeads: leads,
-  async getLead(id) { return (await leadMap()).get(id) ?? null; },
+  async getLead(id) {
+    const cachedLead = (await leadMap()).get(id);
+    if (cachedLead) return cachedLead;
+    try {
+      const response = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${encodeURIComponent(id)}`, {
+        query: { fields: LEAD_FIELDS.join(",") },
+      });
+      const record = response?.data?.[0];
+      if (!record) throw new ZohoError("Lead not found", 404, "NOT_FOUND", undefined, undefined, `GET /Leads/${id}`);
+      const [assignable, allUsers] = await Promise.all([assignableIds(), users()]);
+      const salesExecutives = new Set(allUsers.filter((user) => user.role === "Sales Executive").map((user) => String(user.id).trim()));
+      return mapLead(record, assignable, salesExecutives);
+    } catch (error) {
+      if (error instanceof ZohoError && error.status === 404) return null;
+      throw error;
+    }
+  },
   async findLeadByPhone(phone) {
     const normalized = normalizePhone(phone);
     if (!normalized) return null;
@@ -519,6 +535,16 @@ export const zohoRepository: CrmRepository = {
       const [raw, map] = await Promise.all([zohoList<ZQuote>("Quotes", QUOTE_FIELDS, 1000), leadMap()]);
       return raw.map((z) => mapQuote(z, map));
     });
+  },
+
+  async getQuote(id) {
+    const response = await zoho<{ data?: ZQuote[] }>("GET", `/Quotes/${encodeURIComponent(id)}`, {
+      query: { fields: [...QUOTE_FIELDS, "Quoted_Items"].join(",") },
+    });
+    const record = response?.data?.[0];
+    if (!record) return null;
+    const [map, products] = await Promise.all([leadMap(), this.listProducts()]);
+    return mapQuote(record, map, new Map(products.map((product) => [product.id, product])));
   },
 
   async createQuote(input, actor, executive) {

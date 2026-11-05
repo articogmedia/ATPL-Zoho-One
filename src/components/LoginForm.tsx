@@ -95,5 +95,5 @@ export function LoginForm() {
 function LoginSubmit({ pending: actionPending }: { pending: boolean }) {
   const { pending } = useFormStatus();
   const isPending = pending || actionPending;
-  return <Button type="submit" disabled={isPending} className="min-h-12 w-full rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">{isPending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{isPending ? "Signing in..." : "Sign in"}</Button>;
+  return <Button type="submit" disabled={isPending} className="w-full rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">{isPending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{isPending ? "Signing in..." : "Sign in"}</Button>;
 }

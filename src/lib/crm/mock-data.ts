@@ -466,7 +466,13 @@ export const MOCK_QUOTES: Quotation[] = [
     "customer": "Sri Lakshmi Textiles",
     "executive": "Anil",
     "date": "2026-10-10",
-    "total": 228000
+    "total": 228000,
+    "items": [
+      { "productId": "P3", "model": "3 TR 4-Way Cassette AC", "unit": "Nos", "qty": 1, "price": 122000 },
+      { "productId": "P2", "model": "2 TR Split AC", "unit": "Nos", "qty": 1, "price": 57000 },
+      { "productId": "P1", "model": "1.5 TR Split AC", "unit": "Nos", "qty": 1, "price": 37000 },
+      { "productId": "P4", "model": "B - Installation Cassette AC", "unit": "Nos", "qty": 4, "price": 3000 }
+    ]
   },
   {
     "id": "Q2002",
@@ -475,7 +481,10 @@ export const MOCK_QUOTES: Quotation[] = [
     "customer": "Hotel Paradise Inn",
     "executive": "Anil",
     "date": "2026-09-28",
-    "total": 366000
+    "total": 366000,
+    "items": [
+      { "productId": "P3", "model": "3 TR 4-Way Cassette AC", "unit": "Nos", "qty": 3, "price": 122000 }
+    ]
   },
   {
     "id": "Q2003",
@@ -484,7 +493,10 @@ export const MOCK_QUOTES: Quotation[] = [
     "customer": "Kiran Motors",
     "executive": "Ravi",
     "date": "2026-10-15",
-    "total": 114000
+    "total": 114000,
+    "items": [
+      { "productId": "P2", "model": "2 TR Split AC", "unit": "Nos", "qty": 2, "price": 57000 }
+    ]
   }
 ];
 

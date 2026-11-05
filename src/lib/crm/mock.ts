@@ -115,17 +115,18 @@ export const mockRepository: CrmRepository = {
 
   async listProducts() { return MOCK_PRODUCTS; },
   async listQuotes() { return [...state.quotes].sort((a, b) => b.date.localeCompare(a.date)); },
+  async getQuote(id) { return state.quotes.find((quote) => quote.id === id) ?? null; },
   async createQuote(input, actor, executive) {
     const lead = state.leads.find((l) => l.id === input.leadId);
     if (!lead) throw new Error("Lead not found");
     const items = input.items.map((i) => {
       const p = MOCK_PRODUCTS.find((x) => x.id === i.productId);
       if (!p) throw new Error("Unknown product");
-      return { model: p.model, unit: p.unit, qty: i.qty, price: p.price, discount: Math.min(p.price * i.qty, Math.max(0, i.discount)) };
+      return { productId: p.id, model: p.model, description: p.description, unit: p.unit, qty: i.qty, price: p.price, discount: Math.min(p.price * i.qty, Math.max(0, i.discount)) };
     });
     const q: Quotation = {
       id: `Q${2001 + state.quotes.length}`, offerNo: input.offerNo, leadId: lead.id,
-      customer: lead.company || lead.name, executive, date: today(), total: quoteTotals(items).total, status: "Draft",
+      customer: lead.company || lead.name, executive, date: today(), total: quoteTotals(items).total, status: "Draft", items,
     };
     state.quotes.unshift(q);
     note(lead.id, actor.name, `Quotation ${q.offerNo} created`);

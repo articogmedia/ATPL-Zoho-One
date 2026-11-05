@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
-import { CalendarPlus, Clock3, History, MessageCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { CalendarPlus, Clock3, History, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
+import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { Button } from "@/components/ui/button";
+import { SelectField } from "@/components/ui/select-field";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getLeadTimelineAction, logCallAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
@@ -215,7 +217,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         <div className="w-full">
           <div className="flex items-center justify-between gap-3">
             <h1 className="text-xl font-semibold sm:text-2xl sm:font-bold">Manage Leads</h1>
-            <Button className="h-10 rounded-lg px-4 sm:hidden" onClick={() => setAdding((value) => !value)}><Plus /> Add</Button>
+            <Button className="sm:hidden" onClick={() => setAdding((value) => !value)}><Plus /> Add</Button>
           </div>
           <p className="mt-1 truncate text-sm text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
           {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-muted-foreground sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
@@ -229,8 +231,8 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
 
       {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads leads={fixableLeads} count={fixableCount} compact /></div>}
 
-      <div className="relative -mx-1 overflow-hidden">
-      <div ref={tabListRef} className="flex gap-2 overflow-x-auto px-1 pb-2 max-[480px]:scrollbar-none" role="tablist" aria-label="Lead views">
+      <div className="relative -mx-1">
+      <div ref={tabListRef} className="flex gap-2 overflow-x-auto p-1 max-[480px]:scrollbar-none" role="tablist" aria-label="Lead views">
         {availableTabs.map((item) => (
           <button
             key={item.id}
@@ -239,14 +241,12 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
             role="tab"
             aria-selected={tab === item.id}
             onClick={() => setTab(item.id)}
-            className={`h-11 shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.id ? "bg-primary text-primary-foreground shadow-sm" : "bg-secondary text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+            className={`h-11 shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.id ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
           >
             <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.id === "assigned" ? "Assigned" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>
         ))}
       </div>
-      <div className="pointer-events-none absolute inset-y-0 left-0 w-4 bg-gradient-to-r from-card to-transparent" />
-      <div className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-card to-transparent" />
       </div>
 
       <div className="flex flex-row gap-2">
@@ -345,7 +345,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
 
 function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   return <div className="flex justify-end gap-1">
-    <Button size="sm" variant="outline" className="h-11 w-auto md:h-9 md:w-9 md:px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`} title={`Log call for ${lead.name}`}><Phone /> <span className="md:hidden 2xl:inline">Call</span></Button>
+    <Button size="sm" variant="outline" className="w-auto md:w-9 md:px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`} title={`Log call for ${lead.name}`}><Phone /> <span className="md:hidden 2xl:inline">Call</span></Button>
     <Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
     {manager && <><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
@@ -354,10 +354,10 @@ function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boole
 function DesktopActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   const whatsapp = whatsappUrl(lead.phone);
   return <div className="flex justify-end gap-1">
-    <Button size="sm" variant="outline" className="h-9 w-9 px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`} title={`Log call for ${lead.name}`}><Phone /> <span className="hidden 2xl:inline">Call</span></Button>
-    {whatsapp && <a className="grid h-9 w-9 place-items-center rounded-md hover:bg-secondary" href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><MessageCircle className="text-[#128C7E]" /></a>}
-    <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
-    {manager && <><Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+    <Button size="sm" variant="outline" className="w-9 px-0 2xl:w-auto 2xl:px-3" onClick={() => onAction("call")} aria-label={`Log call for ${lead.name}`} title={`Log call for ${lead.name}`}><Phone /> <span className="hidden 2xl:inline">Call</span></Button>
+    {whatsapp && <a className="grid h-9 w-9 place-items-center rounded-lg hover:bg-secondary" href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
+    <Button size="icon" variant="ghost" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
+    {manager && <><Button size="icon" variant="ghost" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
 }
 
@@ -384,7 +384,7 @@ const MobileRow = memo(function MobileRow({ lead, manager, highlighted, onOpen, 
         <StatusBadge status={lead.status} />
       </div>
       <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2">{lead.phone ? <a className="inline-flex min-h-11 items-center truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone}</a> : <span>No phone</span>}<span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
-      {wa && <a className="mt-3 inline-flex min-h-11 items-center justify-center rounded-md border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={wa} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}>WhatsApp</a>}
+      {wa && <a className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={wa} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}><WhatsAppIcon className="h-5 w-5" />WhatsApp</a>}
       <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} /></div>
     </div>
   );
@@ -393,7 +393,7 @@ const MobileRow = memo(function MobileRow({ lead, manager, highlighted, onOpen, 
 function EmptyState({ hasLeads, filtered, onClear }: { hasLeads: boolean; filtered: boolean; onClear: () => void }) {
   const title = filtered ? "No leads match your filters" : hasLeads ? "No leads in this view" : "No leads yet";
   const detail = filtered ? "Try a different search or source." : hasLeads ? "New enquiries will appear here." : "Add a lead to get started.";
-  return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{title}</div><p className="mt-1 text-muted-foreground">{detail}</p>{filtered && <Button variant="outline" className="mt-4 h-10" onClick={onClear}>Clear filters</Button>}</div>;
+  return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{title}</div><p className="mt-1 text-muted-foreground">{detail}</p>{filtered && <Button variant="outline" className="mt-4" onClick={onClear}>Clear filters</Button>}</div>;
 }
 
 function FixAssignedLeads({ count, compact = false, leads = [] }: { count: number; compact?: boolean; leads?: { id: string; name: string; ownerName: string }[] }) {
@@ -409,7 +409,7 @@ function FixAssignedLeads({ count, compact = false, leads = [] }: { count: numbe
       else toast.error(result.error);
     });
   };
-  return <Button title="Moves leads that have a sales executive but are still in Fresh Lead to Assigned to Sales." variant={compact ? "ghost" : "outline"} className={compact ? "h-11 min-w-11 px-2 font-medium underline" : "h-10 max-[480px]:h-11 max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>;
+  return <Button title="Moves leads that have a sales executive but are still in Fresh Lead to Assigned to Sales." variant={compact ? "ghost" : "outline"} className={compact ? "min-w-11 px-2 font-medium underline" : "max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>;
 }
 
 function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceChange, onClose }: {
@@ -417,11 +417,12 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
   onChange: (filters: LeadFilters) => void; onSourceChange: (source: LeadSource | "All") => void; onClose: () => void;
 }) {
   useBodyScrollLock(open);
-  const content = <div className="grid gap-2 sm:grid-cols-4">
-    <label className="text-xs font-semibold">Owner<select className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.owner ?? "All"} onChange={(e) => onChange({ ...filters, owner: e.target.value })}><option value="All">All owners</option>{owners.map((owner) => <option key={owner}>{owner}</option>)}</select></label>
-    <label className="text-xs font-semibold">Stage<select className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.stage ?? "All"} onChange={(e) => onChange({ ...filters, stage: e.target.value as LeadStatus | "All" })}><option value="All">All stages</option>{LEAD_STATUSES.map((stage) => <option key={stage}>{stage}</option>)}</select></label>
-    <label className="text-xs font-semibold">Source<select className={`${fieldClass} mt-1 h-10 text-sm`} value={source} onChange={(e) => onSourceChange(e.target.value as LeadSource | "All")}><option value="All">All sources</option>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select></label>
-    <div className="grid grid-cols-2 gap-2"><label className="text-xs font-semibold">From<input type="date" className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.from ?? ""} onChange={(e) => onChange({ ...filters, from: e.target.value })} /></label><label className="text-xs font-semibold">To<input type="date" className={`${fieldClass} mt-1 h-10 text-sm`} value={filters.to ?? ""} onChange={(e) => onChange({ ...filters, to: e.target.value })} /></label></div>
+  const content = <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+    <label className="text-xs font-semibold">Owner<SelectField className="mt-1" value={filters.owner ?? "All"} onValueChange={(value) => onChange({ ...filters, owner: value })} options={[{ value: "All", label: "All owners" }, ...owners.map((owner) => ({ value: owner, label: owner }))]} /></label>
+    <label className="text-xs font-semibold">Stage<SelectField className="mt-1" value={filters.stage ?? "All"} onValueChange={(value) => onChange({ ...filters, stage: value as LeadStatus | "All" })} options={[{ value: "All", label: "All stages" }, ...LEAD_STATUSES.map((stage) => ({ value: stage, label: stage }))]} /></label>
+    <label className="text-xs font-semibold">Source<SelectField className="mt-1" value={source} onValueChange={(value) => onSourceChange(value as LeadSource | "All")} options={[{ value: "All", label: "All sources" }, ...LEAD_SOURCES.map((item) => ({ value: item, label: item }))]} /></label>
+    <label className="text-xs font-semibold">From<input type="date" className={`${fieldClass} mt-1 text-sm`} value={filters.from ?? ""} onChange={(e) => onChange({ ...filters, from: e.target.value })} /></label>
+    <label className="text-xs font-semibold">To<input type="date" className={`${fieldClass} mt-1 text-sm`} value={filters.to ?? ""} onChange={(e) => onChange({ ...filters, to: e.target.value })} /></label>
   </div>;
   return <>
     <div className="hidden rounded-lg border bg-card p-3 sm:block">{content}</div>
@@ -480,16 +481,16 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
     <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="lead-action-title" className="relative max-h-[90dvh] w-full max-w-md space-y-4 overflow-y-auto rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl md:rounded-xl md:pb-5">
       <div className="flex items-start justify-between gap-3"><div><h2 id="lead-action-title" className="text-lg font-bold">{title}</h2><p className="text-sm text-muted-foreground">{action.lead.name}</p></div><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button></div>
       {action.type === "edit" && <div className="grid gap-3">
-        <label className="font-medium">Name<input className={`${fieldClass} mt-1 h-10 text-sm`} value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} /></label>
-        <label className="font-medium">Company<input className={`${fieldClass} mt-1 h-10 text-sm`} value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} /></label>
-        <label className="font-medium">Phone<input className={`${fieldClass} mt-1 h-10 text-sm`} value={phone} onChange={(event) => setPhone(event.target.value)} required inputMode="tel" pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" /></label>
-        <label className="font-medium">Source<select className={`${fieldClass} mt-1 h-10 text-sm`} value={source} onChange={(event) => setSource(event.target.value as LeadSource)}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label className="font-medium">Name<input className={`${fieldClass} mt-1 text-sm`} value={name} onChange={(event) => setName(event.target.value)} required maxLength={120} /></label>
+        <label className="font-medium">Company<input className={`${fieldClass} mt-1 text-sm`} value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} /></label>
+        <label className="font-medium">Phone<input className={`${fieldClass} mt-1 text-sm`} value={phone} onChange={(event) => setPhone(event.target.value)} required inputMode="tel" pattern="(?:\+91\s?)?\d{10}" title="Enter a 10-digit phone number" /></label>
+        <label className="font-medium">Source<SelectField className="mt-1" value={source} onValueChange={(value) => setSource(value as LeadSource)} options={LEAD_SOURCES.map((item) => ({ value: item, label: item }))} /></label>
       </div>}
-      {action.type === "reassign" && <label className="block font-medium">Assign to<select className={`${fieldClass} mt-1 h-10 text-sm`} value={assignee} onChange={(event) => setAssignee(event.target.value)} required><option value="">Select a team member</option>{executives.map((name) => <option key={name}>{name}</option>)}</select></label>}
+      {action.type === "reassign" && <label className="block font-medium">Assign to<SelectField className="mt-1" value={assignee} onValueChange={setAssignee} required options={[{ value: "", label: "Select a team member" }, ...executives.map((name) => ({ value: name, label: name }))]} /></label>}
       {action.type === "call" && <div className="grid gap-3">
-        <label className="font-medium">Outcome<select className={`${fieldClass} mt-1 h-10 text-sm`} value={outcome} onChange={(event) => setOutcome(event.target.value as CallOutcome)}>{["Connected", "No Answer", "Busy", "Wrong Number", "Call Back Later"].map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label className="font-medium">Outcome<SelectField className="mt-1" value={outcome} onValueChange={(value) => setOutcome(value as CallOutcome)} options={["Connected", "No Answer", "Busy", "Wrong Number", "Call Back Later"].map((item) => ({ value: item, label: item }))} /></label>
         <label className="font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-24 py-2 text-sm`} value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
-        <div className="grid grid-cols-2 gap-2"><label className="font-medium">Follow-up date<input type="date" className={`${fieldClass} mt-1 h-10 text-sm`} value={followUp} onChange={(event) => setFollowUp(event.target.value)} /></label><label className="font-medium">Time<input type="time" className={`${fieldClass} mt-1 h-10 text-sm`} value={followUpTime} onChange={(event) => setFollowUpTime(event.target.value)} disabled={!followUp} /></label></div>
+        <div className="grid grid-cols-2 gap-2"><label className="font-medium">Follow-up date<input type="date" className={`${fieldClass} mt-1 text-sm`} value={followUp} onChange={(event) => setFollowUp(event.target.value)} /></label><label className="font-medium">Time<input type="time" className={`${fieldClass} mt-1 text-sm`} value={followUpTime} onChange={(event) => setFollowUpTime(event.target.value)} disabled={!followUp} /></label></div>
       </div>}
       {action.type === "delete" && <p className="rounded-md bg-destructive/10 p-3 text-sm">This lead will be moved to the Zoho Recycle Bin.</p>}
       <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button><Button type="submit" variant={action.type === "delete" ? "destructive" : "default"} disabled={pending}>{pending ? "Saving..." : action.type === "delete" ? "Delete" : action.type === "reassign" ? "Confirm" : action.type === "call" ? "Log call" : "Save"}</Button></div>
@@ -562,26 +563,26 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
             <ScheduleForm lead={lead} onDone={() => setMode("edit")} />
           ) : (
             <div className="space-y-4">
-              <label className="block font-medium">Status<select className={`${fieldClass} mt-1 h-10 text-sm`} value={status} onChange={(event) => setStatus(event.target.value as LeadStatus)}>{LEAD_STATUSES.map((item) => <option key={item}>{item}</option>)}</select></label>
+              <label className="block font-medium">Status<SelectField className="mt-1" value={status} onValueChange={(value) => setStatus(value as LeadStatus)} options={LEAD_STATUSES.map((item) => ({ value: item, label: item }))} /></label>
               {canAssign && <label className="relative block font-medium">Assign to Sales Executive
-                <button type="button" role="combobox" aria-expanded={comboboxOpen} aria-controls="lead-executive-options" className={`${fieldClass} mt-1 flex h-10 items-center justify-between text-left text-sm`} onClick={() => setComboboxOpen((value) => !value)} disabled={!executives.length}><span className={assignee ? "text-foreground" : "text-muted-foreground"}>{assignee || "Unassigned"}</span><Search className="h-4 w-4" /></button>
+                <button type="button" role="combobox" aria-expanded={comboboxOpen} aria-controls="lead-executive-options" className={`${fieldClass} mt-1 flex items-center justify-between text-left text-sm`} onClick={() => setComboboxOpen((value) => !value)} disabled={!executives.length}><span className={assignee ? "text-foreground" : "text-muted-foreground"}>{assignee || "Unassigned"}</span><Search className="h-4 w-4" /></button>
                 {comboboxOpen && <div id="lead-executive-options" role="listbox" className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-md border bg-card p-1 shadow-lg">
-                  <input autoFocus className={`${fieldClass} h-9 text-sm`} placeholder="Search executives…" value={assigneeSearch} onChange={(event) => setAssigneeSearch(event.target.value)} aria-label="Search executives" />
-                  <button type="button" role="option" aria-selected={!assignee} className="mt-1 block w-full rounded px-2 py-2 text-left text-sm font-medium hover:bg-secondary" onClick={() => { setAssignee(""); setComboboxOpen(false); }}>Unassigned</button>
-                  {filteredExecutives.map((name) => <button key={name} type="button" role="option" aria-selected={assignee === name} className="mt-1 block w-full rounded px-2 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setAssignee(name); setComboboxOpen(false); }}>{name}</button>)}
+                  <input autoFocus className={`${fieldClass} text-sm`} placeholder="Search executives…" value={assigneeSearch} onChange={(event) => setAssigneeSearch(event.target.value)} aria-label="Search executives" />
+                  <button type="button" role="option" aria-selected={!assignee} className="mt-1 block min-h-11 w-full rounded-lg px-2 py-2 text-left text-sm font-medium hover:bg-secondary" onClick={() => { setAssignee(""); setComboboxOpen(false); }}>Unassigned</button>
+                  {filteredExecutives.map((name) => <button key={name} type="button" role="option" aria-selected={assignee === name} className="mt-1 block min-h-11 w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-secondary" onClick={() => { setAssignee(name); setComboboxOpen(false); }}>{name}</button>)}
                   {!executives.length && <p className="p-2 text-xs text-destructive">No sales executives found. A manager must check ZOHO_ROLE_OVERRIDES / Zoho roles.</p>}
                   {!!executives.length && !filteredExecutives.length && <p className="p-2 text-xs text-muted-foreground">No executives match your search.</p>}
                 </div>}
               </label>}
               <label className="block font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-28 py-2 text-sm`} placeholder="Add a note about this lead…" value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
               <div className="grid gap-2 sm:grid-cols-2">
-                <Button className="h-10" disabled={pending} onClick={() => save()}>{pending ? "Saving…" : "Save"}</Button>
-                <Button variant="outline" className="h-10" disabled={pending || !nextLead} onClick={() => save(true)}>{pending ? "Saving…" : "Save & next"}</Button>
+                <Button disabled={pending} onClick={() => save()}>{pending ? "Saving…" : "Save"}</Button>
+                <Button variant="outline" disabled={pending || !nextLead} onClick={() => save(true)}>{pending ? "Saving…" : "Save & next"}</Button>
               </div>
               <div className="grid gap-2 border-t pt-4 sm:grid-cols-2">
-                <Button variant="outline" className="h-10" onClick={loadHistory}><History /> History</Button>
-                <Button variant="outline" className="h-10" onClick={() => setMode("schedule")}><CalendarPlus /> Schedule visit</Button>
-                <Button asChild variant="secondary" className="h-10 sm:col-span-2"><Link href={`/quotations?lead=${lead.id}`} onClick={onClose}><Clock3 /> Create quotation</Link></Button>
+                <Button variant="outline" onClick={loadHistory}><History /> History</Button>
+                <Button variant="outline" onClick={() => setMode("schedule")}><CalendarPlus /> Schedule visit</Button>
+                <Button asChild variant="secondary" className="sm:col-span-2"><Link href={`/quotations?lead=${lead.id}`} onClick={onClose}><Clock3 /> Create quotation</Link></Button>
               </div>
             </div>
           )}
@@ -592,7 +593,7 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
 }
 
 function DrawerTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return <button className={`flex h-9 items-center gap-1 border-b-2 px-2 text-sm font-semibold ${active ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`} onClick={onClick}>{children}</button>;
+  return <button className={`flex h-11 items-center gap-1 border-b-2 px-2 text-sm font-semibold ${active ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`} onClick={onClick}>{children}</button>;
 }
 
 function HistoryList({ history }: { history: LeadTimelineItem[] | null }) {
@@ -612,12 +613,12 @@ function ScheduleForm({ lead, onDone }: { lead: Lead; onDone: () => void }) {
     if (result.ok) { toast.success("Visit scheduled"); onDone(); } else toast.error(result.error);
   });
   return <div className="space-y-3"><div><h3 className="font-semibold">Schedule visit / work</h3><p className="mt-1 text-xs text-muted-foreground">Owner: {lead.assignedTo ?? "Unassigned"}</p></div>
-    <select aria-label="Type" className={`${fieldClass} h-10 text-sm`} value={f.type} onChange={(event) => setF({ ...f, type: event.target.value })}>{VISIT_TYPES.map((item) => <option key={item}>{item}</option>)}</select>
-    <input aria-label="Address" className={`${fieldClass} h-10 text-sm`} placeholder="Visit address" value={f.address} maxLength={240} onChange={(event) => setF({ ...f, address: event.target.value })} />
-    <input aria-label="Next action" className={`${fieldClass} h-10 text-sm`} placeholder="Next action" value={f.nextAction} maxLength={200} onChange={(event) => setF({ ...f, nextAction: event.target.value })} />
-    <div className="grid grid-cols-2 gap-2"><input aria-label="Date" type="date" className={`${fieldClass} h-10 text-sm`} value={f.date} onChange={(event) => setF({ ...f, date: event.target.value })} /><input aria-label="Time" type="time" className={`${fieldClass} h-10 text-sm`} value={f.time} onChange={(event) => setF({ ...f, time: event.target.value })} /></div>
-    <input aria-label="Follow-up date" type="date" className={`${fieldClass} h-10 text-sm`} value={f.followUp} onChange={(event) => setF({ ...f, followUp: event.target.value })} />
-    <div className="flex gap-2"><Button variant="outline" className="h-10 flex-1" onClick={onDone}>Cancel</Button><Button className="h-10 flex-1" onClick={submit} disabled={pending || !f.date || !f.time}>{pending ? "Saving…" : "Schedule"}</Button></div>
+    <SelectField aria-label="Type" value={f.type} onValueChange={(value) => setF({ ...f, type: value })} options={VISIT_TYPES.map((item) => ({ value: item, label: item }))} />
+    <input aria-label="Address" className={`${fieldClass} text-sm`} placeholder="Visit address" value={f.address} maxLength={240} onChange={(event) => setF({ ...f, address: event.target.value })} />
+    <input aria-label="Next action" className={`${fieldClass} text-sm`} placeholder="Next action" value={f.nextAction} maxLength={200} onChange={(event) => setF({ ...f, nextAction: event.target.value })} />
+    <div className="grid grid-cols-2 gap-2"><input aria-label="Date" type="date" className={`${fieldClass} text-sm`} value={f.date} onChange={(event) => setF({ ...f, date: event.target.value })} /><input aria-label="Time" type="time" className={`${fieldClass} text-sm`} value={f.time} onChange={(event) => setF({ ...f, time: event.target.value })} /></div>
+    <input aria-label="Follow-up date" type="date" className={`${fieldClass} text-sm`} value={f.followUp} onChange={(event) => setF({ ...f, followUp: event.target.value })} />
+    <div className="flex gap-2"><Button variant="outline" className="flex-1" onClick={onDone}>Cancel</Button><Button className="flex-1" onClick={submit} disabled={pending || !f.date || !f.time}>{pending ? "Saving…" : "Schedule"}</Button></div>
   </div>;
 }
 
@@ -719,13 +720,13 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
     <div className="flex min-h-14 shrink-0 items-center justify-between border-b border-border px-4"><h2 id="add-lead-title" className="font-semibold">Add Lead</h2><Button type="button" variant="ghost" size="icon" className="h-11 w-11" aria-label="Close add lead form" onClick={close}><X /></Button></div>
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 pb-8">
       <div className="grid gap-4 sm:grid-cols-2">
-        <div><label htmlFor="add-lead-name" className="mb-1 block text-sm font-medium">Lead name *</label><input ref={nameRef} id="add-lead-name" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} autoComplete="off" aria-invalid={!!errors.name} value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
-        <div><label htmlFor="add-lead-company" className="mb-1 block text-sm font-medium">Company</label><input id="add-lead-company" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.company} onChange={set("company")} maxLength={160} /></div>
-        <div><label htmlFor="add-lead-phone" className="mb-1 block text-sm font-medium">Mobile number *</label><input id="add-lead-phone" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} aria-invalid={!!errors.phone} value={f.phone} onChange={phoneChanged} inputMode="tel" required maxLength={15} />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
-        <div><label htmlFor="add-lead-area" className="mb-1 block text-sm font-medium">Area</label><input id="add-lead-area" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.area} onChange={set("area")} maxLength={120} /></div>
-        <div><label htmlFor="add-lead-source" className="mb-1 block text-sm font-medium">Source</label><select id="add-lead-source" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} value={f.source} onChange={set("source")}>{LEAD_SOURCES.map((item) => <option key={item}>{item}</option>)}</select></div>
-        {canAssign && <div><label htmlFor="add-lead-assignee" className="mb-1 block text-sm font-medium">Assign to</label><select id="add-lead-assignee" className={`${fieldClass} h-11 text-base md:h-10 md:text-sm`} disabled={!executives.length} value={f.assignedTo} onChange={set("assignedTo")}><option value="">Assign to (optional)</option>{executives.map((name) => <option key={name}>{name}</option>)}</select></div>}
-        <div className="sm:col-span-2"><label htmlFor="add-lead-remarks" className="mb-1 block text-sm font-medium">Remarks</label><textarea id="add-lead-remarks" className={`${fieldClass} min-h-11 text-base md:min-h-10 md:text-sm`} value={f.remarks} onChange={set("remarks")} maxLength={500} /></div>
+        <div><label htmlFor="add-lead-name" className="mb-1 block text-sm font-medium">Lead name *</label><input ref={nameRef} id="add-lead-name" className={`${fieldClass} text-base md:text-sm`} autoComplete="off" aria-invalid={!!errors.name} value={f.name} onChange={set("name")} maxLength={120} required />{errors.name && <p className="mt-1 text-xs text-destructive">{errors.name}</p>}</div>
+        <div><label htmlFor="add-lead-company" className="mb-1 block text-sm font-medium">Company</label><input id="add-lead-company" className={`${fieldClass} text-base md:text-sm`} value={f.company} onChange={set("company")} maxLength={160} /></div>
+        <div><label htmlFor="add-lead-phone" className="mb-1 block text-sm font-medium">Mobile number *</label><input id="add-lead-phone" className={`${fieldClass} text-base md:text-sm`} aria-invalid={!!errors.phone} value={f.phone} onChange={phoneChanged} inputMode="tel" required maxLength={15} />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
+        <div><label htmlFor="add-lead-area" className="mb-1 block text-sm font-medium">Area</label><input id="add-lead-area" className={`${fieldClass} text-base md:text-sm`} value={f.area} onChange={set("area")} maxLength={120} /></div>
+        <div><label htmlFor="add-lead-source" className="mb-1 block text-sm font-medium">Source</label><SelectField id="add-lead-source" value={f.source} onValueChange={(value) => setF((current) => ({ ...current, source: value as LeadSource }))} options={LEAD_SOURCES.map((item) => ({ value: item, label: item }))} /></div>
+        {canAssign && <div><label htmlFor="add-lead-assignee" className="mb-1 block text-sm font-medium">Assign to</label><SelectField id="add-lead-assignee" disabled={!executives.length} value={f.assignedTo} onValueChange={(value) => setF((current) => ({ ...current, assignedTo: value }))} options={[{ value: "", label: "Assign to (optional)" }, ...executives.map((name) => ({ value: name, label: name }))]} /></div>}
+        <div className="sm:col-span-2"><label htmlFor="add-lead-remarks" className="mb-1 block text-sm font-medium">Remarks</label><textarea id="add-lead-remarks" className={`${fieldClass} min-h-11 text-base md:text-sm`} value={f.remarks} onChange={set("remarks")} maxLength={500} /></div>
         {duplicate && duplicateMatchesPhone && <div className="rounded-lg border border-destructive bg-card p-3 text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Matched on {duplicate.matchedField ?? "phone"} · Owner: {duplicate.owner} · Status: {duplicate.status}</p>        {canForceDuplicate && !forceCreate && <Button type="button" variant="outline" className="mt-2 h-11" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
       </div>
     </div>

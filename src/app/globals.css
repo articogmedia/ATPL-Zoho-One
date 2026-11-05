@@ -178,30 +178,30 @@
   textarea {
     font-size: 16px;
   }
-
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    width: fit-content;
-    border-radius: 999px;
-    padding: 4px 10px;
-    font-size: 12px;
-    font-weight: 700;
-    line-height: 1.2;
-    white-space: nowrap;
-  }
-  .status-fresh { color: var(--status-fresh-fg); background: var(--status-fresh); }
-  .status-assigned { color: var(--status-assigned-fg); background: var(--status-assigned); }
-  .status-attempted { color: var(--status-warning-fg); background: var(--status-warning); }
-  .status-callback { color: var(--status-callback-fg); background: var(--status-callback); }
-  .status-contacted { color: var(--status-contacted-fg); background: var(--status-contacted); }
-  .status-site-visit { color: var(--status-site-fg); background: var(--status-site); }
-  .status-quotation { color: var(--status-quotation-fg); background: var(--status-quotation); }
-  .status-won { color: var(--success-foreground); background: var(--success); }
-  .status-lost, .status-junk { color: var(--destructive-foreground); background: var(--destructive); }
-  .status-neutral { color: var(--foreground); background: var(--secondary); }
-  .status-qualified { color: var(--status-qualified-fg); background: var(--status-qualified); }
 }
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 9999px;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1rem;
+  white-space: nowrap;
+}
+.status-fresh { color: var(--status-fresh-fg); background: var(--status-fresh); }
+.status-assigned { color: var(--status-assigned-fg); background: var(--status-assigned); }
+.status-attempted { color: var(--status-warning-fg); background: var(--status-warning); }
+.status-callback { color: var(--status-callback-fg); background: var(--status-callback); }
+.status-contacted { color: var(--status-contacted-fg); background: var(--status-contacted); }
+.status-site-visit { color: var(--status-site-fg); background: var(--status-site); }
+.status-quotation { color: var(--status-quotation-fg); background: var(--status-quotation); }
+.status-won { color: var(--success-foreground); background: var(--success); }
+.status-lost, .status-junk { color: var(--destructive-foreground); background: var(--destructive); }
+.status-neutral { color: var(--foreground); background: var(--secondary); }
+.status-qualified { color: var(--status-qualified-fg); background: var(--status-qualified); }
 
 @utility bg-hero {
   background-image: var(--gradient-hero);

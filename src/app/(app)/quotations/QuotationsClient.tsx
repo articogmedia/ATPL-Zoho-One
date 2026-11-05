@@ -2,35 +2,47 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Image from "next/image";
-import { ArrowLeft, Check, ChevronDown, Eye, MessageCircle, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Eye, History, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { fieldClass } from "@/components/ui-bits";
-import { addLeadAction, createQuoteAction } from "@/app/actions/crm";
+import { SelectField } from "@/components/ui/select-field";
+import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
+import { StatusBadge, fieldClass } from "@/components/ui-bits";
+import { addLeadAction, createQuoteAction, getQuoteDetailAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { splitQuotationItems } from "@/lib/quotation-presentation";
-import { LEAD_SOURCES, formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type Product, type Quotation } from "@/lib/domain";
+import { LEAD_SOURCES, formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
-type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; suggestedOfferNo: string; presetLeadId: string };
+type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
+type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
-export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, presetLeadId }: Props) {
+export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
   const [created, setCreated] = useState<Lead[]>([]);
   const myLeads = useMemo(() => [...created.filter((c) => !leads.some((l) => l.id === c.id)), ...leads], [created, leads]);
   const [q, setQ] = useState("");
-  const [leadId, setLeadId] = useState(presetLeadId);
+  const [leadId, setLeadId] = useState(String(presetLeadId).trim());
   const [adding, setAdding] = useState(false);
   const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: "Direct Call" as LeadSource });
+  const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
   const [rows, setRows] = useState<Row[]>([{ productId: "", qty: 1, discount: 0 }]);
   const [offerNo, setOfferNo] = useState(suggestedOfferNo);
   const [preview, setPreview] = useState(false);
   const [pending, start] = useTransition();
+  const [savedQuotes, setSavedQuotes] = useState(quotes);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const [savedSearch, setSavedSearch] = useState("");
+  const [loadingQuoteId, setLoadingQuoteId] = useState<string | null>(null);
+  const [readOnlyQuote, setReadOnlyQuote] = useState<Quotation | null>(null);
+  const panelRef = useRef<HTMLElement>(null);
+  const savedSearchRef = useRef<HTMLInputElement>(null);
+  const savedButtonRef = useRef<HTMLButtonElement>(null);
   const previousPreview = useRef(false);
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ productId: p.id, model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
   const t = quoteTotals(items);
-  const lead = myLeads.find((l) => l.id === leadId);
+  const lead = myLeads.find((l) => String(l.id).trim() === String(leadId).trim());
   const validLineCount = rows.filter((row) => {
     const product = byId.get(row.productId);
     return !!product && validateQuoteLine(row.qty, row.discount, product.price) === null;
@@ -48,15 +60,92 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     previousPreview.current = preview;
   }, [preview]);
 
+  useEffect(() => {
+    if (!savedOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.style.overflow = "hidden";
+    savedSearchRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSavedOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [savedOpen]);
+
+  useEffect(() => {
+    if (readOnlyQuote) {
+      requestAnimationFrame(() => document.getElementById("offer-heading")?.focus({ preventScroll: true }));
+    }
+  }, [readOnlyQuote]);
+
   const matches = useMemo(() => {
     const s = q.trim().toLowerCase();
     return myLeads.filter((l) => !s || [l.name, l.company, l.phone, l.area].some((f) => f.toLowerCase().includes(s))).slice(0, 6);
   }, [q, myLeads]);
 
+  const focusProducts = () => {
+    requestAnimationFrame(() => {
+      const section = document.getElementById("quote-step-products");
+      section?.scrollIntoView({ behavior: "smooth", block: "start" });
+      requestAnimationFrame(() => {
+        Array.from(document.querySelectorAll<HTMLButtonElement>('#quote-step-products button[aria-label="Item 1 product"]'))
+          .find((button) => button.getClientRects().length > 0)
+          ?.focus({ preventScroll: true });
+      });
+    });
+  };
+
+  useEffect(() => {
+    const normalizedPresetId = String(presetLeadId).trim();
+    if (normalizedPresetId && String(leadId).trim() === normalizedPresetId && lead) focusProducts();
+  }, [presetLeadId, leadId, lead]);
+
+  const selectDuplicateCustomer = (duplicate: DuplicateCustomer) => {
+    const existing = leads.find((item) => item.id === duplicate.id) ?? created.find((item) => item.id === duplicate.id);
+    if (!existing) {
+      const customer: Lead = {
+        id: duplicate.id,
+        name: duplicate.name,
+        company: "",
+        phone: nl.phone.replace(/\D/g, "").slice(-10),
+        area: nl.area,
+        source: nl.source,
+        status: duplicate.status as LeadStatus,
+        assignedTo: duplicate.owner === "Unassigned" ? null : duplicate.owner,
+        ownerId: undefined,
+        remarks: "",
+        createdOn: "",
+        address: "",
+        touchedBy: [],
+      };
+      setCreated((current) => [customer, ...current.filter((item) => item.id !== customer.id)]);
+    }
+    setLeadId(duplicate.id);
+    setDuplicateCustomer(null);
+    setAdding(false);
+    focusProducts();
+  };
+
   const saveNewLead = () => start(async () => {
     const res = await addLeadAction({ ...nl, remarks: "Added from Create Quotation" });
-    if (res.ok && res.data) { setCreated((c) => [res.data!, ...c]); setLeadId(res.data.id); setAdding(false); setNl({ name: "", company: "", phone: "", area: "", source: "Direct Call" }); }
-    else if (!res.ok) toast.error(res.error);
+    if (res.ok && res.data) {
+      setCreated((current) => [res.data!, ...current.filter((item) => item.id !== res.data!.id)]);
+      setLeadId(res.data.id);
+      setAdding(false);
+      setDuplicateCustomer(null);
+      setNl({ name: "", company: "", phone: "", area: "", source: "Direct Call" });
+      toast.success("Customer added and selected");
+      focusProducts();
+    } else if (!res.ok && res.duplicate) {
+      setDuplicateCustomer(res.duplicate);
+    } else if (!res.ok) {
+      toast.error(res.error);
+    }
   });
 
   const save = () => start(async () => {
@@ -64,8 +153,79 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     const selectedRows = rows.filter((row) => row.productId && byId.has(row.productId) &&
       validateQuoteLine(row.qty, row.discount, byId.get(row.productId)!.price) === null);
     const res = await createQuoteAction({ offerNo, leadId: lead.id, items: selectedRows });
-    if (res.ok) { toast.success("Quotation saved"); } else toast.error(res.error);
+    if (!res.ok) { toast.error(res.error); return; }
+    if (!res.data) { toast.error("Quotation was saved but could not be loaded."); return; }
+    const savedItems = selectedRows.flatMap((row) => {
+      const product = byId.get(row.productId);
+      return product ? [{
+        productId: product.id,
+        model: product.model,
+        description: product.description,
+        unit: product.unit,
+        qty: row.qty,
+        price: product.price,
+        discount: Math.min(product.price * row.qty, Math.max(0, row.discount)),
+      }] : [];
+    });
+    const saved = { ...res.data, items: savedItems };
+    setSavedQuotes((current) => [saved, ...current.filter((quote) => quote.id !== saved.id)]);
+    setPreview(false);
+    setSavedOpen(true);
+    toast.success("Quotation saved");
   });
+
+  const viewSavedQuote = async (quoteId: string) => {
+    if (loadingQuoteId) return;
+    setLoadingQuoteId(quoteId);
+    try {
+      const result = await getQuoteDetailAction(quoteId);
+      if (!result.ok || !result.data) {
+        toast.error(result.ok ? "Could not load quotation details." : result.error);
+        return;
+      }
+      setReadOnlyQuote(result.data);
+      setSavedOpen(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load quotation details.");
+    } finally {
+      setLoadingQuoteId(null);
+    }
+  };
+
+  const savedMatches = [...savedQuotes]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .filter((quote) => `${quote.offerNo} ${quote.customer}`.toLowerCase().includes(savedSearch.trim().toLowerCase()));
+
+  if (readOnlyQuote) {
+    const savedLead = myLeads.find((item) => item.id === readOnlyQuote.leadId) ?? {
+      id: readOnlyQuote.leadId,
+      name: readOnlyQuote.customer,
+      company: "",
+      phone: "",
+      area: "",
+      address: "",
+      source: "Direct Call" as LeadSource,
+      status: "Quotation Sent" as const,
+      assignedTo: readOnlyQuote.executive,
+      ownerId: readOnlyQuote.ownerId,
+      remarks: "",
+      createdOn: readOnlyQuote.date,
+      touchedBy: [],
+    };
+    return <Offer
+      lead={savedLead}
+      offerNo={readOnlyQuote.offerNo}
+      setOfferNo={() => undefined}
+      items={readOnlyQuote.items ?? []}
+      onBack={() => setReadOnlyQuote(null)}
+      onSave={() => undefined}
+      saving={false}
+      readOnly
+      customer={readOnlyQuote.customer}
+      offerDate={readOnlyQuote.date}
+      status={readOnlyQuote.status ?? "Draft"}
+    />;
+  }
 
   if (preview && lead) {
     return <Offer lead={lead} offerNo={offerNo} setOfferNo={setOfferNo} items={items} onBack={() => setPreview(false)} onSave={save} saving={pending} />;
@@ -80,6 +240,12 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
 
   return (
     <div className={`space-y-6 ${lead && productsValid ? "pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-bold">Create Quotation</h1>
+        <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={() => setSavedOpen(true)}>
+          <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
+        </Button>
+      </div>
       <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
         {["Customer", "Products", "Preview"].map((label, index) => {
           const completed = index === 0 ? !!lead : index === 1 ? productsValid : preview;
@@ -106,27 +272,30 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
             <input className={fieldClass} placeholder="Company" value={nl.company} onChange={(e) => setNl({ ...nl, company: e.target.value })} />
             <input className={fieldClass} placeholder="Mobile number *" inputMode="tel" value={nl.phone} onChange={(e) => setNl({ ...nl, phone: e.target.value })} />
             <input className={fieldClass} placeholder="Area" value={nl.area} onChange={(e) => setNl({ ...nl, area: e.target.value })} />
-            <select className={fieldClass} value={nl.source} onChange={(e) => setNl({ ...nl, source: e.target.value as LeadSource })}>
-              {LEAD_SOURCES.map((s) => <option key={s}>{s}</option>)}
-            </select>
+            <SelectField value={nl.source} onValueChange={(value) => setNl({ ...nl, source: value as LeadSource })} options={LEAD_SOURCES.map((source) => ({ value: source, label: source }))} />
+            {duplicateCustomer && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm sm:col-span-2">
+              <p><span className="font-semibold">{duplicateCustomer.name}</span> already exists. Owner: {duplicateCustomer.owner}.</p>
+              <Button type="button" variant="outline" className="mt-2" onClick={() => selectDuplicateCustomer(duplicateCustomer)}>Use this customer</Button>
+            </div>}
             <div className="flex gap-2">
-              <Button className="h-12 flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>Add customer</Button>
-              <Button variant="ghost" className="h-12" onClick={() => setAdding(false)}>Cancel</Button>
+              <Button className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>Add customer</Button>
+              <Button variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
             </div>
           </div>
         ) : (
           <>
+            {presetLeadError && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{presetLeadError}</div>}
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
                 <input className={`${fieldClass} pl-10`} placeholder="Search name, company, mobile, area" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
-              <Button variant="outline" className="h-12" onClick={() => setAdding(true)}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
+              <Button variant="outline" onClick={() => setAdding(true)}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
             </div>
             <ul className="divide-y rounded-lg border">
               {matches.map((l) => (
                 <li key={l.id}>
-                  <button className="w-full p-3 text-left hover:bg-secondary" onClick={() => setLeadId(l.id)}>
+                  <button className="w-full p-3 text-left hover:bg-secondary" onClick={() => setLeadId(String(l.id).trim())}>
                     <div className="font-medium">{l.company || l.name}</div>
                     <div className="text-sm text-muted-foreground">{l.name} · {l.phone} · {l.area}</div>
                   </button>
@@ -178,29 +347,73 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               <div className="text-right font-semibold"><span>Amount: </span>{r.discount > 0 && <span className="mr-2 text-sm text-muted-foreground">-{formatINR(r.discount)}</span>}<span>{formatINR(Math.max(0, (p?.price ?? 0) * r.qty - r.discount))}</span></div>
             </div>); })}
         </div>
-        <Button variant="outline" size="lg" className="h-12 w-full border-dashed sm:w-auto" disabled={rows.length >= 50 || !products.length}
+        <Button variant="outline" size="lg" className="w-full border-dashed sm:w-auto" disabled={rows.length >= 50 || !products.length}
           onClick={() => setRows([...rows, { productId: "", qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add item</Button>
         <Totals t={t} />
         <div className={`fixed inset-x-0 bottom-16 z-20 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-sm sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
           <div className="mx-auto flex max-w-md items-center gap-3">
             <div className="min-w-0 flex-1"><div className="text-xs text-muted-foreground">Grand total</div><div className="truncate font-bold">{formatINR(t.total)}</div></div>
-            <Button size="lg" className="h-12 shrink-0 px-5" disabled={!lead || !productsValid} onClick={() => setPreview(true)}>Preview</Button>
+            <Button size="lg" className="shrink-0" disabled={!lead || !productsValid} onClick={() => setPreview(true)}>Preview</Button>
           </div>
         </div>
         <Button size="lg" className="hidden h-14 w-full text-base sm:flex" disabled={!lead || !productsValid} onClick={() => setPreview(true)}><Eye className="h-5 w-5" /> Preview Offer</Button>
         {!lead && <p className="text-center text-sm text-muted-foreground">Choose a customer first.</p>}
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Saved quotations</h2>
-        {quotes.length === 0 && <p className="text-sm text-muted-foreground">No quotations yet.</p>}
-        {quotes.map((x) => (
-          <div key={x.id} className="rounded-xl bg-card p-4 shadow-sm">
-            <div className="flex justify-between gap-2"><span className="font-semibold">{x.customer}</span><span className="font-bold text-primary">{formatINR(x.total)}</span></div>
-            <div className="text-sm text-muted-foreground">Offer {x.offerNo} · {x.date} · {x.executive} · Status: {x.status ?? "Draft"}</div>
+      {savedOpen && <div className="fixed inset-0 z-50 bg-black/40" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) setSavedOpen(false);
+      }}>
+        <section
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="saved-quotes-title"
+          tabIndex={-1}
+          className="fixed inset-x-0 bottom-0 flex h-[92dvh] max-h-[92dvh] flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:inset-y-0 sm:right-0 sm:left-auto sm:h-full sm:max-h-full sm:w-full sm:max-w-lg sm:rounded-none"
+        >
+          <header className="flex min-h-16 shrink-0 items-center justify-between border-b border-border px-4">
+            <h2 id="saved-quotes-title" className="text-lg font-semibold">Saved quotations</h2>
+            <Button type="button" variant="ghost" size="icon" aria-label="Close saved quotations" onClick={() => setSavedOpen(false)}><X /></Button>
+          </header>
+          <div className="shrink-0 p-4">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
+              <input
+                ref={savedSearchRef}
+                className={`${fieldClass} pl-10`}
+                type="search"
+                placeholder="Search offer number or customer"
+                value={savedSearch}
+                onChange={(event) => setSavedSearch(event.target.value)}
+                aria-label="Search saved quotations"
+              />
+            </div>
           </div>
-        ))}
-      </section>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pt-0">
+            {!savedQuotes.length ? <p className="text-sm text-muted-foreground">No quotations yet.</p>
+              : !savedMatches.length ? <p className="text-sm text-muted-foreground">No matches</p>
+              : savedMatches.map((quote) => (
+                <article key={quote.id} className="rounded-lg border border-border bg-card p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold">{quote.customer}</div>
+                      <div className="mt-1 text-sm text-muted-foreground">Offer {quote.offerNo} · {quote.date}</div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="font-semibold">{formatINR(quote.total)}</div>
+                      <StatusBadge status={quote.status ?? "Draft"} />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex justify-end">
+                    <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null} onClick={() => void viewSavedQuote(quote.id)}>
+                      {loadingQuoteId === quote.id ? "Loading…" : "View"}
+                    </Button>
+                  </div>
+                </article>
+              ))}
+          </div>
+        </section>
+      </div>}
     </div>
   );
 }
@@ -313,20 +526,24 @@ function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; t
 
 type Item = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
 
-function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
+function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving, readOnly = false, customer: savedCustomer, offerDate, status = "Draft" }: {
   lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; onBack: () => void; onSave: () => void; saving: boolean;
+  readOnly?: boolean; customer?: string; offerDate?: string; status?: string;
 }) {
   const t = quoteTotals(items);
   const [subject, setSubject] = useState(() => offerSubject(items.map((item) => item.model)));
-  const customer = lead.company || lead.name;
+  const customer = savedCustomer ?? (lead.company || lead.name);
   const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date());
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
-  const date = `${datePart("day")}.${datePart("month")}.${datePart("year")}`;
+  const savedDateParts = offerDate?.split("-");
+  const date = savedDateParts?.length === 3
+    ? `${savedDateParts[2]}.${savedDateParts[1]}.${savedDateParts[0]?.slice(-2)}`
+    : `${datePart("day")}.${datePart("month")}.${datePart("year")}`;
   const hasDiscount = items.some((item) => (item.discount ?? 0) > 0);
   const splitParts = splitQuotationItems(items);
   const basicAmount = (item: Item) => item.qty * item.price;
   const lineAmount = (item: Item) => basicAmount(item) - (item.discount ?? 0);
-  const validTillDate = new Date();
+  const validTillDate = new Date(offerDate ? `${offerDate}T12:00:00Z` : Date.now());
   validTillDate.setDate(validTillDate.getDate() + 30);
   const validTill = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric",
@@ -352,58 +569,68 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
       <div className="mt-1 text-center text-[10px] font-semibold">{gst}</div>
     </section>
   );
-  const msg = [
-    `Dear Sir, please find our offer ${offerNo} dated ${date} for ${customer}.`,
-    `Sub: ${subject}`, "",
-    ...items.map((it, i) => `${i + 1}. ${it.model} - ${it.qty} ${it.unit} x ${formatINR(it.price)} = ${formatINR(it.qty * it.price)}`),
-    "", `Grand Total: ${formatINR(t.total)}`, "", `for ${COMPANY.name}, ${COMPANY.signatory}, ${COMPANY.phones}`,
-  ].join("\n");
-  const wa = `https://wa.me/91${lead.phone.replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(msg)}`;
+  const shortMessage = `Dear Sir, please find our offer ${offerNo} for ${customer}. - ${COMPANY.name}`;
+  const wa = `https://wa.me/91${lead.phone.replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(shortMessage)}`;
   const [downloading, setDownloading] = useState(false);
+  const buildPdfFile = async (): Promise<File> => {
+    const response = await fetch("/api/quotations/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        leadId: lead.id,
+        offerNo,
+        subject,
+        items: items.map((item) => ({ productId: item.productId, qty: item.qty, discount: item.discount ?? 0 })),
+      }),
+    });
+    if (!response.ok) throw new Error("Unable to create the PDF.");
+    const blob = new Blob([await response.blob()], { type: "application/pdf" });
+    return new File([blob], `offer-${offerNo.replace("/", "-")}.pdf`, { type: "application/pdf" });
+  };
+  const downloadFile = (file: File) => {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    link.rel = "noopener";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  };
   const downloadPdf = async () => {
     if (downloading) return;
     setDownloading(true);
     try {
-      const response = await fetch("/api/quotations/pdf", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          leadId: lead.id,
-          offerNo,
-          subject,
-          items: items.map((item) => ({ productId: item.productId, qty: item.qty, discount: item.discount ?? 0 })),
-        }),
-      });
-      if (!response.ok) throw new Error("Unable to create the PDF.");
-      const blob = new Blob([await response.blob()], { type: "application/pdf" });
-      const fileName = `offer-${offerNo.replace("/", "-")}.pdf`;
-      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
-        (navigator.userAgent.includes("Macintosh") && navigator.maxTouchPoints > 1);
-      if (isMobile) {
-        const file = new File([blob], fileName, { type: "application/pdf" });
-        if (navigator.canShare?.({ files: [file] })) {
-          try {
-            await navigator.share({ files: [file], title: fileName });
-            return;
-          } catch (error) {
-            if (error instanceof DOMException && error.name === "AbortError") return;
-          }
-        }
-      }
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = fileName;
-      link.rel = "noopener";
-      link.style.display = "none";
-      document.body.appendChild(link);
-      try {
-        link.click();
-      } finally {
-        link.remove();
-      }
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      downloadFile(await buildPdfFile());
     } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+  const shareOnWhatsApp = async () => {
+    if (downloading) return;
+    const whatsappWindow = window.open("about:blank", "_blank");
+    setDownloading(true);
+    try {
+      const file = await buildPdfFile();
+      if (navigator.canShare?.({ files: [file] })) {
+        whatsappWindow?.close();
+        await navigator.share({ files: [file], title: file.name, text: shortMessage });
+        return;
+      }
+      downloadFile(file);
+      if (whatsappWindow) whatsappWindow.location.href = wa;
+      else window.open(wa, "_blank", "noopener,noreferrer");
+      toast.info("PDF downloaded. Attach it in the WhatsApp chat (paperclip, Document).");
+    } catch (error) {
+      whatsappWindow?.close();
+      if (error instanceof DOMException && error.name === "AbortError") return;
       toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
     } finally {
       setDownloading(false);
@@ -413,10 +640,10 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
   return (
     <div className="space-y-4 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6">
       <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-        <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Edit</Button>
+        <Button variant="outline" className="w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> {readOnly ? "Back to Create Quotation" : "Edit"}</Button>
         <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf} disabled={downloading}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
-        <Button asChild variant="secondary" className="h-12 w-full sm:w-auto"><a className="flex items-center justify-center gap-2" href={wa} target="_blank" rel="noreferrer"><MessageCircle className="h-5 w-5" /> WhatsApp</a></Button>
-        <Button variant="outline" className="h-12 w-full sm:w-auto" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>
+        <Button variant="outline" className="h-12 w-full bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 sm:w-auto" onClick={shareOnWhatsApp} disabled={downloading}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
+        {!readOnly && <Button variant="outline" className="w-full sm:w-auto" onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Quotation"}</Button>}
       </div>
       <article className="print-area offer-document mx-auto max-w-full overflow-hidden rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
@@ -432,9 +659,9 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
           <div className="offer-no-break space-y-1 border-slate-300 sm:border-r sm:pr-4">
             <h1 id="offer-heading" tabIndex={-1} className="text-base font-bold outline-none">OFFER</h1>
             <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
-              <input aria-label="Offer reference" className="h-8 rounded border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />
+              {readOnly ? <span className="font-medium">{offerNo}</span> : <input aria-label="Offer reference" className="h-8 rounded-lg border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />}
             </label>
-            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Stage</span><span>Draft</span></div>
+            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Stage</span><span>{status}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Valid Till</span><span>{validTill}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Date</span><span>{date}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Sales Person</span><span>{COMPANY.signatory}</span></div>
@@ -458,12 +685,12 @@ function Offer({ lead, offerNo, setOfferNo, items, onBack, onSave, saving }: {
           <p>Dear Sir,</p>
           <div className="mt-2 flex items-baseline gap-1 font-semibold">
             <span>Sub:</span>
-            <input
-              aria-label="Quotation subject"
-              value={subject}
-              onChange={(event) => setSubject(event.target.value)}
-              className="min-w-0 flex-1 border-0 bg-transparent p-0 font-semibold outline-none print:border-0 print:outline-none"
-            />
+            {readOnly ? <span>{subject}</span> : <input
+                aria-label="Quotation subject"
+                value={subject}
+                onChange={(event) => setSubject(event.target.value)}
+                className="min-w-0 flex-1 border-0 bg-transparent p-0 font-semibold outline-none print:border-0 print:outline-none"
+              />}
           </div>
           <p className="mt-2 text-justify">{OFFER_TEXT.enquiry}</p>
         </section>

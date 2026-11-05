@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, quoteTotals, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
 import { CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
-import { mapLead, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
+import { mapLead, mapQuote, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
 import { matchPortalUserToZohoUser, missingPortalUsers, resolvePortalUserZohoId, STATIC_USERS, verifyStaticCredentials } from "@/lib/auth/users";
 import { productionDemoLoginAllowed } from "@/lib/auth/demo-policy";
@@ -176,6 +176,13 @@ describe("zoho mapping", () => {
     );
     expect(v).toMatchObject({ status: "Assigned", isVisit: true, customer: "Clinic", address: "Plot 45", area: "Kukatpally", time: "11:00", done: false });
     expect(mapTaskStatus("Completed")).toBe("Completed");
+  });
+  it("uses the quotation subject when offer number and linked customer are unavailable", () => {
+    const quote = mapQuote({
+      id: "Q1",
+      Subject: "Offer 239/26-27 - Example Customer",
+    }, new Map());
+    expect(quote).toMatchObject({ offerNo: "239/26-27", customer: "Example Customer" });
   });
   it("maps lead-linked Tasks through What_Id", () => {
     const lead = mapLead({ id: "L9", Last_Name: "Ramesh", Company: "Clinic One", Owner: { id: "u1", name: "Anil Kumar" } }, execs);
