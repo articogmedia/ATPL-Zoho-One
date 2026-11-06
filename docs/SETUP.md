@@ -72,9 +72,9 @@ browser. Production logs a warning and falls back to process-local caches if eit
 variable is missing. Keep the Upstash token server-only; it is also used by login
 rate limiting.
 
-`vercel.json` schedules `/api/warm` every 10 minutes to keep the shared token warm.
-Vercel creates the Cron Job from this configuration on deployment; confirm it is
-listed under the project's Cron Jobs after the first production deployment.
+The Hobby-compatible Vercel configuration does not schedule a Cron Job.
+`/api/warm` remains available and is also called by the login page to warm the
+shared Zoho token when a user opens the portal.
 
 For static portal login, set `ATPL_RESHMA_PASSWORD`, `ATPL_PAVAN_PASSWORD`, and
 `ATPL_SAIKIRAN_PASSWORD`. The static users in `src/lib/auth/users.ts` use the
