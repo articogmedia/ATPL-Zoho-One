@@ -45,7 +45,7 @@ describe("Zoho products catalogue", () => {
     const list = vi.fn(async (_module: string, fields: string[], _max?: number, _extra?: Record<string, string>) => {
       void _max;
       void _extra;
-      if (fields.includes("Description")) throw new MockZohoError("Invalid field", 400, "INVALID_DATA", "Description");
+      if (fields.includes("Usage_Unit")) throw new MockZohoError("Invalid field", 400, "INVALID_DATA", "Usage_Unit");
       if (fields.length > 2) throw new MockZohoError("Invalid field", 400, "INVALID_DATA", "Product_Code");
       return [
         { id: "p2", Product_Name: "Split AC", Unit_Price: 5000, Product_Active: true },
@@ -72,7 +72,7 @@ describe("Zoho products catalogue", () => {
 
     expect(products.map((product) => product.model)).toEqual(["Cassette AC", "Split AC"]);
     expect(list.mock.calls.map((call) => call[1])).toEqual([
-      ["Product_Name", "Product_Code", "Description", "Unit_Price", "Usage_Unit", "Product_Active"],
+      ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit"],
       ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],
       ["Product_Name", "Unit_Price"],
     ]);
@@ -85,6 +85,33 @@ describe("Zoho products catalogue", () => {
     await zohoRepository.listProducts();
     expect(list.mock.calls).toHaveLength(callsBeforeRefresh + 1);
     expect(list.mock.calls.at(-1)?.[1]).toEqual(["Product_Name", "Unit_Price"]);
+  });
+
+  it("does not try alternate product fields after a transport timeout", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status?: number, readonly code?: string) {
+        super(message);
+      }
+    }
+    const list = vi.fn(async () => {
+      throw new MockZohoError("Zoho timed out, please try again", undefined, "NETWORK_TIMEOUT");
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      zoho: vi.fn(async () => ({ data: [] })),
+      zohoList: list,
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.listProducts()).rejects.toMatchObject({ code: "NETWORK_TIMEOUT" });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list.mock.calls[0]).toEqual([
+      "Products",
+      ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit"],
+      1000,
+      { sort_by: "id", sort_order: "asc" },
+    ]);
   });
 });
 

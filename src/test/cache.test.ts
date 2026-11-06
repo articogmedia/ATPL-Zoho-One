@@ -38,4 +38,17 @@ describe("shared cache stale-while-revalidate", () => {
     await expect(cached("leads", 1_000, load)).resolves.toBe("refreshed");
     expect(loads).toBe(2);
   });
+
+  it("keeps product and quote stale data available when refreshes keep failing", async () => {
+    const { cached } = await import("@/lib/cache");
+    const load = vi.fn(async () => "cached catalogue");
+    await expect(cached("products", 1_000, load, { keepStale: true })).resolves.toBe("cached catalogue");
+    load.mockRejectedValue(new Error("network timeout"));
+    vi.advanceTimersByTime(3_600_001);
+
+    await expect(cached("products", 1_000, load, { keepStale: true })).resolves.toBe("cached catalogue");
+    await afterTasks.shift()?.();
+    await expect(cached("products", 1_000, load, { keepStale: true })).resolves.toBe("cached catalogue");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
 });

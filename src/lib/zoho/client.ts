@@ -405,10 +405,12 @@ export async function zoho<T = unknown>(
 
   const token = await accessToken(retried, rejectedToken);
   let res: Response;
+  const isLargeListGet = method === "GET" && /^\/(?:Products|Quotes|Leads)(?:\/search)?$/.test(path);
+  const requestTimeoutMs = isLargeListGet ? 25_000 : method === "GET" ? 8_000 : 20_000;
   try {
     g.__atplZohoRequestCount = (g.__atplZohoRequestCount ?? 0) + 1;
     res = await fetch(url, {
-      method, cache: "no-store", signal: AbortSignal.timeout(method === "GET" ? 8_000 : 20_000),
+      method, cache: "no-store", signal: AbortSignal.timeout(requestTimeoutMs),
       headers: {
         Authorization: `Zoho-oauthtoken ${token}`,
         ...(opts.body ? { "Content-Type": "application/json" } : {}),
@@ -418,8 +420,14 @@ export async function zoho<T = unknown>(
   } catch (error) {
     const reference = correlationReference ?? newErrorReference();
     const message = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error ? error.cause : undefined;
+    const causeCode = cause && typeof cause === "object" && "code" in cause
+      ? String((cause as { code?: unknown }).code ?? "")
+      : undefined;
+    const causeMessage = cause instanceof Error ? cause.message : "";
+    const transportReason = `${message} ${causeCode ?? ""} ${causeMessage}`;
     const zohoHosts = hosts();
-    const retryableNetworkError = /ECONNRESET|ETIMEDOUT|timeout|timed out|fetch failed/i.test(message);
+    const retryableNetworkError = /ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|timeout|timed out|fetch failed|aborted/i.test(transportReason);
     const canRetryRequest = networkRetryAttempt < 1 && retryableNetworkError;
     console.error("[zoho] request transport failed", {
       reference, method, path: requestPath, status: undefined,
@@ -427,7 +435,7 @@ export async function zoho<T = unknown>(
       apiHost: zohoHosts.api,
       environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
       errorName: error instanceof Error ? error.name : typeof error,
-      message, cause: error instanceof Error ? error.cause : undefined,
+      message, cause, causeCode,
       retrying: canRetryRequest,
       stack: error instanceof Error ? error.stack : undefined,
       payload: redactWritePayload(opts.body),
@@ -436,7 +444,7 @@ export async function zoho<T = unknown>(
       return zoho<T>(method, path, opts, retried, rateLimitAttempt, reference, networkRetryAttempt + 1, rejectedToken);
     }
 
-    const timedOut = /timeout|timed out|ETIMEDOUT|aborted/i.test(message);
+    const timedOut = /timeout|timed out|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|aborted/i.test(transportReason);
     throw new ZohoError(
       timedOut ? "Zoho timed out, please try again" : "Could not connect to the Zoho CRM API.",
       undefined, timedOut ? "NETWORK_TIMEOUT" : "NETWORK_ERROR", undefined, undefined, operation,

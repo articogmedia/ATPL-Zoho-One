@@ -37,6 +37,7 @@ const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products, and field metadata
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
+let productFieldSet: string[] | undefined;
 type QuoteFieldMetadata = {
   api_name?: string;
   field_label?: string;
@@ -441,7 +442,25 @@ async function quotePage(page: number) {
     });
     const quotes = (response?.data ?? []).map((record) => mapQuote(record, new Map(), undefined, schema.fieldNames));
     return { quotes, hasMore: response?.info?.more_records === true };
-  });
+  }, { keepStale: true });
+}
+
+function isProductFieldSetError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as {
+    status?: unknown; code?: unknown; field?: unknown; message?: unknown; details?: Record<string, unknown>;
+  };
+  if (candidate.status !== 400 || !["INVALID_DATA", "INVALID_MODULE"].includes(String(candidate.code ?? "").toUpperCase())) {
+    return false;
+  }
+  const hasFieldDetail = Boolean(
+    candidate.field
+    || candidate.details?.api_name
+    || candidate.details?.field
+    || candidate.details?.param_name,
+  );
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  return hasFieldDetail || /\bfields?\b|api_name/i.test(message);
 }
 
 export const zohoRepository: CrmRepository = {
@@ -895,15 +914,16 @@ export const zohoRepository: CrmRepository = {
   async listProducts() {
     return cached("products", LONG, async () => {
       const fieldAttempts = [
-        ["Product_Name", "Product_Code", "Description", "Unit_Price", "Usage_Unit", "Product_Active"],
+        ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit"],
         ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],
         ["Product_Name", "Unit_Price"],
       ];
-      const rememberedFields = await cached<string[] | null>("zoho:products-field-set", LONG, async () => null);
+      const rememberedFields = productFieldSet
+        ?? (await cached<string[] | null>("zoho:products-field-set", LONG, async () => null))
+        ?? undefined;
       const attempts = rememberedFields
         ? [rememberedFields, ...fieldAttempts.filter((fields) => fields.join(",") !== rememberedFields.join(","))]
         : fieldAttempts;
-      let lastError: unknown;
       for (const fields of attempts) {
         try {
           const raw = await zohoList<ZProduct & { Product_Active?: boolean }>("Products", fields, 1000, {
@@ -914,11 +934,12 @@ export const zohoRepository: CrmRepository = {
             .filter((product) => product.Product_Active !== false)
             .filter((product) => Boolean(product.Product_Name?.trim()))
             .map(mapProduct));
+          productFieldSet = fields;
           await setCachedValue("zoho:products-field-set", LONG, fields);
           if (products.length === 0) invalidate("products");
           return products;
         } catch (error) {
-          lastError = error;
+          if (!isProductFieldSetError(error)) throw error;
           const zohoError = error as Partial<ZohoError> | null;
           const status = zohoError?.status;
           const code = zohoError?.code;
@@ -932,14 +953,14 @@ export const zohoRepository: CrmRepository = {
           });
         }
       }
-      throw lastError;
-    });
+      throw new ZohoError("Zoho rejected all supported Products field sets.", 400, "INVALID_PRODUCT_FIELDS");
+    }, { keepStale: true });
   },
 
   async listQuotes() {
     return cached("quotes", SHORT, async () => {
       return (await quotePage(1)).quotes;
-    });
+    }, { keepStale: true });
   },
   async listQuotesPage(page) {
     return quotePage(Math.max(1, Math.floor(page)));

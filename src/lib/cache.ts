@@ -8,6 +8,7 @@ type CacheEntry = {
   expiresAt: number;
   staleUntil: number;
   ttlMs: number;
+  keepStale: boolean;
   load: () => Promise<unknown>;
   refresh?: Promise<unknown>;
 };
@@ -84,7 +85,7 @@ function parseCachedValue(value: unknown): unknown | undefined {
   }
 }
 
-async function writeRedisValue(key: string, value: unknown, ttlMs: number) {
+async function writeRedisValue(key: string, value: unknown, ttlMs: number, keepStale = false) {
   if (!redisConfig()) return;
   const keys = redisKeys(key);
   const serialized = JSON.stringify(value);
@@ -92,9 +93,10 @@ async function writeRedisValue(key: string, value: unknown, ttlMs: number) {
   const ttlSeconds = Math.max(1, Math.ceil(ttlMs / 1000));
   const staleSeconds = Math.ceil(STALE_TTL_MS / 1000);
   await redisCommand(["SET", keys.fresh, serialized, "EX", String(ttlSeconds)]);
-  await redisCommand(["SET", keys.stale, serialized, "EX", String(staleSeconds)]);
+  if (keepStale) await redisCommand(["SET", keys.stale, serialized]);
+  else await redisCommand(["SET", keys.stale, serialized, "EX", String(staleSeconds)]);
   await redisCommand(["SADD", keys.index, key]);
-  await redisCommand(["EXPIRE", keys.index, String(staleSeconds)]);
+  if (!keepStale) await redisCommand(["EXPIRE", keys.index, String(staleSeconds)]);
 }
 
 async function readRedisValues(key: string) {
@@ -114,13 +116,20 @@ function scheduleAfter(work: () => Promise<unknown>) {
 }
 
 /** JSON cache with shared Redis storage, a one-hour stale copy, and request de-duplication. */
-export async function cached<T>(key: string, ttlMs: number, load: () => Promise<T>): Promise<T> {
+export async function cached<T>(
+  key: string,
+  ttlMs: number,
+  load: () => Promise<T>,
+  options: { keepStale?: boolean } = {},
+): Promise<T> {
+  const keepStale = options.keepStale === true;
   const local = store.values.get(key);
   if (local) {
     local.load = load;
     local.ttlMs = ttlMs;
+    local.keepStale = keepStale;
     if (local.expiresAt <= Date.now()) {
-      if (local.staleUntil > Date.now()) {
+      if (local.keepStale || local.staleUntil > Date.now()) {
         stats.staleHits += 1;
         refreshInBackground(key, local);
         return local.value as T;
@@ -142,13 +151,13 @@ export async function cached<T>(key: string, ttlMs: number, load: () => Promise<
     const [remoteFresh, remoteStale] = await readRedisValues(key);
     if (remoteFresh !== undefined) {
       stats.hits += 1;
-      store.values.set(key, { value: remoteFresh, expiresAt: Date.now() + ttlMs, staleUntil: Date.now() + STALE_TTL_MS, ttlMs, load });
+      store.values.set(key, { value: remoteFresh, expiresAt: Date.now() + ttlMs, staleUntil: keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS, ttlMs, keepStale, load });
       return remoteFresh as T;
     }
     if (remoteStale !== undefined) {
       stats.staleHits += 1;
       const entry: CacheEntry = {
-        value: remoteStale, expiresAt: 0, staleUntil: Date.now() + STALE_TTL_MS, ttlMs, load,
+        value: remoteStale, expiresAt: 0, staleUntil: keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS, ttlMs, keepStale, load,
       };
       store.values.set(key, entry);
       refreshInBackground(key, entry);
@@ -158,10 +167,10 @@ export async function cached<T>(key: string, ttlMs: number, load: () => Promise<
     stats.misses += 1;
     const value = await load();
     const entry: CacheEntry = {
-      value, expiresAt: Date.now() + ttlMs, staleUntil: Date.now() + STALE_TTL_MS, ttlMs, load,
+      value, expiresAt: Date.now() + ttlMs, staleUntil: keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS, ttlMs, keepStale, load,
     };
     store.values.set(key, entry);
-    await writeRedisValue(key, value, ttlMs);
+    await writeRedisValue(key, value, ttlMs, keepStale);
     return value;
   })().finally(() => store.inflight.delete(key));
   store.inflight.set(key, task);
@@ -174,6 +183,7 @@ export async function setCachedValue<T>(key: string, ttlMs: number, value: T): P
     expiresAt: Date.now() + ttlMs,
     staleUntil: Date.now() + STALE_TTL_MS,
     ttlMs,
+    keepStale: false,
     load: async () => value,
   };
   store.values.set(key, entry);
@@ -187,10 +197,10 @@ function refreshInBackground(key: string, entry: CacheEntry) {
   scheduleAfter(async () => {
     try {
       const value = await entry.load();
-      await writeRedisValue(key, value, entry.ttlMs);
+      await writeRedisValue(key, value, entry.ttlMs, entry.keepStale);
       entry.value = value;
       entry.expiresAt = Date.now() + entry.ttlMs;
-      entry.staleUntil = Date.now() + STALE_TTL_MS;
+      entry.staleUntil = entry.keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS;
     } catch (error: unknown) {
       console.error("[cache] background refresh failed", {
         key,

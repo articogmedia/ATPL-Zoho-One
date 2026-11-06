@@ -75,6 +75,30 @@ describe("Zoho quotation creation", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it("does not probe alternate quote fields after a transport timeout", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status?: number, readonly code?: string) {
+        super(message);
+      }
+    }
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return { fields: quoteFields.fields };
+      if (path === "/Quotes") throw new MockZohoError("Zoho timed out", undefined, "NETWORK_TIMEOUT");
+      return {};
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: vi.fn(),
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.listQuotesPage(1)).rejects.toMatchObject({ code: "NETWORK_TIMEOUT" });
+    expect(zoho.mock.calls.filter((call) => call[1] === "/Quotes")).toHaveLength(1);
+  });
+
   it("uses Quoted_Items for the v6 field schema and reads saved Quoted_Items back", () => {
     expect(quoteLineItemsField(["Subject", "Quoted_Items", "Product_Details"])).toBe("Quoted_Items");
     expect(quoteLineItemsField(["Subject", "Product_Details"])).toBe("Product_Details");
