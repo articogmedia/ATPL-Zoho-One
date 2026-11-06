@@ -21,6 +21,12 @@ describe("friendly Zoho action errors", () => {
       .toBe("Lead source is not valid in CRM. (Ref: R2)");
     expect(friendlyZohoError(400, "MANDATORY_NOT_FOUND", "Missing field", "Company", "R3"))
       .toBe("Required field missing: Company (Ref: R3)");
+    expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R4"))
+      .toBe("Zoho permissions are insufficient. Reconnect with Leads create/read and field metadata read access. (Ref: R4)");
+    expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R5", "GET /settings/fields"))
+      .toBe("Zoho permission missing: ZohoCRM.settings.fields.READ (Ref: R5)");
+    expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R6", "POST /Leads"))
+      .toBe("Zoho permission missing: ZohoCRM.modules.leads.CREATE (Ref: R6)");
   });
 
   it("returns a short reference for unknown errors", () => {

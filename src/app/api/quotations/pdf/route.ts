@@ -14,16 +14,29 @@ import { quotationPresentation, splitQuotationItems, type QuotationPresentationI
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-const bodySchema = z.object({
-  leadId: z.string().trim().min(1),
-  offerNo: z.string().trim().regex(/^\d{1,4}\/\d{2}-\d{2}$/),
-  subject: z.string().trim().min(1).max(300),
+export const bodySchema = z.object({
+  leadId: z.string().trim().min(1, "Customer is missing."),
+  offerNo: z.string().trim().min(1, "Offer reference is missing.").regex(/^\d{1,4}\/\d{2}-\d{2}$/, "Offer reference must use the format NNN/YY-YY."),
+  subject: z.string().trim().min(1, "Quotation subject is missing.").max(300, "Quotation subject is too long."),
   items: z.array(z.object({
-    productId: z.string().trim().min(1),
-    qty: z.number().int().positive().max(10000),
+    productId: z.string().trim().min(1, "A product is missing."),
+    qty: z.number().int("Quantity must be a whole number.").positive("Quantity must be at least one.").max(10000, "Quantity is too large."),
     discount: z.number().nonnegative().max(100000000).optional(),
-  }).strict()).min(1).max(100),
+  }).strict()).min(1, "Add at least one product.").max(100, "A quotation cannot contain more than 100 products."),
 }).strict();
+
+function redactPayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactPayload);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      /^(mobile|phone)$/i.test(key) && item != null
+        ? `******${String(item).replace(/\D/g, "").slice(-2)}`
+        : redactPayload(item),
+    ]));
+  }
+  return value;
+}
 
 function wrap(font: PDFFont, text: string, size: number, maxWidth: number) {
   const words = text.replace(/\s+/g, " ").trim().split(" ");
@@ -45,14 +58,23 @@ export async function POST(request: NextRequest) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
 
+  let rawPayload: unknown;
   let parsed: z.infer<typeof bodySchema>;
   try {
-    parsed = bodySchema.parse(await request.json());
+    rawPayload = await request.json();
+    parsed = bodySchema.parse(rawPayload);
   } catch (error) {
     const message = error instanceof z.ZodError
       ? error.issues[0]?.message ?? "Please check the quotation details."
       : "Please provide valid quotation details.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    const reference = newErrorReference();
+    console.error("[api] quotation PDF request validation failed", {
+      reference,
+      issues: error instanceof z.ZodError ? error.issues.map(({ path, message: issueMessage }) => ({ path, message: issueMessage })) : undefined,
+      message: error instanceof Error ? error.message : String(error),
+      payload: redactPayload(rawPayload),
+    });
+    return NextResponse.json({ error: `${message} (Ref: ${reference})`, reference }, { status: 400 });
   }
 
   try {
@@ -113,18 +135,26 @@ export async function POST(request: NextRequest) {
   text(page, "STAGE", margin, y, 8, bold);
   text(page, "Draft", margin + 75, y, 9);
   y -= 18;
+  const billToCustomer = lead.company?.trim() || lead.name.trim() || "Customer details unavailable";
+  const billToContact = lead.name.trim() && lead.name.trim() !== billToCustomer ? lead.name.trim() : "";
+  const billToAddress = lead.address?.trim() || lead.area?.trim() || "";
+  const billToPhone = lead.phone.trim();
   text(page, "BILL TO", margin, y, 8, bold);
-  text(page, lead.company || lead.name, margin + 75, y, 8);
+  text(page, billToCustomer, margin + 75, y, 8);
   text(page, "SHIP TO", 320, y, 8, bold);
-  text(page, lead.company || lead.name, 375, y, 8);
+  text(page, billToCustomer, 375, y, 8);
   y -= 14;
   text(page, "Contact", margin, y, 7, bold);
-  text(page, lead.name, margin + 75, y, 7);
-  text(page, lead.phone, 375, y, 7);
+  text(page, billToContact || lead.name || billToCustomer, margin + 75, y, 7);
+  text(page, billToContact || lead.name || billToCustomer, 375, y, 7);
   y -= 14;
   text(page, "Address", margin, y, 7, bold);
-  text(page, lead.address || lead.area || "-", margin + 75, y, 7);
-  text(page, lead.address || lead.area || "-", 375, y, 7);
+  text(page, billToAddress || billToPhone || "-", margin + 75, y, 7);
+  text(page, billToAddress || billToPhone || "-", 375, y, 7);
+  y -= 12;
+  text(page, "Phone", margin, y, 7, bold);
+  text(page, billToPhone || "-", margin + 75, y, 7);
+  text(page, billToPhone || "-", 375, y, 7);
   y -= 22;
   text(page, "EQUIPMENT REQUIRED", margin, y, 9, bold);
   text(page, `Total Units: ${presentation.totalUnits}`, 430, y, 9, bold);
@@ -215,7 +245,7 @@ export async function POST(request: NextRequest) {
       operation: error instanceof ZohoError ? error.operation : undefined,
     });
     const message = error instanceof ZohoError
-      ? friendlyZohoError(error.status, error.code, error.message, error.field, reference)
+      ? friendlyZohoError(error.status, error.code, error.message, error.field, reference, error.operation)
       : `Unable to create the PDF. (Ref: ${reference})`;
     return NextResponse.json({ error: message, reference }, { status: 500 });
   }

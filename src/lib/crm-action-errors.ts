@@ -10,6 +10,7 @@ export function friendlyZohoError(
   message?: string,
   field?: string,
   reference = code || String(status || "CRM"),
+  operation?: string,
 ): string {
   const suffix = ` (Ref: ${reference})`;
   const responseMessage = message?.trim().toLowerCase() ?? "";
@@ -32,7 +33,29 @@ export function friendlyZohoError(
   if (code === "INVALID_TOKEN" || code === "INVALID_OAUTHTOKEN") {
     return `CRM authentication failed after retry. Check the Zoho refresh-token permissions.${suffix}`;
   }
+  if (code === "NETWORK_ERROR" || code === "TOKEN_REFRESH_NETWORK_ERROR") {
+    return `Could not connect to Zoho CRM. Please retry shortly.${suffix}`;
+  }
   if (code === "NO_PERMISSION" || code === "OAUTH_SCOPE_MISMATCH") {
+    const operationPath = operation?.toUpperCase() ?? "";
+    const requiredScope = operationPath.includes("/SETTINGS/FIELDS")
+      ? "ZohoCRM.settings.fields.READ"
+      : operationPath.includes("/SETTINGS/MODULES")
+        ? "ZohoCRM.settings.modules.READ"
+        : operationPath.startsWith("POST /LEADS")
+          ? "ZohoCRM.modules.leads.CREATE"
+          : operationPath.startsWith("GET /LEADS")
+            ? "ZohoCRM.modules.leads.READ"
+            : operationPath.startsWith("PUT /LEADS") || operationPath.startsWith("PATCH /LEADS")
+              ? "ZohoCRM.modules.leads.UPDATE"
+              : operationPath.startsWith("DELETE /LEADS")
+                ? "ZohoCRM.modules.leads.DELETE"
+                : operationPath.startsWith("POST /QUOTES")
+                  ? "ZohoCRM.modules.quotes.CREATE"
+                  : operationPath.startsWith("GET /QUOTES")
+                    ? "ZohoCRM.modules.quotes.READ"
+                : null;
+    if (requiredScope) return `Zoho permission missing: ${requiredScope}${suffix}`;
     return `Zoho permissions are insufficient. Reconnect with Leads create/read and field metadata read access.${suffix}`;
   }
   if (status === 429) return `Too many requests. Please wait a few seconds and try again.${suffix}`;

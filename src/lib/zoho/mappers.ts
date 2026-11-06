@@ -20,6 +20,12 @@ export type ZLead = {
 };
 export type ZProduct = { id: string; Product_Name: string; Product_Code?: string; Description?: string; Unit_Price?: number; Usage_Unit?: string };
 export type ZQuotedItem = {
+  product?: Ref | string;
+  quantity?: number | string;
+  list_price?: number | string;
+  total?: number | string;
+  total_after_discount?: number | string;
+  net_total?: number | string;
   Product_Name?: Ref | string;
   Quantity?: number | string;
   List_Price?: number | string;
@@ -28,7 +34,7 @@ export type ZQuotedItem = {
   Unit?: string;
   Usage_Unit?: string;
 };
-export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
+export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
 export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; [k: string]: unknown };
 export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
 export type ZEvent = { Event_Title?: string; Start_DateTime?: string; Created_Time?: string; Owner?: Ref; Description?: string };
@@ -167,8 +173,8 @@ export function mapQuote(
     total: z.Grand_Total ?? 0,
     date: day(z.Created_Time),
     status: String(z.Status ?? "Draft"),
-    items: z.Quoted_Items?.map((item) => {
-      const product = item.Product_Name;
+    items: (z.Product_Details ?? z.Quoted_Items)?.map((item) => {
+      const product = item.product ?? item.Product_Name;
       const reference = typeof product === "string" ? undefined : product;
       const catalogProduct = reference?.id ? productsById?.get(reference.id) : undefined;
       const number = (value: number | string | undefined) => Number(value ?? 0);
@@ -177,8 +183,8 @@ export function mapQuote(
         model: reference?.name ?? (typeof product === "string" ? product : catalogProduct?.model ?? ""),
         description: item.Description ?? catalogProduct?.description ?? "",
         unit: item.Usage_Unit ?? item.Unit ?? catalogProduct?.unit ?? "Nos",
-        price: number(item.List_Price),
-        qty: number(item.Quantity),
+        price: number(item.list_price ?? item.List_Price),
+        qty: number(item.quantity ?? item.Quantity),
         discount: number(item.Discount),
       };
     }),

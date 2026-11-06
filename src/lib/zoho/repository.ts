@@ -47,14 +47,37 @@ const leadSchema = async () => cached("zoho:lead-schema", LONG, async () => {
     }[];
   }>("GET", "/settings/fields", { query: { module: "Leads" } });
   const fields = response?.fields ?? [];
+  const fieldNames = new Set(fields.map((field) => field.api_name).filter((name): name is string => !!name));
   return {
     fields,
+    fieldNames,
     sourceValues: fields.find((field) => field.api_name === "Lead_Source")?.pick_list_values
       ?.map((item) => item.actual_value?.trim() || item.display_value?.trim() || "")
       .filter(Boolean) ?? [],
     areaField: fields.find((field) => field.api_name === "City")?.api_name
       ?? fields.find((field) => field.api_name === "Area" || field.field_label?.trim().toLowerCase() === "area")?.api_name
       ?? null,
+    remarksField: fieldNames.has("Description") ? "Description" : null,
+  };
+});
+const quoteSchema = async () => cached("zoho:quote-schema", LONG, async () => {
+  const response = await zoho<{
+    fields?: {
+      api_name?: string;
+      field_label?: string;
+      system_mandatory?: boolean;
+      required?: boolean;
+      is_mandatory?: boolean;
+    }[];
+  }>("GET", "/settings/fields", { query: { module: "Quotes" } });
+  const fields = response?.fields ?? [];
+  return {
+    fields,
+    fieldNames: new Set(fields.map((field) => field.api_name).filter((name): name is string => !!name)),
+    mandatoryFields: fields
+      .filter((field) => field.system_mandatory === true || field.required === true || field.is_mandatory === true)
+      .map((field) => field.api_name)
+      .filter((name): name is string => !!name),
   };
 });
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
@@ -261,6 +284,20 @@ export const zohoRepository: CrmRepository = {
       : assignTo ? await userById(assignTo) : null;
     const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
     const metadata = await leadSchema();
+    const requiredFields = ["Last_Name", "Company", "Mobile", "Lead_Source", "Lead_Status"];
+    const missingFields = requiredFields.filter((field) => !metadata.fieldNames.has(field));
+    if (missingFields.length) {
+      console.error("[zoho] required Leads fields missing from module metadata", {
+        operation: "GET /settings/fields?module=Leads",
+        missingFields,
+      });
+      throw new ZohoError(
+        `Required field missing: ${missingFields.join(", ")}`,
+        400, "MANDATORY_NOT_FOUND", missingFields[0], undefined,
+        "GET /settings/fields?module=Leads",
+        { missingFields },
+      );
+    }
     const leadSource = sourceValueForZoho(input.source, metadata.sourceValues);
     const mobile = normalizePhone(input.phone);
     if (!/^\d{10}$/.test(mobile)) {
@@ -272,9 +309,14 @@ export const zohoRepository: CrmRepository = {
       Mobile: mobile,
       Lead_Source: leadSource,
       Lead_Status: WRITE_LEAD_STATUS[status],
-      ...(input.remarks.trim() ? { Description: input.remarks.trim() } : {}),
+      ...(input.remarks.trim() && metadata.remarksField ? { [metadata.remarksField]: input.remarks.trim() } : {}),
       ...(owner ? { Owner: { id: owner.id } } : {}),
     };
+    if (input.remarks.trim() && !metadata.remarksField) {
+      console.warn("[zoho] remarks omitted because Description is not available in Leads metadata", {
+        requestedField: "Description",
+      });
+    }
     if (input.area.trim()) {
       if (metadata.areaField) record[metadata.areaField] = input.area.trim();
       else console.warn("[zoho] Area omitted because Leads has no City or Area field", { requestedField: "City/Area" });
@@ -633,7 +675,7 @@ export const zohoRepository: CrmRepository = {
 
   async getQuote(id) {
     const response = await zoho<{ data?: ZQuote[] }>("GET", `/Quotes/${encodeURIComponent(id)}`, {
-      query: { fields: [...QUOTE_FIELDS, "Quoted_Items"].join(",") },
+      query: { fields: [...QUOTE_FIELDS, "Product_Details"].join(",") },
     });
     const record = response?.data?.[0];
     if (!record) return null;
@@ -644,6 +686,7 @@ export const zohoRepository: CrmRepository = {
   async createQuote(input, actor, executive) {
     const [lead, products, owner] = await Promise.all([this.getLead(input.leadId), this.listProducts(), userByName(executive)]);
     if (!lead) throw new ZohoError("Lead not found", 404);
+    const schema = await quoteSchema();
     // Prices come from the Zoho catalogue, never from the browser.
     const lines = input.items.map((i) => {
       const p = products.find((x) => x.id === i.productId);
@@ -653,18 +696,74 @@ export const zohoRepository: CrmRepository = {
     });
     const totals = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price, discount: l.discount })));
     const customer = lead.company || lead.name;
-    const id = await zohoWrite("POST", "/Quotes", {
-      Subject: input.subject?.trim() || `Offer ${input.offerNo} - ${customer}`,
-      [FIELD.quote.offerNo]: input.offerNo,
-      [FIELD.quote.lead]: { id: lead.id },
+    const quoteRecord: Record<string, unknown> = {
+      Subject: `Offer ${input.offerNo} - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
-      Quoted_Items: lines.map((l) => ({
-        Product_Name: { id: l.p.id }, Quantity: l.qty, List_Price: l.p.price,
-        Discount: l.discount, Total: l.p.price * l.qty, Total_After_Discount: l.amount, Net_Total: l.amount,
+      Product_Details: lines.map((line) => ({
+        product: { id: line.p.id },
+        quantity: line.qty,
+        list_price: line.p.price,
+        Discount: line.discount,
+        total: line.p.price * line.qty,
+        total_after_discount: line.amount,
+        net_total: line.amount,
       })),
       Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
+    };
+    if (schema.fieldNames.has(FIELD.quote.offerNo)) quoteRecord[FIELD.quote.offerNo] = input.offerNo;
+    else console.warn("[zoho] quote offer number custom field is unavailable; retaining it in Subject", {
+      requestedField: FIELD.quote.offerNo,
     });
-    await addNote(lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`);
+    if (schema.fieldNames.has(FIELD.quote.lead)) quoteRecord[FIELD.quote.lead] = { id: lead.id };
+    else {
+      console.error("[zoho] quote lead lookup field is unavailable", {
+        requestedField: FIELD.quote.lead,
+        availableFields: [...schema.fieldNames],
+      });
+      throw new ZohoError(
+        `Required CRM field missing: ${FIELD.quote.lead}`,
+        400, "MANDATORY_NOT_FOUND", FIELD.quote.lead, undefined,
+        "GET /settings/fields?module=Quotes", { availableFields: [...schema.fieldNames] },
+      );
+    }
+    const payloadFields = new Set([
+      "Subject", "Owner", "Product_Details", "Sub_Total", "Discount", "Grand_Total",
+      ...(schema.fieldNames.has(FIELD.quote.offerNo) ? [FIELD.quote.offerNo] : []),
+      FIELD.quote.lead,
+    ]);
+    const missingMandatory = schema.mandatoryFields.filter((field) => !payloadFields.has(field));
+    if (missingMandatory.length) {
+      console.error("[zoho] quote payload is missing mandatory module fields", {
+        operation: "POST /Quotes",
+        mandatoryFields: schema.mandatoryFields,
+        missingMandatory,
+        payloadFields: [...payloadFields],
+      });
+      throw new ZohoError(
+        `Required CRM field missing: ${missingMandatory.join(", ")}`,
+        400, "MANDATORY_NOT_FOUND", missingMandatory[0], undefined,
+        "GET /settings/fields?module=Quotes", { missingMandatory, mandatoryFields: schema.mandatoryFields },
+      );
+    }
+    const id = await zohoWrite("POST", "/Quotes", {
+      ...quoteRecord,
+    });
+    try {
+      await addNote(lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`);
+    } catch (error) {
+      console.error("[zoho] quote was saved but its lead-history note failed", {
+        quoteId: id,
+        leadId: lead.id,
+        reference: error instanceof ZohoError ? error.reference : undefined,
+        status: error instanceof ZohoError ? error.status : undefined,
+        code: error instanceof ZohoError ? error.code : undefined,
+        message: error instanceof Error ? error.message : String(error),
+        field: error instanceof ZohoError ? error.field : undefined,
+        operation: error instanceof ZohoError ? error.operation : undefined,
+        details: error instanceof ZohoError ? error.details : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
     invalidate("quotes", "leads");
     return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total: totals.total, status: "Draft", date: new Date().toISOString().slice(0, 10) };
   },

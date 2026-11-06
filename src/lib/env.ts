@@ -27,6 +27,7 @@ const schema = z
     ZOHO_CLIENT_ID: z.string().optional(),
     ZOHO_CLIENT_SECRET: z.string().optional(),
     ZOHO_REFRESH_TOKEN: z.string().optional(),
+    BLOB_READ_WRITE_TOKEN: z.string().optional(),
     /** "Sign in with Zoho" uses its own Server-based client (separate from the data/self client above). */
     ZOHO_LOGIN_CLIENT_ID: z.string().optional(),
     ZOHO_LOGIN_CLIENT_SECRET: z.string().optional(),

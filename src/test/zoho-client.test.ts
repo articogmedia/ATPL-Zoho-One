@@ -21,8 +21,10 @@ beforeEach(async () => {
   vi.resetModules();
 });
 
+const leadRequiredFields = ["Last_Name", "Company", "Mobile", "Lead_Status"];
 const leadSourceSettings = {
   fields: [
+    ...leadRequiredFields.map((api_name) => ({ api_name })),
     { api_name: "City", field_label: "City" },
     {
       api_name: "Lead_Source",
@@ -513,6 +515,7 @@ describe("Zoho lead owner fallbacks", () => {
     it("falls back to the configured Other source and sends a valid City field and 10-digit mobile", async () => {
       const settings = {
         fields: [
+          ...leadRequiredFields.map((api_name) => ({ api_name })),
           { api_name: "City", field_label: "City" },
           { api_name: "Lead_Source", pick_list_values: [{ actual_value: "Other" }] },
         ],
@@ -627,5 +630,92 @@ describe("Zoho write error handling", () => {
         } finally {
           fetchMock.mockRestore();
         }
+    });
+
+    it("logs the full HTTP 401 response and masked payload before retrying", async () => {
+      configureZoho();
+      let apiRequests = 0;
+      let tokenRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          return new Response(JSON.stringify({ access_token: `access-${tokenRequests}`, expires_in: 3600 }), { status: 200 });
+        }
+        apiRequests += 1;
+        if (apiRequests === 1) {
+          return new Response(JSON.stringify({
+            code: "INVALID_TOKEN",
+            message: "Access token expired",
+            details: { param_name: "Authorization", expected_data_type: "oauth-token" },
+          }), { status: 401 });
+        }
+        return new Response(JSON.stringify({ data: [{ status: "success", code: "SUCCESS", details: { id: "lead-1" } }] }), { status: 200 });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const { zohoWrite } = await import("@/lib/zoho/client");
+        await expect(zohoWrite("POST", "/Leads", {
+          Last_Name: "Test lead", Mobile: "9876543210",
+        })).resolves.toBe("lead-1");
+        expect(apiRequests).toBe(2);
+        expect(tokenRequests).toBe(2);
+        expect(log).toHaveBeenCalledWith("[zoho] token rejected; retrying request once", expect.objectContaining({
+          status: 401,
+          code: "INVALID_TOKEN",
+          message: "Access token expired",
+          param_name: "Authorization",
+          expected_data_type: "oauth-token",
+          rawResponseBody: expect.objectContaining({ code: "INVALID_TOKEN" }),
+          payload: { data: [{ Last_Name: "Test lead", Mobile: "******10" }] },
+        }));
+      } finally {
+        fetchMock.mockRestore();
+        log.mockRestore();
+      }
+    });
+
+    it("surfaces Zoho OAuth scope errors without retrying an unchanged refresh token", async () => {
+      configureZoho();
+      let apiRequests = 0;
+      let tokenRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          return new Response(JSON.stringify({ access_token: "access-1", expires_in: 3600 }), { status: 200 });
+        }
+        apiRequests += 1;
+        return new Response(JSON.stringify({
+          status: "error",
+          code: "OAUTH_SCOPE_MISMATCH",
+          message: "invalid oauth scope to access this URL",
+          details: {},
+        }), { status: 401 });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const { zoho } = await import("@/lib/zoho/client");
+        await expect(zoho("GET", "/settings/fields", { query: { module: "Leads" } })).rejects.toMatchObject({
+          status: 401,
+          code: "OAUTH_SCOPE_MISMATCH",
+          operation: "GET /settings/fields?module=Leads",
+          details: expect.objectContaining({
+            rawResponseBody: expect.objectContaining({ code: "OAUTH_SCOPE_MISMATCH" }),
+          }),
+          reference: expect.stringMatching(/^[A-F0-9]{12}$/),
+        });
+        expect(apiRequests).toBe(1);
+        expect(tokenRequests).toBe(1);
+        expect(log).toHaveBeenCalledWith("[zoho] request rejected", expect.objectContaining({
+          status: 401,
+          code: "OAUTH_SCOPE_MISMATCH",
+          message: "invalid oauth scope to access this URL",
+          rawResponseBody: expect.objectContaining({ status: "error" }),
+        }));
+      } finally {
+        fetchMock.mockRestore();
+        log.mockRestore();
+      }
     });
 });

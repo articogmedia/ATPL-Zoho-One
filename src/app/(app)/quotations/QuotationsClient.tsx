@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Image from "next/image";
-import { ArrowLeft, Check, ChevronDown, Eye, History, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
@@ -26,14 +26,14 @@ type WizardState = {
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
 type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
-function QuotationStepper({ step, hasLead, productsValid, onStep }: {
-  step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; onStep: (step: 1 | 2 | 3) => void;
+function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep }: {
+  step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; hasSavedQuote: boolean; onStep: (step: 1 | 2 | 3) => void;
 }) {
   return <nav aria-label="Quotation progress" className="grid grid-cols-3 gap-2 rounded-xl border border-border bg-card p-2">
     {(["Customer", "Products", "Preview"] as const).map((label, index) => {
       const stepNumber = (index + 1) as 1 | 2 | 3;
       const completed = stepNumber < step || (stepNumber === 1 && hasLead) || (stepNumber === 2 && productsValid);
-      const disabled = stepNumber > step || (stepNumber === 2 && !hasLead) || (stepNumber === 3 && !productsValid);
+      const disabled = stepNumber > step || (stepNumber === 2 && !hasLead) || (stepNumber === 3 && !hasSavedQuote);
       const active = stepNumber === step;
       return <button type="button" key={label} disabled={disabled} onClick={() => onStep(stepNumber)} className={`flex min-h-11 items-center justify-center gap-1 rounded-lg px-2 py-2 text-center text-xs font-semibold transition-colors hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${active ? "bg-primary text-primary-foreground" : "bg-secondary text-secondary-foreground"}`} aria-current={active ? "step" : undefined}>
         {completed && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}<span>{stepNumber}. {label}</span>
@@ -57,7 +57,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
       quotationSent: false,
     };
   });
-  const { step, leadId, rows, offerNo } = wizard;
+  const { step, leadId, rows } = wizard;
   const setStep = (nextStep: 1 | 2 | 3) => setWizard((current) => ({ ...current, step: nextStep }));
   const setLeadId = (nextLeadId: string) => setWizard((current) => ({
     ...current, leadId: nextLeadId, subject: "", savedQuotation: undefined, quotationSent: false,
@@ -76,6 +76,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: "Direct Call" as LeadSource });
   const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
   const [pending, start] = useTransition();
+  const [quoteSaveError, setQuoteSaveError] = useState("");
   const [savedQuotes, setSavedQuotes] = useState(quotes);
   const [savedOpen, setSavedOpen] = useState(false);
   const [savedSearch, setSavedSearch] = useState("");
@@ -95,6 +96,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     return !!product && validateQuoteLine(row.qty, row.discount, product.price) === null;
   }).length;
   const productsValid = items.length > 0 && validLineCount === items.length;
+  const hasSavedQuote = !!wizard.savedQuotation?.id && !!wizard.savedQuotation.offerNo.trim();
   const upd = (i: number, p: Partial<Row>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
 
   useEffect(() => {
@@ -198,18 +200,34 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   });
 
   const previewOffer = () => start(async () => {
-    if (!lead) return;
-    if (!productsValid) return;
+    if (!lead) {
+      setQuoteSaveError("Select a customer before saving the quotation.");
+      return;
+    }
+    if (!productsValid) {
+      setQuoteSaveError("Add at least one valid product before previewing.");
+      return;
+    }
     if (wizard.savedQuotation) {
       setStep(3);
       return;
     }
+    setQuoteSaveError("");
     const subject = wizard.subject.trim() || offerSubject(items.map((item) => item.model));
     const selectedRows = rows.filter((row) => row.productId && byId.has(row.productId) &&
       validateQuoteLine(row.qty, row.discount, byId.get(row.productId)!.price) === null);
-    const res = await createQuoteAction({ offerNo, leadId: lead.id, subject, items: selectedRows });
-    if (!res.ok) { toast.error(res.error); return; }
-    if (!res.data) { toast.error("Quotation was saved but could not be loaded."); return; }
+    const res = await createQuoteAction({ leadId: lead.id, subject, items: selectedRows });
+    if (!res.ok) {
+      setQuoteSaveError(res.error);
+      toast.error(res.error);
+      return;
+    }
+    if (!res.data) {
+      const message = "Quotation save returned no saved record. Please retry.";
+      setQuoteSaveError(message);
+      toast.error(message);
+      return;
+    }
     const savedItems = selectedRows.flatMap((row) => {
       const product = byId.get(row.productId);
       return product ? [{
@@ -224,7 +242,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     });
     const saved = { ...res.data, items: savedItems };
     setSavedQuotes((current) => [saved, ...current.filter((quote) => quote.id !== saved.id)]);
-    setWizard((current) => ({ ...current, subject, step: 3, savedQuotation: saved, quotationSent: false }));
+    setWizard((current) => ({ ...current, offerNo: saved.offerNo, subject, step: 3, savedQuotation: saved, quotationSent: false }));
     toast.success("Quotation saved as Draft");
   });
 
@@ -291,10 +309,10 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     />;
   }
 
-  if (step === 3 && lead) return <div className="space-y-6">
+  if (step === 3 && wizard.savedQuotation && lead) return <div className="space-y-6">
     <h1 className="text-2xl font-bold">Create Quotation</h1>
-    <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} onStep={setStep} />
-    <Offer lead={lead} offerNo={offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} />
+    <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
+    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} />
   </div>;
 
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
@@ -307,7 +325,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
           <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
         </Button>}
       </div>
-      <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} onStep={setStep} />
+      <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
       {step === 1 && <section id="quote-step-customer" className="scroll-mt-20 space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 1 · Choose customer</h2>
         {adding ? (
@@ -361,6 +379,10 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
 
       {step === 2 && <section id="quote-step-products" className="scroll-mt-20 space-y-4 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 2 · Products</h2>
+        {quoteSaveError && <div role="alert" className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+          <span>{quoteSaveError}</span>
+          <Button type="button" variant="outline" className="shrink-0" disabled={pending || !productsValid} onClick={previewOffer}>Retry save</Button>
+        </div>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="hidden overflow-x-auto lg:block">
           <table className="w-full text-sm">
@@ -624,9 +646,20 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     </section>
   );
   const shortMessage = `Offer ${offerNo} for ${customer}\nGrand total: ${formatINR(t.total)}\n${COMPANY.name}`;
-  const wa = `https://wa.me/91${lead.phone.replace(/\D/g, "").slice(-10)}?text=${encodeURIComponent(shortMessage)}`;
+  const phoneDigits = lead.phone.replace(/\D/g, "");
+  const waPhone = phoneDigits.startsWith("91") && phoneDigits.length === 12
+    ? phoneDigits.slice(2)
+    : phoneDigits.startsWith("0") && phoneDigits.length === 11
+      ? phoneDigits.slice(1)
+      : phoneDigits.slice(-10);
+  const canCreatePdf = !!offerNo.trim() && !!customer.trim() && !!lead.id.trim() && items.length > 0;
   const [downloading, setDownloading] = useState(false);
+  const [shareUrl, setShareUrl] = useState("");
   const buildPdfFile = async (): Promise<File> => {
+    if (!offerNo.trim()) throw new Error("Offer reference is missing.");
+    if (!customer.trim()) throw new Error("Customer name is missing.");
+    if (!lead.id.trim()) throw new Error("Customer record is missing.");
+    if (!items.length || items.some((item) => !item.productId)) throw new Error("Add at least one valid product.");
     const response = await fetch("/api/quotations/pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -651,6 +684,27 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     const blob = new Blob([await response.blob()], { type: "application/pdf" });
     return new File([blob], `offer-${offerNo.replace("/", "-")}.pdf`, { type: "application/pdf" });
   };
+  const prepareShareUrl = async () => {
+    if (!offerNo.trim()) throw new Error("Offer reference is missing.");
+    if (!customer.trim()) throw new Error("Customer name is missing.");
+    if (!lead.id.trim()) throw new Error("Customer record is missing.");
+    const response = await fetch("/api/quotations/share", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        leadId: lead.id,
+        offerNo,
+        subject,
+        items: items.map((item) => ({ productId: item.productId, qty: item.qty, discount: item.discount ?? 0 })),
+      }),
+    });
+    const result = await response.json().catch(() => null) as { url?: string; error?: string } | null;
+    if (!response.ok || !result?.url) {
+      throw new Error(result?.error || `Could not prepare a shareable PDF (HTTP ${response.status}).`);
+    }
+    setShareUrl(result.url);
+    return result.url;
+  };
   const downloadFile = (file: File) => {
     const url = URL.createObjectURL(file);
     const link = document.createElement("a");
@@ -667,11 +721,10 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
   const downloadPdf = async () => {
-    if (downloading) return;
+    if (downloading || !canCreatePdf) return;
     setDownloading(true);
     try {
       downloadFile(await buildPdfFile());
-      await onMarkSent();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
     } finally {
@@ -679,39 +732,59 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     }
   };
   const shareOnWhatsApp = async () => {
-    if (downloading) return;
+    if (downloading || !canCreatePdf) return;
+    if (!/^\d{10}$/.test(waPhone)) {
+      toast.error("Customer mobile number must contain 10 digits for WhatsApp.");
+      return;
+    }
     const whatsappWindow = window.open("about:blank", "_blank");
     setDownloading(true);
     try {
-      const file = await buildPdfFile();
-      if (navigator.canShare?.({ files: [file] })) {
-        let shared = false;
-        try {
-          await navigator.share({ files: [file], title: file.name, text: shortMessage });
-          shared = true;
-        } catch (error) {
-          if (error instanceof DOMException && error.name === "AbortError") {
+      const publicUrl = await prepareShareUrl();
+      const message = `${shortMessage}\nPDF: ${publicUrl}`;
+      if (navigator.share && navigator.canShare) {
+        const pdfResponse = await fetch(publicUrl);
+        if (!pdfResponse.ok) throw new Error(`Could not download the prepared PDF (HTTP ${pdfResponse.status}).`);
+        const file = new File([await pdfResponse.blob()], `offer-${offerNo.replace("/", "-")}.pdf`, { type: "application/pdf" });
+        if (navigator.canShare?.({ files: [file] })) {
+          try {
+            await navigator.share({ files: [file], title: file.name, text: shortMessage });
             whatsappWindow?.close();
+            await onMarkSent();
             return;
+          } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") {
+              whatsappWindow?.close();
+              return;
+            }
+            console.warn("[quotations] native file share failed; opening WhatsApp with the PDF link", error);
           }
-          console.warn("[quotations] file sharing unavailable; falling back to WhatsApp summary", error);
-        }
-        if (shared) {
-          whatsappWindow?.close();
-          await onMarkSent();
-          return;
         }
       }
-      downloadFile(file);
-      if (whatsappWindow) whatsappWindow.location.href = wa;
-      else window.open(wa, "_blank", "noopener,noreferrer");
+      const wa = `https://wa.me/91${waPhone}?text=${encodeURIComponent(message)}`;
+      if (whatsappWindow && !whatsappWindow.closed) {
+        whatsappWindow.opener = null;
+        whatsappWindow.location.href = wa;
+      } else {
+        const opened = window.open(wa, "_blank", "noopener,noreferrer");
+        if (!opened) throw new Error("WhatsApp could not be opened. Copy the PDF link and share it manually.");
+      }
       await onMarkSent();
-      toast.info("PDF downloaded. Attach it in WhatsApp; the offer summary is prefilled.");
+      toast.success("Quotation PDF link is ready to share in WhatsApp.");
     } catch (error) {
       whatsappWindow?.close();
-      toast.error(error instanceof Error ? error.message : "Unable to create the PDF.");
+      toast.error(error instanceof Error ? error.message : "Could not share the quotation PDF.");
     } finally {
       setDownloading(false);
+    }
+  };
+  const copyShareLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success("PDF link copied");
+    } catch {
+      toast.error("Could not copy the PDF link. Please copy it from the address bar.");
     }
   };
 
@@ -719,8 +792,9 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     <div className="space-y-4 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6">
       <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" className="w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> {readOnly ? "Back to Create Quotation" : "Back to Products"}</Button>
-        <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf} disabled={downloading}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
-        <Button variant="outline" className="h-12 w-full bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 sm:w-auto" onClick={shareOnWhatsApp} disabled={downloading}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
+        <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf} disabled={downloading || !canCreatePdf}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
+        <Button variant="outline" className="h-12 w-full bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 sm:w-auto" onClick={shareOnWhatsApp} disabled={downloading || !canCreatePdf}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
+        {shareUrl && <Button type="button" variant="outline" className="h-12 w-full sm:w-auto" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
       </div>
       <article className="print-area offer-document mx-auto max-w-full overflow-hidden rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
@@ -736,7 +810,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           <div className="offer-no-break space-y-1 border-slate-300 sm:border-r sm:pr-4">
             <h1 id="offer-heading" tabIndex={-1} className="text-base font-bold outline-none">OFFER</h1>
             <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
-              {readOnly || !editableOfferNo ? <span className="font-medium">{offerNo}</span> : <input aria-label="Offer reference" className="h-8 rounded-lg border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />}
+              {readOnly || !editableOfferNo ? <span className="font-medium">{offerNo.trim() || "Offer reference unavailable"}</span> : <input aria-label="Offer reference" className="h-8 rounded-lg border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />}
             </label>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Stage</span><span>{status}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Valid Till</span><span>{validTill}</span></div>
@@ -747,13 +821,17 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           <div className="grid grid-cols-2 gap-3">
             <div className="offer-no-break">
               <div className="font-bold">Bill To</div>
-              <div className="mt-1">{lead.company || lead.name}</div>
-              <div>{lead.address || lead.area || ""}</div>
+              <div className="mt-1">{lead.company.trim() || lead.name.trim() || "Customer details unavailable"}</div>
+              {lead.company.trim() && <div>{lead.name.trim()}</div>}
+              <div>{lead.address.trim() || lead.area.trim() || lead.phone.trim()}</div>
+              {lead.address.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
             </div>
             <div className="offer-no-break">
               <div className="font-bold">Ship To</div>
-              <div className="mt-1">{lead.company || lead.name}</div>
-              <div>{lead.address || lead.area || ""}</div>
+              <div className="mt-1">{lead.company.trim() || lead.name.trim() || "Customer details unavailable"}</div>
+              {lead.company.trim() && <div>{lead.name.trim()}</div>}
+              <div>{lead.address.trim() || lead.area.trim() || lead.phone.trim()}</div>
+              {lead.address.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
             </div>
           </div>
         </div>

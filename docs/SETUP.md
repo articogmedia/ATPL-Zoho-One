@@ -26,7 +26,7 @@ authorization errors, a separate Self Client may be needed for the sandbox.
 
 1. In the API Console add a **Self Client**. Put its Client ID / Secret in `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET`.
 2. Open its **Generate Code** tab. Scope (comma-separated):
-   `ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.calls.ALL,ZohoCRM.modules.events.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.modules.custom.ALL,ZohoCRM.users.READ,ZohoCRM.org.READ,ZohoCRM.settings.fields.READ,ZohoCRM.settings.modules.READ`
+   `ZohoCRM.modules.ALL,ZohoCRM.settings.ALL,ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.calls.ALL,ZohoCRM.modules.events.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.modules.custom.ALL,ZohoCRM.users.READ,ZohoCRM.org.READ,ZohoCRM.settings.fields.READ,ZohoCRM.settings.modules.READ`
    Time duration 10 minutes → Generate → copy the code.
 3. Exchange it before it expires:
    ```bash
@@ -34,6 +34,21 @@ authorization errors, a separate Self Client may be needed for the sandbox.
      -d grant_type=authorization_code -d client_id=<SELF_CLIENT_ID> -d client_secret=<SELF_CLIENT_SECRET> -d code=<CODE>
    ```
 4. Save the returned `refresh_token` as `ZOHO_REFRESH_TOKEN`. Treat it like a password.
+   Refresh tokens keep the scopes granted when they were created. Lead create
+   requires `ZohoCRM.modules.leads.CREATE` (included in
+   `ZohoCRM.modules.ALL` or `ZohoCRM.modules.leads.ALL`), quote creation requires
+   `ZohoCRM.modules.quotes.CREATE`, and the create flow reads module metadata
+   using `ZohoCRM.settings.ALL` or the narrower `ZohoCRM.settings.fields.READ`.
+   If CRM reports `OAUTH_SCOPE_MISMATCH`, generate a new authorization code with
+   these scopes and replace the saved refresh token; refreshing an old token
+   will not add permissions.
+
+### Public quotation PDF sharing
+
+Create a Vercel Blob store in the project and add its read/write token as
+`BLOB_READ_WRITE_TOKEN` in Vercel and local `.env.local`. WhatsApp sharing uploads
+the generated PDF under a random, unguessable filename and shares the public URL.
+Keep this token server-side; it is never sent to the browser.
 
 ### Environment variables
 

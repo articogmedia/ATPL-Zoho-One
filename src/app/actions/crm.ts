@@ -38,6 +38,7 @@ function reportActionFailure(action: string, error: unknown, fallback: string): 
   console.error(`[action] ${action} failed`, {
     reference,
     message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
     zohoStatus: zohoFailure?.status,
     zohoCode: zohoFailure?.code,
     zohoField: zohoFailure?.field,
@@ -45,8 +46,8 @@ function reportActionFailure(action: string, error: unknown, fallback: string): 
     zohoOperation: zohoFailure?.operation,
   });
   return zohoFailure
-    ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference)
-    : `${fallback} Reason: ${error instanceof Error ? "unexpected server error" : "unknown server error"}. (Ref: ${reference})`;
+    ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference, zohoFailure.operation)
+    : `${fallback} The request failed before a CRM response was available. Please contact support. (Ref: ${reference})`;
 }
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
@@ -303,7 +304,6 @@ export async function getLeadTimelineAction(leadId: string): Promise<ActionResul
 // ---------- Quotations ----------
 
 const quoteSchema = z.object({
-  offerNo: text(30).min(1),
   leadId: id,
   subject: text(300).optional(),
   items: z.array(z.object({ productId: id, qty: z.number().int().min(1).max(10_000), discount: z.number().min(0).default(0) })).min(1).max(50),
@@ -315,7 +315,10 @@ export async function createQuoteAction(input: unknown) {
     const q = quoteSchema.parse(input);
     const lead = await ownLeadOrThrow(user, q.leadId);
     const executive = lead.assignedTo ?? user.name;
-    const quote = await crm().createQuote(q, user, executive);
+    const repository = crm();
+    const existingQuotes = await repository.listQuotes();
+    const offerNo = nextOfferNo(existingQuotes.map((quote) => quote.offerNo), todayIST());
+    const quote = await repository.createQuote({ ...q, offerNo }, user, executive);
     invalidate("quotes", "leads");
     return quote;
   });

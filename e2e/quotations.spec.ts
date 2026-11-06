@@ -4,9 +4,20 @@ import { readFile } from "node:fs/promises";
 for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 }]) {
   test(`product picker and preview work at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "canShare", { configurable: true, value: () => false });
-    });
+    await page.addInitScript((nativeFileShare) => {
+      Object.defineProperty(navigator, "canShare", {
+        configurable: true,
+        value: (data: ShareData) => nativeFileShare && !!data.files?.length,
+      });
+      if (nativeFileShare) {
+        Object.defineProperty(navigator, "share", {
+          configurable: true,
+          value: async (data: ShareData) => {
+            Object.defineProperty(window, "__atplSharedFileCount", { configurable: true, value: data.files?.length ?? 0 });
+          },
+        });
+      }
+    }, viewport.width < 640);
     await page.goto("/login");
     await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
     await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
@@ -46,6 +57,10 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await expect(offerHeading).toBeVisible();
     await expect(page.locator("#quote-step-products")).toHaveCount(0);
     await expect(page.getByText("Draft", { exact: true })).toBeVisible();
+    const offer = page.locator("article.offer-document");
+    await expect(offer.getByText(/^\d+\/\d{2}-\d{2}$/)).toBeVisible();
+    await expect(offer.getByText("Bill To")).toBeVisible();
+    await expect(offer.getByText("Ship To")).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
     await expect(offerHeading).toBeInViewport();
 
@@ -65,22 +80,30 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     expect(pdfBytes.length).toBeGreaterThan(0);
     expect(pdfBytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
 
+    await page.route("**/api/quotations/share", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ url: "https://public.blob.vercel-storage.com/quotes/test-unpredictable.pdf" }),
+    }));
     await page.context().route("https://wa.me/**", (route) => route.fulfill({ status: 200, body: "ok" }));
-    const sharePdfResponsePromise = page.waitForResponse((response) =>
-      response.url().includes("/api/quotations/pdf") && response.request().method() === "POST",
-    );
-    const whatsappDownloadPromise = page.waitForEvent("download");
-    const whatsappPopupPromise = page.waitForEvent("popup");
+    if (viewport.width < 640) {
+      await page.route("https://public.blob.vercel-storage.com/**", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/pdf",
+        body: "%PDF-1.4\nshare fixture",
+      }));
+    }
+    const whatsappPopupPromise = viewport.width >= 640 ? page.waitForEvent("popup") : undefined;
     await page.getByRole("button", { name: "WhatsApp" }).click();
-    const sharePdfResponse = await sharePdfResponsePromise;
-    expect(sharePdfResponse.ok()).toBe(true);
-    expect(sharePdfResponse.headers()["content-type"]).toContain("application/pdf");
-    const whatsappPopup = await whatsappPopupPromise;
-    await expect.poll(() => whatsappPopup.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
-    const whatsappDownload = await whatsappDownloadPromise;
-    const whatsappPdfPath = await whatsappDownload.path();
-    if (!whatsappPdfPath) throw new Error("The PDF for WhatsApp sharing was not saved.");
-    expect((await readFile(whatsappPdfPath)).length).toBeGreaterThan(0);
+    if (viewport.width < 640) {
+      await expect.poll(() => page.evaluate(() =>
+        (window as typeof window & { __atplSharedFileCount?: number }).__atplSharedFileCount,
+      )).toBe(1);
+    } else {
+      const whatsappPopup = await whatsappPopupPromise!;
+      await expect.poll(() => whatsappPopup.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
+      expect(decodeURIComponent(whatsappPopup.url())).toContain("https://public.blob.vercel-storage.com/quotes/test-unpredictable.pdf");
+    }
   });
 }
 
