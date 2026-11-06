@@ -9,10 +9,10 @@ import { SelectField } from "@/components/ui/select-field";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
-import { addLeadAction, createQuoteAction, getQuoteDetailAction, markQuotationSentAction } from "@/app/actions/crm";
+import { addLeadAction, createQuoteAction, getLeadSourcesAction, getQuoteDetailAction, markQuotationSentAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { splitQuotationItems } from "@/lib/quotation-presentation";
-import { LEAD_SOURCES, formatINR, quoteTotals, quotationCustomers, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
+import { formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
 type WizardState = {
@@ -25,7 +25,9 @@ type WizardState = {
   quotationSent: boolean;
 };
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
-type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; quotesHasMore: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+type QuotationCustomer = Pick<Lead, "id" | "name" | "company" | "phone" | "area" | "source" | "status" | "assignedTo">
+  & Partial<Pick<Lead, "assignedToId" | "ownerId" | "remarks" | "createdOn" | "address" | "touchedBy" | "followUp" | "followUpTime">>;
+type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; quotes: Quotation[]; quotesHasMore: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
 function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep }: {
   step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; hasSavedQuote: boolean; onStep: (step: 1 | 2 | 3) => void;
@@ -43,15 +45,22 @@ function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep 
   </nav>;
 }
 
-export function QuotationsClient({ leads, products, quotes, quotesHasMore, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
-  const [created, setCreated] = useState<Lead[]>([]);
+export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products, quotes, quotesHasMore, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+  const [leadSources, setLeadSources] = useState(initialLeadSources);
+  const [leadSourcesUnavailable, setLeadSourcesUnavailable] = useState(initialLeadSourcesUnavailable);
+  const [retryingLeadSources, setRetryingLeadSources] = useState(false);
+  const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: initialLeadSources[0] ?? "Direct Call" as LeadSource });
+  const [created, setCreated] = useState<QuotationCustomer[]>([]);
   const myLeads = useMemo(() => [...created.filter((c) => !leads.some((l) => l.id === c.id)), ...leads], [created, leads]);
-  const [searchedLeads, setSearchedLeads] = useState<Lead[]>([]);
+  const [loadedMoreLeads, setLoadedMoreLeads] = useState<QuotationCustomer[]>([]);
+  const [searchedLeads, setSearchedLeads] = useState<QuotationCustomer[]>([]);
   const [q, setQ] = useState("");
   const [customerSearchPending, setCustomerSearchPending] = useState(false);
   const [customerSearchError, setCustomerSearchError] = useState("");
   const [customerSearchPage, setCustomerSearchPage] = useState(1);
   const [customerSearchHasMore, setCustomerSearchHasMore] = useState(false);
+  const [customerListPage, setCustomerListPage] = useState(1);
+  const [customerListHasMore, setCustomerListHasMore] = useState(initialCustomersHasMore);
   const [loadingMoreCustomers, setLoadingMoreCustomers] = useState(false);
   const [wizard, setWizard] = useState<WizardState>(() => {
     const preset = String(presetLeadId).trim();
@@ -65,6 +74,16 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
     };
   });
   const { step, leadId, rows } = wizard;
+  const localCustomers = useMemo(() => [...myLeads, ...loadedMoreLeads].filter((customer, index, list) =>
+    list.findIndex((candidate) => candidate.id === customer.id) === index,
+  ), [myLeads, loadedMoreLeads]);
+  const localMatches = useMemo(() => {
+    const search = q.trim().toLowerCase();
+    return localCustomers.filter((customer) =>
+      !search || [customer.name, customer.company, customer.phone, customer.area]
+        .some((value) => value.toLowerCase().includes(search)),
+    );
+  }, [localCustomers, q]);
   const setStep = (nextStep: 1 | 2 | 3) => setWizard((current) => ({ ...current, step: nextStep }));
   const setLeadId = (nextLeadId: string) => setWizard((current) => ({
     ...current, leadId: nextLeadId, subject: "", savedQuotation: undefined, quotationSent: false,
@@ -79,8 +98,32 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
   const setOfferNo = (nextOfferNo: string) => setWizard((current) => ({
     ...current, offerNo: nextOfferNo, savedQuotation: undefined, quotationSent: false,
   }));
+  const retryLeadSources = async () => {
+    if (retryingLeadSources) return;
+    setRetryingLeadSources(true);
+    try {
+      const result = await getLeadSourcesAction();
+      if (!result.ok || !result.data?.length) {
+        setLeadSourcesUnavailable(true);
+        toast.error(result.ok ? "No Lead Source values are configured in Zoho." : result.error);
+        return;
+      }
+      setLeadSources(result.data);
+      setLeadSourcesUnavailable(false);
+      const firstSource = result.data[0];
+      if (firstSource) setNl((current) => ({ ...current, source: firstSource }));
+      toast.success("Lead sources loaded");
+    } finally {
+      setRetryingLeadSources(false);
+    }
+  };
+  useEffect(() => {
+    const firstSource = leadSources[0];
+    if (firstSource && !leadSources.includes(nl.source)) {
+      setNl((current) => ({ ...current, source: firstSource }));
+    }
+  }, [leadSources, nl.source]);
   const [adding, setAdding] = useState(false);
-  const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: "Direct Call" as LeadSource });
   const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
   const [pending, start] = useTransition();
   const [customerRetryable, setCustomerRetryable] = useState(false);
@@ -163,7 +206,7 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
 
   useEffect(() => {
     const query = q.trim();
-    if (query.length < 2) {
+    if (query.length < 3 || localMatches.length > 0) {
       setSearchedLeads([]);
       setCustomerSearchPending(false);
       setCustomerSearchError("");
@@ -180,7 +223,7 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
       setCustomerSearchError("");
       void fetch(`/api/leads/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
         .then(async (response) => {
-          const result = await response.json() as { leads?: Lead[]; hasMore?: boolean; error?: string };
+          const result = await response.json() as { leads?: QuotationCustomer[]; hasMore?: boolean; error?: string };
           if (!response.ok) throw new Error(result.error || "Unable to search customers.");
           setSearchedLeads(result.leads ?? []);
           setCustomerSearchPage(1);
@@ -199,21 +242,31 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [q]);
+  }, [q, localMatches.length]);
 
   const loadMoreCustomers = async () => {
     const query = q.trim();
-    if (loadingMoreCustomers || !customerSearchHasMore || query.length < 2) return;
+    const loadingInitialList = !query || localMatches.length > 0;
+    if (loadingMoreCustomers || (loadingInitialList ? !customerListHasMore : !customerSearchHasMore)) return;
     setLoadingMoreCustomers(true);
     try {
-      const page = customerSearchPage + 1;
-      const response = await fetch(`/api/leads/search?q=${encodeURIComponent(query)}&page=${page}`);
-      const result = await response.json() as { leads?: Lead[]; hasMore?: boolean; error?: string };
+      const page = loadingInitialList ? customerListPage + 1 : customerSearchPage + 1;
+      const url = loadingInitialList ? `/api/leads/search?page=${page}` : `/api/leads/search?q=${encodeURIComponent(query)}&page=${page}`;
+      const response = await fetch(url);
+      const result = await response.json() as { leads?: QuotationCustomer[]; hasMore?: boolean; error?: string };
       if (!response.ok) throw new Error(result.error || "Unable to load more customers.");
       if (q.trim() !== query) return;
-      setSearchedLeads((current) => [...current, ...(result.leads ?? []).filter((lead) => !current.some((item) => item.id === lead.id))]);
-      setCustomerSearchPage(page);
-      setCustomerSearchHasMore(result.hasMore === true);
+      if (loadingInitialList) {
+        setLoadedMoreLeads((current) => [...current, ...(result.leads ?? []).filter((lead) =>
+          !localCustomers.some((item) => item.id === lead.id) && !current.some((item) => item.id === lead.id),
+        )]);
+        setCustomerListPage(page);
+        setCustomerListHasMore(result.hasMore === true);
+      } else {
+        setSearchedLeads((current) => [...current, ...(result.leads ?? []).filter((lead) => !current.some((item) => item.id === lead.id))]);
+        setCustomerSearchPage(page);
+        setCustomerSearchHasMore(result.hasMore === true);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Unable to load more customers.");
     } finally {
@@ -222,11 +275,15 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
   };
 
   const matches = useMemo(() => {
-    const combined = [...myLeads, ...searchedLeads].filter((lead, index, list) =>
+    const combined = [...localCustomers, ...searchedLeads].filter((lead, index, list) =>
       list.findIndex((candidate) => candidate.id === lead.id) === index,
     );
-    return quotationCustomers(combined, q);
-  }, [q, myLeads, searchedLeads]);
+    const search = q.trim().toLowerCase();
+    return combined.filter((customer) =>
+      !search || [customer.name, customer.company, customer.phone, customer.area]
+        .some((value) => value.toLowerCase().includes(search)),
+    );
+  }, [q, localCustomers, searchedLeads]);
 
   const focusProducts = () => {
     requestAnimationFrame(() => {
@@ -462,13 +519,17 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
             <input aria-label="Company" className={fieldClass} placeholder="Company" value={nl.company} onChange={(e) => setNl({ ...nl, company: e.target.value })} />
             <input aria-label="Mobile number" className={fieldClass} placeholder="Mobile number *" inputMode="tel" value={nl.phone} onChange={(e) => setNl({ ...nl, phone: e.target.value })} />
             <input aria-label="Area" className={fieldClass} placeholder="Area" value={nl.area} onChange={(e) => setNl({ ...nl, area: e.target.value })} />
-            <SelectField aria-label="Source" value={nl.source} onValueChange={(value) => setNl({ ...nl, source: value as LeadSource })} options={LEAD_SOURCES.map((source) => ({ value: source, label: source }))} />
+            <div>
+              <SelectField aria-label="Source" disabled={!leadSources.length} value={nl.source} onValueChange={(value) => setNl({ ...nl, source: value as LeadSource })} options={leadSources.map((source) => ({ value: source, label: source }))} />
+              {leadSourcesUnavailable && <Button type="button" variant="outline" className="mt-2 h-9" disabled={retryingLeadSources} onClick={() => void retryLeadSources()}>{retryingLeadSources ? "Retrying…" : "Retry loading Lead Sources"}</Button>}
+              {!leadSources.length && !leadSourcesUnavailable && <p className="mt-1 text-xs text-destructive">No Lead Source values are configured in Zoho.</p>}
+            </div>
             {duplicateCustomer && <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm sm:col-span-2">
               <p><span className="font-semibold">{duplicateCustomer.name}</span> already exists. Owner: {duplicateCustomer.owner}.</p>
               <Button type="button" variant="outline" className="mt-2" onClick={() => selectDuplicateCustomer(duplicateCustomer)}>Use this customer</Button>
             </div>}
             <div className="flex gap-2">
-              <Button type="button" className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Adding…" : customerRetryable ? "Retry add customer" : "Add customer"}</Button>
+              <Button type="button" className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim() || !leadSources.length}>{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Adding…" : customerRetryable ? "Retry add customer" : "Add customer"}</Button>
               <Button type="button" variant="ghost" onClick={() => {
                 setAdding(false);
                 setDuplicateCustomer(null);
@@ -487,11 +548,15 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
                 <Search className="pointer-events-none absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
                 <input className={`${fieldClass} pl-10`} placeholder="Search name, company, mobile, area" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
-              <Button type="button" variant="outline" onClick={() => setAdding(true)}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
+              <Button type="button" variant="outline" onClick={() => {
+                const firstSource = leadSources[0];
+                if (firstSource) setNl((current) => ({ ...current, source: firstSource }));
+                setAdding(true);
+              }}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
             </div>
-            {customerSearchPending && <p role="status" className="text-sm text-muted-foreground">Searching customers…</p>}
+            {customerSearchPending && localMatches.length === 0 && <p role="status" className="text-sm text-muted-foreground">Searching…</p>}
             {customerSearchError && <p role="alert" className="text-sm text-destructive">{customerSearchError}</p>}
-            {q.trim().length === 1 && <p className="text-sm text-muted-foreground">Enter at least 2 characters to search Zoho customers.</p>}
+            {q.trim().length > 0 && q.trim().length < 3 && localMatches.length === 0 && <p className="text-sm text-muted-foreground">Enter at least 3 characters to search Zoho.</p>}
             <ul className="max-h-[min(55vh,32rem)] divide-y overflow-y-auto rounded-lg border">
               {matches.map((l) => (
                 <li key={l.id}>
@@ -501,15 +566,15 @@ export function QuotationsClient({ leads, products, quotes, quotesHasMore, sugge
                   </button>
                 </li>
               ))}
-              {q.trim().length >= 2 && !customerSearchPending && !customerSearchError && matches.length === 0 && (
+              {q.trim().length >= 3 && !customerSearchPending && !customerSearchError && matches.length === 0 && (
                 <li className="p-3 text-sm text-muted-foreground">No customers found.</li>
               )}
-              {customerSearchHasMore && <li className="p-2">
+              {(q.trim().length === 0 ? customerListHasMore : localMatches.length > 0 ? customerListHasMore : customerSearchHasMore) && <li className="p-2">
                 <Button type="button" variant="outline" className="w-full" disabled={loadingMoreCustomers} onClick={loadMoreCustomers}>
-                  {loadingMoreCustomers && <LoaderCircle className="h-4 w-4 animate-spin" />}Load more customers
+                  {loadingMoreCustomers && <LoaderCircle className="h-4 w-4 animate-spin" />}Load more
                 </Button>
               </li>}
-              {!matches.length && <li className="p-3 text-sm text-muted-foreground">No matching customer. Add a new one.</li>}
+              {!matches.length && !customerSearchPending && q.trim().length === 0 && <li className="p-3 text-sm text-muted-foreground">No customers found. Add a new one.</li>}
             </ul>
           </>
         )}
@@ -743,7 +808,7 @@ function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; t
 type Item = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
 
 function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, offerDate, status = "Draft" }: {
-  lead: Lead; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; subject: string; setSubject: (subject: string) => void;
+ lead: QuotationCustomer; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; subject: string; setSubject: (subject: string) => void;
   onBack: () => void; onMarkSent: () => Promise<void>;
   readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; offerDate?: string; status?: string;
 }) {
@@ -963,15 +1028,15 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
               <div className="font-bold">Bill To</div>
               <div className="mt-1">{lead.company.trim() || lead.name.trim() || "Customer details unavailable"}</div>
               {lead.company.trim() && <div>{lead.name.trim()}</div>}
-              <div>{lead.address.trim() || lead.area.trim() || lead.phone.trim()}</div>
-              {lead.address.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
+              <div>{lead.address?.trim() || lead.area.trim() || lead.phone.trim()}</div>
+              {lead.address?.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
             </div>
             <div className="offer-no-break">
               <div className="font-bold">Ship To</div>
               <div className="mt-1">{lead.company.trim() || lead.name.trim() || "Customer details unavailable"}</div>
               {lead.company.trim() && <div>{lead.name.trim()}</div>}
-              <div>{lead.address.trim() || lead.area.trim() || lead.phone.trim()}</div>
-              {lead.address.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
+              <div>{lead.address?.trim() || lead.area.trim() || lead.phone.trim()}</div>
+              {lead.address?.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
             </div>
           </div>
         </div>

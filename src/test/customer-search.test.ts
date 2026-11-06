@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-const mocks = vi.hoisted(() => ({ currentUser: vi.fn(), searchLeads: vi.fn() }));
+const mocks = vi.hoisted(() => ({ currentUser: vi.fn(), searchLeads: vi.fn(), listLeads: vi.fn() }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/auth/guard", () => ({ currentUser: mocks.currentUser }));
-vi.mock("@/lib/crm", () => ({ crm: () => ({ searchLeads: mocks.searchLeads }) }));
+vi.mock("@/lib/crm", () => ({ crm: () => ({ searchLeads: mocks.searchLeads, listLeads: mocks.listLeads }) }));
 
 const lead = (id: string, ownerId: string) => ({
   id, name: id, company: "", phone: "9876543210", area: "", source: "Direct Call" as const,
@@ -15,6 +15,7 @@ const lead = (id: string, ownerId: string) => ({
 beforeEach(() => {
   mocks.currentUser.mockReset();
   mocks.searchLeads.mockReset();
+  mocks.listLeads.mockReset();
 });
 
 describe("customer search endpoint", () => {
@@ -39,5 +40,22 @@ describe("customer search endpoint", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ leads: [{ id: "mine" }] });
     expect(mocks.searchLeads).toHaveBeenCalledWith("ac", 1);
+  });
+
+  it("serves the next 100 visible customers from the cached list", async () => {
+    mocks.currentUser.mockResolvedValue({ id: "manager", name: "Manager", role: "Manager" });
+    mocks.listLeads.mockResolvedValue(Array.from({ length: 205 }, (_, index) => lead(`lead-${index + 1}`, "exec-1")));
+    const { GET } = await import("@/app/api/leads/search/route");
+
+    const response = await GET(new NextRequest("http://localhost/api/leads/search?page=2"));
+
+    expect(response.status).toBe(200);
+    const body = await response.json() as { leads: { id: string }[]; hasMore: boolean };
+    expect(body.leads).toHaveLength(100);
+    expect(body.leads[0]?.id).toBe("lead-101");
+    expect(body.leads.at(-1)?.id).toBe("lead-200");
+    expect(body.hasMore).toBe(true);
+    expect(mocks.listLeads).toHaveBeenCalledTimes(1);
+    expect(mocks.searchLeads).not.toHaveBeenCalled();
   });
 });

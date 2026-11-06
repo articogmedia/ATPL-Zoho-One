@@ -181,6 +181,13 @@ export async function getAssignableUsersAction() {
   });
 }
 
+export async function getLeadSourcesAction() {
+  return run(async () => {
+    await requireActionUser("leads");
+    return await crm().listLeadSources();
+  });
+}
+
 const updateLeadSchema = z.object({
   id, status: status.optional(), remarks: text(500).optional(), assignedTo: text(120).nullable().optional(),
 });
@@ -218,7 +225,7 @@ export async function updateLeadAction(input: unknown) {
 const reassignLeadSchema = z.object({ id, assignedToId: id });
 
 export async function reassignLeadAction(input: unknown) {
-  return run<{ owner: string; ownerId: string; status: string; taskCreated: boolean; taskWarning?: string; zohoUrl?: string }>(async () => {
+  return run<{ owner: string; ownerId: string; status: string; taskCreated: boolean; taskWarning?: string; historyWarning?: string; zohoUrl?: string }>(async () => {
     const user = await requireActionUser("leads");
     if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can reassign leads.");
     const p = reassignLeadSchema.parse(input);
@@ -419,6 +426,7 @@ export async function updateVisitAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("visits");
     const p = visitPatchSchema.parse(input);
+    if (p.date && p.date < todayIST()) throw new Error("Choose today or a future date.");
     const visit = await crm().getVisit(p.id);
     if (!visit) throw new ZohoError("This task no longer exists, refreshing…", 404, "NOT_FOUND", undefined, undefined, `GET /Tasks/${p.id}`);
     if (!canUpdateWorkItem(user, visit)) {

@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
-import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getLeadTimelineAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
+import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getLeadSourcesAction, getLeadTimelineAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
   LEAD_SOURCES, LEAD_STATUSES, adjustLeadTabCounts, canAssignLeads, leadsForTab, normalizePhone, reassignLeadOptimistically, todayIST,
   type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
@@ -19,6 +19,7 @@ import {
 
 type Props = {
   user: User; leads: Lead[]; executives: string[]; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; owners: string[]; canAssign: boolean;
+  leadSources?: LeadSource[]; leadSourcesUnavailable?: boolean;
   fixableLeads: { id: string; name: string; ownerName: string }[];
   initialTab: LeadTab; initialCount: number; tabCounts: Record<LeadTab, number>;
   todaysFollowUps: number; hasAnyLeads: boolean;
@@ -73,11 +74,14 @@ function isLeadsResponse(value: unknown): value is LeadsResponse {
     TABS.every(({ id }) => Number.isInteger(counts[id]) && counts[id] >= 0);
 }
 
-export function LeadsClient({ user, leads, executives, assignees, assigneesUnavailable, owners, canAssign, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
+export function LeadsClient({ user, leads, executives, assignees, assigneesUnavailable, owners, canAssign, leadSources: initialLeadSources = LEAD_SOURCES, leadSourcesUnavailable = false, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
   const [leadRows, setLeadRows] = useState(leads);
   const [teamMembers, setTeamMembers] = useState(assignees);
   const [teamMembersUnavailable, setTeamMembersUnavailable] = useState(assigneesUnavailable);
   const [retryingTeamMembers, setRetryingTeamMembers] = useState(false);
+  const [leadSources, setLeadSources] = useState(initialLeadSources);
+  const [leadSourcesUnavailableState, setLeadSourcesUnavailableState] = useState(leadSourcesUnavailable);
+  const [retryingLeadSources, setRetryingLeadSources] = useState(false);
   const [total, setTotal] = useState(initialCount);
   const [tabCounts, setTabCounts] = useState(initialTabCounts);
   const [todaysFollowUps, setTodaysFollowUps] = useState(initialFollowUps);
@@ -153,6 +157,23 @@ export function LeadsClient({ user, leads, executives, assignees, assigneesUnava
       setRetryingTeamMembers(false);
     }
   }, [retryingTeamMembers]);
+  const reloadLeadSources = useCallback(async () => {
+    if (retryingLeadSources) return;
+    setRetryingLeadSources(true);
+    try {
+      const result = await getLeadSourcesAction();
+      if (!result.ok || !result.data?.length) {
+        setLeadSourcesUnavailableState(true);
+        toast.error(result.ok ? "No Lead Source values are configured in Zoho." : result.error);
+        return;
+      }
+      setLeadSources(result.data);
+      setLeadSourcesUnavailableState(false);
+      toast.success("Lead sources loaded");
+    } finally {
+      setRetryingLeadSources(false);
+    }
+  }, [retryingLeadSources]);
   const teamLoadAttempted = useRef(false);
   useEffect(() => {
     if (action?.type === "reassign" && !teamMembers.length && teamMembersUnavailable && !teamLoadAttempted.current) {
@@ -260,6 +281,11 @@ export function LeadsClient({ user, leads, executives, assignees, assigneesUnava
       }
     }
   }, [requestPage]);
+  useEffect(() => {
+    const refreshVisibleLeads = () => { void runRequest(1, false); };
+    window.addEventListener("atpl:leads-refresh", refreshVisibleLeads);
+    return () => window.removeEventListener("atpl:leads-refresh", refreshVisibleLeads);
+  }, [runRequest]);
   const initializedQuery = useRef(false);
   useEffect(() => {
     if (!initializedQuery.current) {
@@ -405,7 +431,7 @@ export function LeadsClient({ user, leads, executives, assignees, assigneesUnava
             },
           },
         });
-      }} onCancel={() => setAdding(false)} assignees={teamMembers} assigneesUnavailable={teamMembersUnavailable} retryingAssignees={retryingTeamMembers} onRetryAssignees={() => void reloadTeamMembers()} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
+      }} onCancel={() => setAdding(false)} assignees={teamMembers} assigneesUnavailable={teamMembersUnavailable} retryingAssignees={retryingTeamMembers} onRetryAssignees={() => void reloadTeamMembers()} leadSources={leadSources} leadSourcesUnavailable={leadSourcesUnavailableState} retryingLeadSources={retryingLeadSources} onRetryLeadSources={() => void reloadLeadSources()} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
         loadingRows
@@ -497,7 +523,8 @@ export function LeadsClient({ user, leads, executives, assignees, assigneesUnava
         void requestPage(1, false).catch((error: unknown) =>
           toast.error(error instanceof Error ? error.message : "Unable to refresh leads."),
         );
-        toast.success(`Reassigned to ${assignment.owner}.`);
+        if (assignment.historyWarning) toast.warning(`${assignment.historyWarning} Reassigned to ${assignment.owner}.`);
+        else toast.success(`Reassigned to ${assignment.owner}.`);
       }} />}
     </div>
   );
@@ -617,7 +644,7 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
 }
 
 function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssignees, onRetryAssignees, onPendingChange, onOptimisticChange, onRollbackChange, onClose, onDone, onAssigned, onOptimisticAssign, onRollbackAssign }: {
-  action: LeadMutationAction; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; onPendingChange: (pending: boolean) => void; onOptimisticChange: (before: Lead, after: Lead | null) => void; onRollbackChange: (before: Lead | null, after: Lead | null) => void; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (assignment: { owner: string; ownerId: string; status: string }) => void; onOptimisticAssign: (member: { id: string; name: string }) => void; onRollbackAssign: () => void;
+  action: LeadMutationAction; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; onPendingChange: (pending: boolean) => void; onOptimisticChange: (before: Lead, after: Lead | null) => void; onRollbackChange: (before: Lead | null, after: Lead | null) => void; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (assignment: { owner: string; ownerId: string; status: string; historyWarning?: string }) => void; onOptimisticAssign: (member: { id: string; name: string }) => void; onRollbackAssign: () => void;
 }) {
   useBodyScrollLock(true);
   const [pending, start] = useTransition();
@@ -682,7 +709,7 @@ function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssi
           const assignment = result.data;
           if (assignment && "ownerId" in assignment) {
             if (assignment.taskWarning) toast.warning(`${assignment.taskWarning}. The owner update is saved.`);
-            onAssigned({ owner: assignment.owner, ownerId: assignment.ownerId, status: assignment.status });
+            onAssigned({ owner: assignment.owner, ownerId: assignment.ownerId, status: assignment.status, historyWarning: assignment.historyWarning });
           }
         }
         else {
@@ -872,12 +899,18 @@ function ScheduleForm({ lead, onDone }: { lead: Lead; onDone: () => void }) {
   </div>;
 }
 
-function AddLead({ onOptimisticAdd, onAddFailed, onAdded, onCancel, assignees, assigneesUnavailable, retryingAssignees, onRetryAssignees, canAssign, canForceDuplicate }: { onOptimisticAdd: (input: { name: string; company: string; phone: string; area: string; source: LeadSource; remarks: string; assignedToId: string }) => Lead; onAddFailed: (id: string) => void; onAdded: (lead: Lead) => void; onCancel: () => void; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; canAssign: boolean; canForceDuplicate: boolean }) {
-  const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedToId: "" });
+function AddLead({ onOptimisticAdd, onAddFailed, onAdded, onCancel, assignees, assigneesUnavailable, retryingAssignees, onRetryAssignees, leadSources, leadSourcesUnavailable, retryingLeadSources, onRetryLeadSources, canAssign, canForceDuplicate }: { onOptimisticAdd: (input: { name: string; company: string; phone: string; area: string; source: LeadSource; remarks: string; assignedToId: string }) => Lead; onAddFailed: (id: string) => void; onAdded: (lead: Lead) => void; onCancel: () => void; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; retryingLeadSources: boolean; onRetryLeadSources: () => void; canAssign: boolean; canForceDuplicate: boolean }) {
+  const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: leadSources[0] ?? "Meta Ads" as LeadSource, remarks: "", assignedToId: "" });
   const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string; matchedField?: "Mobile" | "Phone" } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
   const [flaggedPhone, setFlaggedPhone] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  useEffect(() => {
+    const firstSource = leadSources[0];
+    if (firstSource && !leadSources.includes(f.source)) {
+      setF((current) => ({ ...current, source: firstSource }));
+    }
+  }, [f.source, leadSources]);
   const [retryableError, setRetryableError] = useState(false);
   const [errors, setErrors] = useState<{ name?: string; phone?: string }>({});
   const submittedRef = useRef(false);
@@ -999,7 +1032,10 @@ function AddLead({ onOptimisticAdd, onAddFailed, onAdded, onCancel, assignees, a
         <div><label htmlFor="add-lead-company" className="mb-1 block text-sm font-medium">Company</label><input id="add-lead-company" className={`${fieldClass} text-base md:text-sm`} value={f.company} onChange={set("company")} maxLength={160} /></div>
         <div><label htmlFor="add-lead-phone" className="mb-1 block text-sm font-medium">Mobile number *</label><input id="add-lead-phone" className={`${fieldClass} text-base md:text-sm`} aria-invalid={!!errors.phone} value={f.phone} onChange={phoneChanged} inputMode="tel" required maxLength={15} />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
         <div><label htmlFor="add-lead-area" className="mb-1 block text-sm font-medium">Area</label><input id="add-lead-area" className={`${fieldClass} text-base md:text-sm`} value={f.area} onChange={set("area")} maxLength={120} /></div>
-        <div><label htmlFor="add-lead-source" className="mb-1 block text-sm font-medium">Source</label><SelectField id="add-lead-source" value={f.source} onValueChange={(value) => setF((current) => ({ ...current, source: value as LeadSource }))} options={LEAD_SOURCES.map((item) => ({ value: item, label: item }))} /></div>
+        <div><label htmlFor="add-lead-source" className="mb-1 block text-sm font-medium">Source</label><SelectField id="add-lead-source" disabled={!leadSources.length} value={f.source} onValueChange={(value) => setF((current) => ({ ...current, source: value as LeadSource }))} options={leadSources.map((item) => ({ value: item, label: item }))} />
+          {leadSourcesUnavailable && <Button type="button" variant="outline" className="mt-2 h-9" disabled={retryingLeadSources} onClick={onRetryLeadSources}>{retryingLeadSources ? "Retrying…" : "Retry loading Lead Sources"}</Button>}
+          {!leadSources.length && !leadSourcesUnavailable && <p className="mt-1 text-xs text-destructive">No Lead Source values are configured in Zoho.</p>}
+        </div>
         {canAssign && <div>
           <label htmlFor="add-lead-assignee" className="mb-1 block text-sm font-medium">Assign to</label>
           <SelectField id="add-lead-assignee" disabled={assigneesUnavailable} value={f.assignedToId} onValueChange={(value) => setF((current) => ({ ...current, assignedToId: value }))} options={assigneesUnavailable
@@ -1012,7 +1048,7 @@ function AddLead({ onOptimisticAdd, onAddFailed, onAdded, onCancel, assignees, a
       </div>
     </div>
     <div className="flex shrink-0 gap-3 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))]">
-      <Button type="button" variant="outline" className="h-11 flex-1" onClick={close} disabled={pending}>Cancel</Button><Button type="submit" className="h-11 flex-1" disabled={pending}>{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Adding…" : retryableError ? "Retry add lead" : "Add Lead"}</Button>
+      <Button type="button" variant="outline" className="h-11 flex-1" onClick={close} disabled={pending}>Cancel</Button>      <Button type="submit" className="h-11 flex-1" disabled={pending || !leadSources.length}>{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Adding…" : retryableError ? "Retry add lead" : "Add Lead"}</Button>
     </div>
       </form>
     </div>

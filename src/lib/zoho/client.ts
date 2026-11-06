@@ -46,7 +46,7 @@ export const hosts = () => {
   }
   return resolved;
 };
-const API_VERSION = "v6";
+export const ZOHO_CRM_API_VERSION = "v6";
 
 const g = globalThis as unknown as {
   __atplZohoToken?: { value: string; exp: number };
@@ -57,10 +57,22 @@ const g = globalThis as unknown as {
   __atplZohoRequestCount?: number;
 };
 
-if (process.env.NODE_ENV === "production" && !redisConfig() && !g.__atplZohoRedisWarningLogged) {
-  console.warn("[zoho] UPSTASH_REDIS_REST_URL/TOKEN are missing in production; OAuth token sharing is disabled.");
-  g.__atplZohoRedisWarningLogged = true;
+export function zohoRuntimeStatus() {
+  const sharedTokenStoreConfigured = Boolean(redisConfig());
+  const warning = process.env.NODE_ENV === "production" && !sharedTokenStoreConfigured
+    ? "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are not configured; Zoho token sharing and shared caching are unavailable."
+    : undefined;
+  if (warning && !g.__atplZohoRedisWarningLogged) {
+    console.warn("[zoho] shared token store is not configured in production", {
+      warning,
+      retryTimeoutMs: 3_000,
+    });
+    g.__atplZohoRedisWarningLogged = true;
+  }
+  return { sharedTokenStoreConfigured, warning };
 }
+
+zohoRuntimeStatus();
 
 function refreshFailure(error: unknown): { delay: number; message: string; code: string } | null {
   const zohoError = error instanceof ZohoError ? error : undefined;
@@ -91,7 +103,7 @@ function refreshFailure(error: unknown): { delay: number; message: string; code:
   return null;
 }
 
-async function requestAccessToken(): Promise<{ value: string; exp: number }> {
+async function requestAccessToken(timeoutMs = 15_000): Promise<{ value: string; exp: number }> {
   const started = Date.now();
   const e = env();
   const body = new URLSearchParams({
@@ -101,7 +113,7 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
   let res: Response;
   try {
     res = await fetch(`${hosts().accounts}/oauth/v2/token`, {
-      method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(15_000),
+      method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     const reference = newErrorReference();
@@ -253,6 +265,9 @@ async function releaseSharedLock(key: string, value: string) {
 }
 
 async function requestSharedAccessToken(rejectedToken?: string): Promise<{ value: string; exp: number }> {
+  if (process.env.NODE_ENV === "production" && !redisConfig()) {
+    return requestAccessToken(3_000);
+  }
   const refreshWithRateLimitRetry = async () => {
     try {
       return await requestAccessToken();
@@ -398,7 +413,7 @@ export async function zoho<T = unknown>(
   rejectedToken?: string,
 ): Promise<T | null> {
   const started = Date.now();
-  const url = new URL(`${hosts().api}/crm/${API_VERSION}${path}`);
+  const url = new URL(`${hosts().api}/crm/${ZOHO_CRM_API_VERSION}${path}`);
   for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
   const requestPath = `${path}${url.search}`;
   const operation = `${method} ${requestPath}`;

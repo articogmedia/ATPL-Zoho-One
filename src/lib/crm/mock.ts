@@ -32,6 +32,7 @@ export const mockRepository: CrmRepository = {
   async findUserByEmail(email) { return MOCK_USERS.find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null; },
 
   async listLeads() { return [...state.leads].sort((a, b) => b.createdOn.localeCompare(a.createdOn)); },
+  async listLeadSources() { return ["Meta Ads", "Google Ads", "Direct Call", "Walk-in", "Referral", "Website", "Other"]; },
   async searchLeads(query, page = 1) {
     const normalized = query.trim().toLowerCase();
     const matches = state.leads.filter((lead) =>

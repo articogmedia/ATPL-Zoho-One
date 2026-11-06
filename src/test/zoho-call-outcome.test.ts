@@ -26,6 +26,7 @@ function mockRepository(noteFailure = false) {
     return "created";
   });
   vi.doMock("@/lib/zoho/client", () => ({
+    ZOHO_CRM_API_VERSION: "v6",
     ZohoError: class extends Error {
       constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string) {
         super(message);
@@ -74,13 +75,13 @@ describe("Zoho call outcome persistence", () => {
     expect(calls[2]).toEqual({
       method: "POST",
       path: "/Notes",
-      record: expect.objectContaining({
+      record: {
         Note_Title: "Call logged",
-        Parent_Id: { id: leadId },
-        se_module: "Leads",
-      }),
+        Note_Content: expect.stringMatching(/^Connected: Answered \(by Manager at /),
+        Parent_Id: { module: { api_name: "Leads" }, id: leadId },
+      },
     });
-    expect(calls[2]?.record).not.toHaveProperty("Parent_Id.module");
+    expect(calls[2]?.record).not.toHaveProperty("se_module");
     expect(result.historyWarning).toMatch(/outcome saved.*history note could not be added/i);
   });
 
@@ -105,6 +106,10 @@ describe("Zoho call outcome persistence", () => {
       }),
     });
     const note = calls.find((call) => call.path === "/Notes");
-    expect(note?.record).toMatchObject({ Parent_Id: { id: leadId }, se_module: "Leads" });
+    expect(note?.record).toEqual({
+      Note_Title: "Call logged",
+      Note_Content: expect.stringContaining("Call Back Later"),
+      Parent_Id: { module: { api_name: "Leads" }, id: leadId },
+    });
   });
 });

@@ -16,6 +16,54 @@ beforeEach(async () => {
 });
 
 describe("Zoho visit lookup", () => {
+  it("allows a manager to update a Sales Executive's task in Zoho", async () => {
+    const task = {
+      id: "task-1", Subject: "Customer call", Status: "Not Started", Due_Date: "2026-11-06",
+      Owner: { id: "sai-id", name: "Sai Kiran" }, What_Id: { id: "lead-1", name: "Customer" },
+    };
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/Tasks/task-1") return { data: [task] };
+      if (path === "/users") return {
+        users: [
+          { id: "manager-id", full_name: "Manager", role: { name: "Manager" } },
+          { id: "sai-id", full_name: "Sai Kiran", role: { name: "Sales Executive" } },
+        ],
+      };
+      if (path === "/settings/fields") return { fields: [] };
+      return {};
+    });
+    const write = vi.fn(async () => "ok");
+    const zohoList = vi.fn(async (module: string) => module === "Leads" ? [{
+      id: "lead-1", Last_Name: "Customer", Company: "Customer Co", Mobile: "9876543210",
+      Lead_Status: "Assigned to Sales", Lead_Source: "Direct Call", Owner: { id: "sai-id", name: "Sai Kiran" },
+    }] : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
+      ZohoError: class extends Error {
+        constructor(message: string, readonly status?: number, readonly code?: string) {
+          super(message);
+          this.name = "ZohoError";
+        }
+      },
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const manager = { id: "manager-id", name: "Manager", role: "Manager" as const };
+    const visit = await zohoRepository.getVisit("task-1");
+
+    expect(visit?.executiveId).toBe("sai-id");
+    await zohoRepository.updateVisit("task-1", { status: "In Progress" }, manager, visit!);
+
+    expect(write).toHaveBeenCalledWith("PUT", "/Tasks/task-1", { Status: "In Progress" });
+    expect(write).toHaveBeenCalledWith("POST", "/Notes", expect.objectContaining({
+      Note_Title: "Work update",
+      Parent_Id: { module: { api_name: "Leads" }, id: "lead-1" },
+    }));
+  });
+
   it("fetches a task by ID instead of depending on the cached/paginated task list", async () => {
     const task = {
       id: "task-1", Subject: "Customer call", Status: "Not Started", Due_Date: "2026-11-06",

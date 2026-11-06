@@ -16,33 +16,47 @@ export default async function LeadsPage() {
   const user = await requireSection("leads");
   const repo = crm();
   let all: Awaited<ReturnType<typeof repo.listLeads>>;
-  let fixableLeads: Awaited<ReturnType<typeof repo.listFixableAssignedLeads>>;
+  let fixableLeads: Awaited<ReturnType<typeof repo.listFixableAssignedLeads>> = [];
+  let assignableUsers: Awaited<ReturnType<typeof repo.listAssignableUsers>> = [];
+  let leadSources: Awaited<ReturnType<typeof repo.listLeadSources>> = [];
+  let assignableUsersFailed = false;
+  let leadSourcesUnavailable = false;
+  const optionalData = withPageTimeout(Promise.allSettled([
+    user.role === "Manager" ? repo.listFixableAssignedLeads(user) : Promise.resolve([]),
+    repo.listAssignableUsers(),
+    repo.listLeadSources(),
+  ]), 2_500).catch((error: unknown) => {
+    console.error("[page] optional lead data timed out", { message: error instanceof Error ? error.message : String(error) });
+    return null;
+  });
   try {
-    [all, fixableLeads] = await withPageTimeout(Promise.all([
-      repo.listLeads(),
-      user.role === "Manager" ? repo.listFixableAssignedLeads(user) : [],
-    ]));
+    all = await withPageTimeout(repo.listLeads());
   } catch (error) {
     console.error("[page] leads data load failed", { message: error instanceof Error ? error.message : String(error) });
     endPagePerf(perf);
     return <PageLoadError message="Lead data is temporarily unavailable. Retry without leaving this page." />;
   }
-  let assignableUsers: Awaited<ReturnType<typeof repo.listAssignableUsers>> = [];
-  let assignableUsersFailed = false;
-  try {
-    assignableUsers = await repo.listAssignableUsers();
-    assignableUsersFailed = assignableUsers.length === 0;
-    if (assignableUsersFailed) console.warn("[page] no active assignable users returned for leads");
-  } catch (error) {
+  const optionalResults = await optionalData;
+  if (!optionalResults) {
     assignableUsersFailed = true;
-    console.error("[page] active team members unavailable", {
-      message: error instanceof Error ? error.message : String(error),
-      status: error instanceof Error && "status" in error ? error.status : undefined,
-      code: error instanceof Error && "code" in error ? error.code : undefined,
-      details: error instanceof Error && "details" in error ? error.details : undefined,
-      operation: error instanceof Error && "operation" in error ? error.operation : undefined,
-    });
+    leadSourcesUnavailable = true;
+  } else {
+    const [fixableResult, assigneesResult, sourcesResult] = optionalResults;
+    if (fixableResult.status === "fulfilled") fixableLeads = fixableResult.value;
+    else console.error("[page] fixable assigned leads unavailable", { message: String(fixableResult.reason) });
+    if (assigneesResult.status === "fulfilled") assignableUsers = assigneesResult.value;
+    else {
+      assignableUsersFailed = true;
+      console.error("[page] active team members unavailable", { message: String(assigneesResult.reason) });
+    }
+    if (sourcesResult.status === "fulfilled") leadSources = sourcesResult.value;
+    else {
+      leadSourcesUnavailable = true;
+      console.error("[page] lead sources unavailable", { message: String(sourcesResult.reason) });
+    }
   }
+  assignableUsersFailed ||= assignableUsers.length === 0;
+  leadSourcesUnavailable ||= leadSources.length === 0;
   const visibleLeads = visibleFor(user, all);
   const tabs: LeadTab[] = ["fresh", "assigned", "callback", "mine", "all"];
   const tabCounts = Object.fromEntries(tabs.map((tab) => [tab, leadsForTab(user, visibleLeads, tab).length])) as Record<LeadTab, number>;
@@ -63,6 +77,8 @@ export default async function LeadsPage() {
       executives={assignableUsers.map((u) => u.name)}
       assignees={assignableUsers.map(({ id, name }) => ({ id, name }))}
       assigneesUnavailable={assignableUsersFailed}
+      leadSources={leadSources}
+      leadSourcesUnavailable={leadSourcesUnavailable}
       owners={assignableUsers.map((u) => u.name)}
       canAssign={user.role === "Manager" || user.role === "Calling Team"}
       fixableLeads={fixableLeads}

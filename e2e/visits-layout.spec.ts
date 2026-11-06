@@ -1,7 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 for (const viewport of [
+  { width: 360, height: 800 },
   { width: 390, height: 844 },
+  { width: 430, height: 932 },
   { width: 1366, height: 768 },
   { width: 1920, height: 1080 },
 ]) {
@@ -13,10 +15,10 @@ for (const viewport of [
     await page.goto("/visits");
 
     const tabs = [
-      { label: "Tasks", pattern: /^Tasks \(/ },
-      { label: "In Progress", pattern: /^In Progress \(/ },
-      { label: "Upcoming Visits", pattern: /^Upcoming Visits \(/ },
-      { label: "Completed", pattern: /^Completed \(/ },
+      { label: "Tasks", pattern: /^Tasks \(/, empty: /No assigned tasks right now/ },
+      { label: "In Progress", pattern: /^In Progress \(/, empty: /Nothing is in progress/ },
+      { label: "Upcoming Visits", pattern: /^Upcoming Visits \(/, empty: /No upcoming visits/ },
+      { label: "Completed", pattern: /^Completed \(/, empty: /No completed work yet/ },
     ];
     for (const tab of tabs) {
       await page.getByRole("button", { name: tab.pattern }).click();
@@ -25,18 +27,22 @@ for (const viewport of [
       if (await card.count()) {
         await expect(card).toBeVisible();
         if (tab.label === "Tasks") {
+          await expect(card.getByRole("button", { name: "Start Work" })).toBeVisible();
           const actionButtons = [
-            card.getByRole("button", { name: /Start Work/ }),
-            card.getByRole("button", { name: /Mark Completed/ }),
-            card.getByRole("button", { name: /Reschedule/ }),
+            card.getByRole("button", { name: "Call" }),
+            card.locator('[aria-label="WhatsApp"]'),
+            card.getByRole("link", { name: "Quotation" }),
+            card.getByRole("button", { name: "Reschedule" }),
           ];
           const boxes = await Promise.all(actionButtons.map((button) => button.boundingBox()));
           expect(boxes.every(Boolean)).toBe(true);
-          expect(boxes.map((box) => box!.height)).toEqual([64, 64, 64]);
+          expect(boxes.map((box) => box!.height)).toEqual([44, 44, 44, 44]);
           expect(Math.max(...boxes.map((box) => box!.width)) - Math.min(...boxes.map((box) => box!.width))).toBeLessThanOrEqual(1);
+          const whatsapp = card.getByRole("link", { name: "WhatsApp" });
+          if (await whatsapp.count()) await expect(whatsapp).toHaveAttribute("href", /^https:\/\/wa\.me\/91\d{10}\?text=/);
         }
       } else {
-        await expect(page.getByText("Nothing here.")).toBeVisible();
+        await expect(page.getByText(tab.empty)).toBeVisible();
       }
     }
 
@@ -62,7 +68,7 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
   await page.goto("/visits");
 
   const task = page.locator("#work-list article").filter({ has: page.getByRole("button", { name: /Start Work/ }) }).first();
-  await task.getByRole("button", { name: "Call lead" }).click();
+  await task.getByRole("button", { name: "Call" }).click();
   const callDialog = page.getByRole("dialog", { name: "Call lead" });
   await expect(callDialog).toBeVisible();
   await expect(callDialog.getByRole("link", { name: "Open dialer" })).toHaveAttribute("href", /^tel:\+91\d{10}$/);
@@ -78,9 +84,21 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
   await progressTask.getByRole("button", { name: /Reschedule/ }).click();
   const reschedule = page.getByRole("dialog", { name: "Reschedule task" });
   await expect(reschedule).toBeVisible();
-  await reschedule.getByLabel("New date").fill("2026-11-06");
+  const minDate = await reschedule.getByLabel("New date").getAttribute("min");
+  expect(minDate).toBeTruthy();
+  const yesterday = await page.evaluate((minimum) => {
+    const date = new Date(`${minimum}T12:00:00`);
+    date.setDate(date.getDate() - 1);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }, minDate!);
+  await reschedule.getByLabel("New date").fill(yesterday);
+  await expect(reschedule.getByRole("button", { name: "Save new date" })).toBeDisabled();
+  await expect(reschedule.getByRole("alert")).toHaveText("Choose today or a future date.");
+  await reschedule.getByRole("button", { name: "Tomorrow" }).click();
+  await reschedule.getByLabel("Reason or notes").fill("Customer requested a new time");
   await reschedule.getByRole("button", { name: "Save new date" }).click();
   await expect(reschedule).toHaveCount(0);
+  await expect(page.getByText(/Rescheduled to .* \d{2}:\d{2}/)).toBeVisible();
 
   await page.locator("#work-list article").first().getByRole("button", { name: /Mark Completed/ }).click();
   const confirmation = page.getByRole("dialog", { name: /Mark this task completed/ });

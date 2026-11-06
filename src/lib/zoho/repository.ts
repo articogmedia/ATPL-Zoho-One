@@ -1,10 +1,10 @@
 import "server-only";
 import { cache } from "react";
-import { canAdvanceLeadStatus, isAssignable, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadTimelineItem, type Product, type User } from "@/lib/domain";
+import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User } from "@/lib/domain";
 import { cached, invalidate, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
-import { hosts, zoho, zohoList, zohoWrite, ZohoError } from "./client";
+import { hosts, zoho, zohoList, zohoWrite, ZohoError, ZOHO_CRM_API_VERSION } from "./client";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
@@ -112,6 +112,12 @@ function requiredQuoteLayoutFields(layouts: QuoteLayout[]): { layout: string | n
 }
 
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
+function noteLeadReference(leadId: string): Record<string, unknown> {
+  const majorVersion = Number(String(ZOHO_CRM_API_VERSION ?? "v6").replace(/^v/i, ""));
+  return majorVersion >= 6
+    ? { Parent_Id: { module: { api_name: "Leads" }, id: leadId } }
+    : { Parent_Id: { id: leadId }, se_module: "Leads" };
+}
 const leadCreateLocks = new Map<string, Promise<unknown>>();
 type ZohoLeadField = {
   api_name?: string;
@@ -249,26 +255,18 @@ function quoteLineItemsPayload(
 }
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
   const exactValue = zohoLeadSource(source, sourceValues, false);
-  const value = exactValue ?? zohoLeadSource("Other", sourceValues, false);
-  if (!exactValue && value) {
-    console.warn("[zoho] requested Lead_Source is not configured; using Other", {
-      requestedSource: source,
-      selectedSource: value,
-      configuredValues: sourceValues,
-    });
-  }
-  if (!value) {
-    console.warn("[zoho] no configured Lead_Source picklist match", {
+  if (!exactValue) {
+    console.warn("[zoho] requested Lead_Source is not configured", {
       requestedSource: source,
       configuredValues: sourceValues,
     });
     throw new ZohoError(
-      `The Zoho Lead_Source picklist has no matching value for "${source}" or "Other".`,
+      `Lead source "${source}" is not set up in Zoho. Add it under Setup → Modules and Fields → Leads → Lead Source.`,
       400, "INVALID_PICKLIST", "Lead_Source", source, "GET /settings/fields",
       { availableValues: sourceValues },
     );
   }
-  return value;
+  return exactValue;
 };
 let taskMetadataWarning: string | null = null;
 
@@ -424,8 +422,27 @@ async function addNote(leadId: string, title: string, content: string) {
   const parentId = leadId.trim();
   if (!parentId) throw new ZohoError("Cannot create a note without a Zoho Lead ID.", 400, "INVALID_LEAD_REFERENCE", "Parent_Id");
   await zohoWrite("POST", "/Notes", {
-    Note_Title: title, Note_Content: content, Parent_Id: { id: parentId }, se_module: "Leads",
+    Note_Title: title, Note_Content: content, ...noteLeadReference(parentId),
   });
+}
+
+async function addHistoryNoteBestEffort(leadId: string, title: string, content: string, context: Record<string, unknown>) {
+  try {
+    await addNote(leadId, title, content);
+    return undefined;
+  } catch (error) {
+    console.error("[zoho] primary change succeeded but history note failed", {
+      ...context,
+      leadId,
+      operation: "POST /Notes",
+      status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      field: error instanceof ZohoError ? error.field : undefined,
+      reference: error instanceof ZohoError ? error.reference : undefined,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return "The change was saved, but its history note could not be added.";
+  }
 }
 
 async function quotePage(page: number) {
@@ -472,6 +489,10 @@ export const zohoRepository: CrmRepository = {
   },
 
   listLeads: leads,
+  async listLeadSources(): Promise<LeadSource[]> {
+    const values = (await leadSchema()).sourceValues;
+    return LEAD_SOURCES.filter((source) => zohoLeadSource(source, values, false) !== null);
+  },
   async searchLeads(query, page = 1) {
     const normalized = query.trim().replace(/\s+/g, " ");
     if (normalized.length < 2) return { leads: [], hasMore: false };
@@ -719,18 +740,12 @@ export const zohoRepository: CrmRepository = {
       }
     }
 
-    try {
-      await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
-    } catch (error) {
-      console.error("[zoho] reassignment note failed", {
-        leadId: id, operation: "POST /Notes",
-        status: error instanceof ZohoError ? error.status : undefined,
-        code: error instanceof ZohoError ? error.code : undefined,
-        field: error instanceof ZohoError ? error.field : undefined,
-      });
-    }
+    const historyWarning = await addHistoryNoteBestEffort(
+      id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`,
+      { action: "reassign lead" },
+    );
     invalidate("leads", "users", "visits");
-    return { owner: owner.name, ownerId: String(owner.id), status: mapLead(persisted, await assignableIds()).status, taskCreated, taskWarning };
+    return { owner: owner.name, ownerId: String(owner.id), status: mapLead(persisted, await assignableIds()).status, taskCreated, taskWarning, historyWarning };
   },
 
   async fixAssignedLeads(actor) {
@@ -808,7 +823,7 @@ export const zohoRepository: CrmRepository = {
     if (!parts.length) return;
 
     if (Object.keys(record).length) await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
-    await addNote(id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`);
+    await addHistoryNoteBestEffort(id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`, { action: "update lead" });
     if (p.followUp && p.followUp !== current.followUp) {
       const owner = current.assignedTo ? await userByName(current.assignedTo) : actor;
       await zohoWrite("POST", "/Tasks", {
@@ -1112,22 +1127,10 @@ export const zohoRepository: CrmRepository = {
     const id = await zohoWrite("POST", "/Quotes", {
       ...quoteRecord,
     });
-    try {
-      await addNote(lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`);
-    } catch (error) {
-      console.error("[zoho] quote was saved but its lead-history note failed", {
-        quoteId: id,
-        leadId: lead.id,
-        reference: error instanceof ZohoError ? error.reference : undefined,
-        status: error instanceof ZohoError ? error.status : undefined,
-        code: error instanceof ZohoError ? error.code : undefined,
-        message: error instanceof Error ? error.message : String(error),
-        field: error instanceof ZohoError ? error.field : undefined,
-        operation: error instanceof ZohoError ? error.operation : undefined,
-        details: error instanceof ZohoError ? error.details : undefined,
-        stack: error instanceof Error ? error.stack : undefined,
-      });
-    }
+    await addHistoryNoteBestEffort(
+      lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`,
+      { action: "create quote", quoteId: id },
+    );
     invalidate("quotes", "leads");
     return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total: totals.total, status: "Draft", date: new Date().toISOString().slice(0, 10) };
   },
@@ -1201,7 +1204,10 @@ export const zohoRepository: CrmRepository = {
         Description: input.nextAction || undefined,
       });
     }
-    await addNote(lead.id, "Work scheduled", `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date} (by ${actor.name})`);
+    await addHistoryNoteBestEffort(
+      lead.id, "Work scheduled", `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date} (by ${actor.name})`,
+      { action: "schedule work" },
+    );
     if (input.isVisit) await advanceLead(lead.id, lead.status, "Site Visit Scheduled");
     invalidate("visits");
   },
@@ -1224,18 +1230,18 @@ export const zohoRepository: CrmRepository = {
         throw new ZohoError(`Site Visits fields unavailable: ${missingFields.join(", ")}`, 400, "INVALID_FIELD", undefined, undefined, `PUT /${schema.module}/${id}`);
       }
       await zohoWrite("PUT", `/${schema.module}/${id}`, payload);
-      if (p.notes?.trim() && current.leadId) {
-        try {
-          await addNote(current.leadId, "Work update", `Notes: ${p.notes.trim()} (by ${actor.name})`);
-        } catch (error) {
-          console.error("[zoho] visit update succeeded but history note failed", {
-            visitId: id,
-            leadId: current.leadId,
-            status: error instanceof ZohoError ? error.status : undefined,
-            code: error instanceof ZohoError ? error.code : undefined,
-            message: error instanceof Error ? error.message : String(error),
-          });
-        }
+      const changes = [
+        p.status ? `Status: ${p.status}` : "",
+        p.date ? `Date: ${p.date}` : "",
+        p.time ? `Time: ${p.time}` : "",
+        p.followUp ? `Follow-up: ${p.followUp}` : "",
+        p.notes?.trim() ? `Notes: ${p.notes.trim()}` : "",
+      ].filter(Boolean);
+      if (changes.length && current.leadId) {
+        await addHistoryNoteBestEffort(current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`, {
+          action: "update site visit",
+          visitId: id,
+        });
       }
       invalidate("visits");
       return;

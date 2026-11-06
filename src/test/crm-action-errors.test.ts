@@ -19,6 +19,13 @@ describe("friendly Zoho action errors", () => {
       .toBe("Required field missing: Last_Name (Ref: R1)");
     expect(friendlyZohoError(400, "INVALID_DATA", "Invalid picklist", "Lead_Source", "R2"))
       .toBe("Lead source is not valid in CRM. (Ref: R2)");
+    expect(friendlyZohoError(
+      400,
+      "INVALID_PICKLIST",
+      'Lead source "Walk-in" is not set up in Zoho. Add it under Setup → Modules and Fields → Leads → Lead Source.',
+      "Lead_Source",
+      "R2",
+    )).toBe('Lead source "Walk-in" is not set up in Zoho. Add it under Setup → Modules and Fields → Leads → Lead Source. (Ref: R2)');
     expect(friendlyZohoError(400, "MANDATORY_NOT_FOUND", "Missing field", "Company", "R3"))
       .toBe("Required field missing: Company (Ref: R3)");
     expect(friendlyZohoError(400, "INVALID_DATA", "Invalid lookup", "Lead_Ref", "R7", "POST /Quotes", { expected_data_type: "lookup" }))

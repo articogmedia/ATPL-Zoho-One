@@ -173,6 +173,7 @@ describe("Zoho lead actions", () => {
 
   it("matches +91, spaced, and leading-zero phone formats by phone field", async () => {
     vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
       ZohoError: class extends Error {},
       zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields"
         ? leadSourceSettings
@@ -197,6 +198,7 @@ describe("Zoho lead actions", () => {
       return {};
     });
     vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
       ZohoError: class extends Error {},
       zoho,
       zohoList: vi.fn(async () => []),
@@ -275,6 +277,7 @@ describe("Zoho lead actions", () => {
     });
 
     vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
       ZohoError: class extends Error {},
       zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
         ? { data: [{ id: "lead-1", Last_Name: "Lead", Lead_Status: leadReads++ === 0 ? "Fresh Lead" : "Assigned to Sales", Owner: leadReads === 1 ? { id: "queue-1", name: "Queue" } : { id: "1394515000001147001", name: "Pavan" } }] }
@@ -513,6 +516,7 @@ describe("Zoho lead owner fallbacks", () => {
       });
 
       vi.doMock("@/lib/zoho/client", () => ({
+        ZOHO_CRM_API_VERSION: "v6",
         ZohoError: class extends Error {},
         zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
           ? { data: [{ id: "lead-1", Full_Name: "New lead", Mobile: "9999999999", Lead_Source: "Direct Call", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
@@ -655,7 +659,7 @@ describe("Zoho lead owner fallbacks", () => {
       expect(zoho.mock.calls.some(([, path]) => path === "/Leads/lead-1" || path === "/Leads/lead-2")).toBe(false);
     });
 
-    it("falls back to the configured Other source and sends a valid City field and 10-digit mobile", async () => {
+    it("exposes only configured Lead Sources and rejects an unconfigured source with setup guidance", async () => {
       const settings = {
         fields: [
           ...leadRequiredFields.map((api_name) => ({ api_name })),
@@ -675,20 +679,14 @@ describe("Zoho lead owner fallbacks", () => {
       invalidate("users", "leads");
       const { zohoRepository } = await import("@/lib/zoho/repository");
 
-      await zohoRepository.createLead(
+      expect(await zohoRepository.listLeadSources()).toEqual(["Other"]);
+      await expect(zohoRepository.createLead(
         { name: "Fallback source lead", company: "", phone: "+91 98765-43210", area: "Madhapur", source: "Meta Ads", remarks: "" },
         { id: "manager-1", name: "Manager", role: "Manager" },
         null,
-      );
-
-      expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.objectContaining({
-        Last_Name: "Fallback source lead",
-        Company: "Fallback source lead",
-        Mobile: "9876543210",
-        City: "Madhapur",
-        Lead_Source: "Other",
-      }), { trigger: ["workflow"] });
-      expect(warn).toHaveBeenCalledWith("[zoho] requested Lead_Source is not configured; using Other", expect.any(Object));
+      )).rejects.toThrow('Lead source "Meta Ads" is not set up in Zoho. Add it under Setup → Modules and Fields → Leads → Lead Source.');
+      expect(write).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith("[zoho] requested Lead_Source is not configured", expect.any(Object));
       warn.mockRestore();
     });
 });

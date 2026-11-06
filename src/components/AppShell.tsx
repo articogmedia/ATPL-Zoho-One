@@ -8,7 +8,6 @@ import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
-import { toast } from "sonner";
 
 const NAV = [
   { s: "leads" as Section, to: "/leads", label: "Manage Leads", short: "Leads", icon: ClipboardList },
@@ -21,7 +20,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   const path = usePathname();
   const router = useRouter();
   const [newVersionAvailable, setNewVersionAvailable] = useState(false);
+  const [stalledNavigation, setStalledNavigation] = useState<{ href: string } | null>(null);
   const pendingNavigation = useRef<{ pathname: string; href: string; timer: number; fallback?: number } | null>(null);
+  const lastWarmAt = useRef(0);
+  const currentPath = useRef(path);
+  currentPath.current = path;
   const items = NAV.filter((n) => canAccess(user.role, n.s));
 
   useEffect(() => {
@@ -31,6 +34,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       window.clearTimeout(current.timer);
       if (current.fallback !== undefined) window.clearTimeout(current.fallback);
       pendingNavigation.current = null;
+      setStalledNavigation(null);
     };
     const onNavigationClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -42,10 +46,8 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       clearNavigation();
       const state: NonNullable<typeof pendingNavigation.current> = { pathname: target.pathname, href: target.href, timer: 0 };
       state.timer = window.setTimeout(() => {
-        toast.info("Taking longer than usual - retrying");
-        router.refresh();
-        state.fallback = window.setTimeout(() => window.location.assign(state.href), 5_000);
-      }, 10_000);
+        setStalledNavigation({ href: state.href });
+      }, 8_000);
       pendingNavigation.current = state;
     };
     const versionMismatch = (message: string) => {
@@ -76,7 +78,25 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
     window.clearTimeout(pendingNavigation.current.timer);
     if (pendingNavigation.current.fallback !== undefined) window.clearTimeout(pendingNavigation.current.fallback);
     pendingNavigation.current = null;
+    setStalledNavigation(null);
   }, [path]);
+
+  useEffect(() => {
+    const warm = () => {
+      lastWarmAt.current = Date.now();
+      void fetch("/api/warm", { method: "GET", cache: "no-store" }).catch(() => undefined);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || Date.now() - lastWarmAt.current < 5 * 60_000) return;
+      warm();
+      if (currentPath.current === "/leads" && !pendingNavigation.current) {
+        window.dispatchEvent(new Event("atpl:leads-refresh"));
+      }
+    };
+    warm();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+  }, []);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -98,7 +118,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   return (
     <div className="flex min-h-dvh w-full max-w-full overflow-x-hidden bg-muted">
       <aside className="hidden w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:h-dvh lg:overflow-y-auto">
-        <Link href="/home" className="flex items-center gap-2 px-6 py-6">
+        <Link href="/home" prefetch className="flex items-center gap-2 px-6 py-6">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
             <Image src="/brand/atpl-mark-512.png" width={40} height={40} sizes="40px" quality={100} alt="ATPL mark" priority />
           </span>
@@ -108,11 +128,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           </div>
         </Link>
         <nav className="mt-2 flex flex-col gap-1 px-3">
-          <Link href="/home" className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
+          <Link href="/home" prefetch className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
             <PendingNavContent icon={Home} label="Home" />
           </Link>
           {items.map((n) => (
-            <Link key={n.to} href={n.to}
+            <Link key={n.to} href={n.to} prefetch
               className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors ${path === n.to ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
               <PendingNavContent icon={n.icon} label={n.label} />
             </Link>
@@ -122,7 +142,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
 
       <div className="flex min-w-0 flex-1 flex-col lg:ml-[240px]">
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
-          <Link href="/home" className="flex min-w-0 items-center gap-2 lg:hidden">
+          <Link href="/home" prefetch className="flex min-w-0 items-center gap-2 lg:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
                 <Image src="/brand/atpl-mark-512.png" width={40} height={40} sizes="40px" quality={100} alt="ATPL mark" priority />
               </span>
@@ -143,6 +163,13 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           </div>
         </header>
         <main className="mx-auto min-w-0 w-full max-w-[1280px] flex-1 overflow-visible px-4 pb-28 pt-5 md:px-8 md:pb-10">
+          {stalledNavigation && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+            <span>Taking longer than usual, retry.</span>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" className="h-10" onClick={() => router.refresh()}>Retry</Button>
+              <Button type="button" className="h-10" onClick={() => window.location.assign(stalledNavigation.href)}>Open page</Button>
+            </div>
+          </div>}
           {newVersionAvailable && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
             <span className="inline-flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" />A new version is available. Reload to continue safely.</span>
             <Button type="button" variant="outline" className="h-10" onClick={() => window.location.reload()}><RotateCw className="h-4 w-4" /> Reload</Button>
@@ -155,11 +182,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
 
       {items.length > 0 && (
         <nav className="fixed inset-x-0 bottom-0 z-30 grid min-h-[64px] border-t border-border bg-card px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0,1fr))` }}>
-          <Link href="/home" className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
+          <Link href="/home" prefetch className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
             <PendingNavContent icon={Home} label="Home" vertical />
           </Link>
           {items.map((n) => (
-            <Link key={n.to} href={n.to}
+            <Link key={n.to} href={n.to} prefetch
               className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
               <PendingNavContent icon={n.icon} label={n.short} vertical />
             </Link>

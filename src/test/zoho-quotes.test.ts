@@ -56,6 +56,7 @@ describe("Zoho quotation creation", () => {
     });
     const list = vi.fn(async () => []);
     vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
       ZohoError: class extends Error {},
       hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
@@ -155,6 +156,7 @@ describe("Zoho quotation creation", () => {
       return [];
     });
     vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
       ZohoError: class extends Error {},
       hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
@@ -193,6 +195,7 @@ describe("Zoho quotation creation", () => {
       return [];
     });
     vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
       ZohoError: class extends Error {},
       hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
@@ -247,7 +250,8 @@ describe("Zoho quotation creation", () => {
         })],
       },
     }));
-    expect(errorLog).toHaveBeenCalledWith("[zoho] quote was saved but its lead-history note failed", expect.objectContaining({
+    expect(errorLog).toHaveBeenCalledWith("[zoho] primary change succeeded but history note failed", expect.objectContaining({
+      action: "create quote",
       quoteId: "quote-1",
       leadId: "lead-1",
       message: "history note permission missing",

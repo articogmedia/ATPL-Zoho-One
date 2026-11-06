@@ -1,5 +1,7 @@
 import { warmZohoToken, ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
+import { crm } from "@/lib/crm";
+import { env } from "@/lib/env";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
@@ -7,8 +9,17 @@ export const maxDuration = 20;
 
 export async function GET() {
   const started = Date.now();
+  if (env().DATA_SOURCE !== "zoho") return new Response(null, { status: 204 });
   try {
     await warmZohoToken();
+    const cacheResults = await Promise.allSettled([crm().listProducts(), crm().listAssignableUsers()]);
+    for (const result of cacheResults) {
+      if (result.status === "rejected") {
+        console.warn("[warm] a read-only cache could not be refreshed", {
+          message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        });
+      }
+    }
     console.info(`[warm] zoho token ${Date.now() - started}ms`);
     return new Response(null, { status: 200 });
   } catch (error) {

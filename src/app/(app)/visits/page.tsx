@@ -23,7 +23,11 @@ export default async function VisitsPage() {
   });
   const repo = crm();
   const executivePerformance = user.role === "Sales Executive";
+  const canFilterByExecutive = user.role === "Manager";
   const dataDeadline = Date.now() + 12_000;
+  const assignableUsersPromise = canFilterByExecutive
+    ? withPageTimeout(repo.listAssignableUsers(), 2_500)
+    : Promise.resolve([]);
   let baseResults: [
     PromiseSettledResult<Awaited<ReturnType<typeof repo.listVisits>>>,
     PromiseSettledResult<Awaited<ReturnType<typeof repo.listAssignableUsers>>>,
@@ -31,7 +35,7 @@ export default async function VisitsPage() {
   try {
     baseResults = await withPageTimeout(Promise.allSettled([
       repo.listVisits(),
-      repo.listAssignableUsers(),
+      assignableUsersPromise,
     ]), Math.max(1, dataDeadline - Date.now()));
   } catch (error) {
     console.error("[page] visits data load timed out", { message: error instanceof Error ? error.message : String(error) });
@@ -65,6 +69,7 @@ export default async function VisitsPage() {
     ? `Unable to load Zoho work items: ${baseResults[0].reason instanceof Error ? baseResults[0].reason.message : String(baseResults[0].reason)}`
     : repo.getVisitsWarning?.() ?? undefined;
   const assignableUsers = baseResults[1].status === "fulfilled" ? baseResults[1].value : [];
+  const assignableUsersUnavailable = baseResults[1].status === "rejected" || assignableUsers.length === 0;
   const leads = performanceResults[0]?.status === "fulfilled" ? performanceResults[0].value : [];
   const quotes = performanceResults[1]?.status === "fulfilled" ? performanceResults[1].value : [];
   const calls = callsResult?.status === "fulfilled" ? callsResult.value : [];
@@ -83,6 +88,7 @@ export default async function VisitsPage() {
         user={{ id: user.id, name: user.name, role: user.role }}
         visits={visibleFor(user, visits)}
         executives={assignableUsers.map((u) => u.name)}
+        executivesUnavailable={assignableUsersUnavailable}
         today={todayIST()}
         performance={user.role === "Sales Executive" ? { week: performance("week"), month: performance("month") } : undefined}
         callWarning={callWarning}

@@ -3,7 +3,7 @@ import { currentUser } from "@/lib/auth/guard";
 import { env } from "@/lib/env";
 import { LEAD_SOURCES } from "@/lib/domain";
 import { FIELD, ROLE_BY_ZOHO_NAME, WRITE_LEAD_STATUS } from "@/lib/zoho/fields";
-import { hosts, zoho, zohoList } from "@/lib/zoho/client";
+import { hosts, zoho, zohoList, zohoRuntimeStatus } from "@/lib/zoho/client";
 import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { mapRole, parseRoleOverrides, type ZLead, type ZUser } from "@/lib/zoho/mappers";
@@ -48,7 +48,12 @@ export async function GET() {
 
     const configuration = await check(() => {
       const e = env();
-      return { dataSource: e.DATA_SOURCE, sandboxFlag: e.ZOHO_SANDBOX, apiHost: hosts().api };
+      return {
+        dataSource: e.DATA_SOURCE,
+        sandboxFlag: e.ZOHO_SANDBOX,
+        apiHost: hosts().api,
+        sharedTokenStore: zohoRuntimeStatus(),
+      };
     });
     if (isError(configuration)) return NextResponse.json(configuration, { status: 500 });
 

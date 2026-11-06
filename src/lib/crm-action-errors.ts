@@ -43,6 +43,7 @@ export function friendlyZohoError(
     return `${field ? `Required field missing: ${field}` : "A required field is missing."}${suffix}`;
   }
   if (code === "INVALID_PICKLIST" || (field === "Lead_Source" && (code === "INVALID_DATA" || responseMessage.includes("picklist")))) {
+    if (message?.startsWith("Lead source \"") && message.includes("is not set up in Zoho.")) return `${message}${suffix}`;
     return `Lead source is not valid in CRM.${suffix}`;
   }
   if (code === "INVALID_DATA") {
