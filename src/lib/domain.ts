@@ -15,14 +15,14 @@ export const LEAD_STATUSES: LeadStatus[] = [
   "Junk Lead", "Lost Lead", "Not Contacted", "Pre-Qualified", "Not Qualified",
   "Not Responsive", "Assigned to Sales", "Site Visit Scheduled", "Quotation Sent", "Won",
 ];
-export type LeadSource = "Meta Ads" | "Google Ads" | "Direct Call";
-export const LEAD_SOURCES: LeadSource[] = ["Meta Ads", "Google Ads", "Direct Call"];
+export type LeadSource = "Meta Ads" | "Google Ads" | "Direct Call" | "Walk-in" | "Referral" | "Website" | "Other";
+export const LEAD_SOURCES: LeadSource[] = ["Meta Ads", "Google Ads", "Direct Call", "Walk-in", "Referral", "Website", "Other"];
 
 export type LeadUpdate = { date: string; user: string; note: string };
 export type CallOutcome = "Connected" | "No Answer" | "Busy" | "Wrong Number" | "Call Back Later";
 export type CallActivity = { id: string; leadId: string; ownerId: string; date: string };
 export type LeadTimelineItem = {
-  date: string; user: string; kind: "Call" | "Note" | "Task"; title: string; detail: string;
+  date: string; user: string; kind: "Call" | "Note" | "Task" | "Event"; title: string; detail: string;
 };
 
 export type Lead = {
@@ -90,6 +90,7 @@ export type Visit = {
   module?: string;
   leadId: string;
   customer: string;
+  phone?: string;
   address: string;
   area: string;
   executive: string;

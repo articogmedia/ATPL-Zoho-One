@@ -80,7 +80,7 @@ Different API names? Change them in `src/lib/zoho/fields.ts` — nothing else.
 ## 4. Pick-list values
 
 - **Leads → Lead Status:** Fresh Lead, Attempted to Contact, Callback in Future, Contacted, Assigned to Sales, Junk Lead, Site Visit Scheduled, Quotation Sent, Won, Lost Lead.
-- **Leads → Lead Source:** Meta Ads, Google Ads, Direct Call (other values such as "Facebook" are folded in automatically).
+- **Leads → Lead Source:** Meta Ads, Google Ads, Direct Call, Walk-in, Referral, Website, Other. Portal sources are mapped to configured Zoho values; if a source is absent, the portal logs a warning and uses the configured `Other` value.
 - Meta/Google lead forms keep feeding Zoho natively (plan §P2). Map their source to the values above and set new-lead default status to **Fresh Lead**.
 
 ## 5. Users and roles

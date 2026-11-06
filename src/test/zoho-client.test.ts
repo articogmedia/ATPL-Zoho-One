@@ -22,10 +22,13 @@ beforeEach(async () => {
 });
 
 const leadSourceSettings = {
-  fields: [{
-    api_name: "Lead_Source",
-    pick_list_values: ["Meta Ads", "Google Ads", "Direct Call"].map((actual_value) => ({ actual_value })),
-  }],
+  fields: [
+    { api_name: "City", field_label: "City" },
+    {
+      api_name: "Lead_Source",
+      pick_list_values: ["Meta Ads", "Google Ads", "Direct Call", "Other"].map((actual_value) => ({ actual_value })),
+    },
+  ],
 };
 
 describe("Zoho products catalogue", () => {
@@ -181,7 +184,7 @@ describe("Zoho lead actions", () => {
     invalidate("users", "leads", "visits");
     const { zohoRepository } = await import("@/lib/zoho/repository");
 
-    await zohoRepository.assignLead("lead-1", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
+    await zohoRepository.assignLead("lead-1", "1394515000001147001", { id: "manager-1", name: "Reshma", role: "Manager" });
 
     expect(writes[0]).toMatchObject({
       method: "PUT", path: "/Leads/lead-1",
@@ -215,7 +218,7 @@ describe("Zoho lead actions", () => {
     const { invalidate } = await import("@/lib/cache");
     invalidate("users", "leads", "visits");
     const { zohoRepository } = await import("@/lib/zoho/repository");
-    await zohoRepository.assignLead("lead-2", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
+    await zohoRepository.assignLead("lead-2", "1394515000001147001", { id: "manager-1", name: "Reshma", role: "Manager" });
     expect(writes[0]?.record).toEqual({ Owner: { id: "1394515000001147001" } });
   });
 
@@ -236,7 +239,7 @@ describe("Zoho lead actions", () => {
     const { invalidate } = await import("@/lib/cache");
     invalidate("leads", "users");
     const { zohoRepository } = await import("@/lib/zoho/repository");
-    const result = await zohoRepository.assignLead("lead-partial", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
+    const result = await zohoRepository.assignLead("lead-partial", "exec-1", { id: "manager-1", name: "Reshma", role: "Manager" });
     expect(result.owner).toBe("Pavan");
     expect(result.taskWarning).toContain("Follow-up task creation failed");
   });
@@ -255,7 +258,7 @@ describe("Zoho lead actions", () => {
     const { invalidate } = await import("@/lib/cache");
     invalidate("leads", "users");
     const { zohoRepository } = await import("@/lib/zoho/repository");
-    const result = await zohoRepository.assignLead("lead-dup", "Pavan", { id: "manager-1", name: "Reshma", role: "Manager" });
+    const result = await zohoRepository.assignLead("lead-dup", "exec-1", { id: "manager-1", name: "Reshma", role: "Manager" });
     expect(result.taskCreated).toBe(false);
     expect(write.mock.calls.some(([, path]) => path === "/Tasks")).toBe(false);
   });
@@ -288,7 +291,7 @@ describe("Zoho lead actions", () => {
     }));
     vi.doMock("@/lib/crm", () => ({ crm: vi.fn() }));
     const { reassignLeadAction, deleteLeadAction } = await import("@/app/actions/crm");
-    await expect(reassignLeadAction({ id: "lead-1", assignedTo: "Manager" })).resolves.toMatchObject({
+    await expect(reassignLeadAction({ id: "lead-1", assignedToId: "manager-1" })).resolves.toMatchObject({
       ok: false, error: "Only managers can reassign leads.",
     });
     await expect(deleteLeadAction({ id: "lead-1" })).resolves.toMatchObject({
@@ -384,7 +387,7 @@ describe("Zoho lead owner fallbacks", () => {
     await zohoRepository.createLead(
       { name: "Executive lead", company: "", phone: "9999999998", area: "", source: "Direct Call", remarks: "" },
       { id: "exec-1", name: "Executive", role: "Sales Executive" },
-      "Other Executive",
+      "exec-1",
     );
 
     expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.objectContaining({
@@ -419,7 +422,7 @@ describe("Zoho lead owner fallbacks", () => {
       await zohoRepository.createLead(
         { name: "New lead", company: "", phone: "9999999999", area: "", source: "Direct Call", remarks: "" },
         { id: "actor-1", name: "Manager", role: "Manager" },
-        "Executive",
+        "exec-1",
       );
 
       expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.anything(), { trigger: ["workflow"] });
@@ -505,5 +508,124 @@ describe("Zoho lead owner fallbacks", () => {
         null,
       )).resolves.toMatchObject({ company: "New lead", assignedTo: null });
       expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.not.objectContaining({ Owner: expect.anything() }), { trigger: ["workflow"] });
+    });
+
+    it("falls back to the configured Other source and sends a valid City field and 10-digit mobile", async () => {
+      const settings = {
+        fields: [
+          { api_name: "City", field_label: "City" },
+          { api_name: "Lead_Source", pick_list_values: [{ actual_value: "Other" }] },
+        ],
+      };
+      const write = vi.fn(async () => "lead-1");
+      vi.doMock("@/lib/zoho/client", () => ({
+        ZohoError: class extends Error {},
+        zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? settings : ({ data: [] })),
+        zohoList: vi.fn(async () => []),
+        zohoWrite: write,
+      }));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const { invalidate } = await import("@/lib/cache");
+      invalidate("users", "leads");
+      const { zohoRepository } = await import("@/lib/zoho/repository");
+
+      await zohoRepository.createLead(
+        { name: "Fallback source lead", company: "", phone: "+91 98765-43210", area: "Madhapur", source: "Meta Ads", remarks: "" },
+        { id: "manager-1", name: "Manager", role: "Manager" },
+        null,
+      );
+
+      expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.objectContaining({
+        Last_Name: "Fallback source lead",
+        Company: "Fallback source lead",
+        Mobile: "9876543210",
+        City: "Madhapur",
+        Lead_Source: "Other",
+      }), { trigger: ["workflow"] });
+      expect(warn).toHaveBeenCalledWith("[zoho] requested Lead_Source is not configured; using Other", expect.any(Object));
+      warn.mockRestore();
+    });
+});
+
+describe("Zoho write error handling", () => {
+      const configureZoho = () => {
+        Reflect.deleteProperty(globalThis, "__atplZohoToken");
+        Reflect.deleteProperty(globalThis, "__atplZohoRefresh");
+        Reflect.deleteProperty(globalThis, "__atplZohoForcedRefresh");
+        process.env.ZOHO_CLIENT_ID = "test-client";
+        process.env.ZOHO_CLIENT_SECRET = "test-secret";
+        process.env.ZOHO_REFRESH_TOKEN = "test-refresh-token";
+        process.env.ZOHO_SANDBOX = "true";
+        process.env.ZOHO_DC = "in";
+      };
+
+      it("reports HTTP-200 per-record failures with a ref and masked request payload", async () => {
+        configureZoho();
+        const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+          const url = String(input);
+          if (url.includes("/oauth/v2/token")) {
+            return new Response(JSON.stringify({ access_token: "test-access-token", expires_in: 3600 }), { status: 200 });
+          }
+          return new Response(JSON.stringify({
+            data: [{
+              status: "error", code: "DUPLICATE_DATA", message: "duplicate data",
+              details: { api_name: "Mobile", expected_data_type: "text" },
+            }],
+          }), { status: 200 });
+        });
+        const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        try {
+          const { zohoWrite } = await import("@/lib/zoho/client");
+          await expect(zohoWrite("POST", "/Leads", {
+            Last_Name: "Test lead", Mobile: "9876543210", Phone: "9876543210",
+          }, { trigger: ["workflow"] })).rejects.toMatchObject({
+            status: 200,
+            code: "DUPLICATE_DATA",
+            reference: expect.stringMatching(/^[A-F0-9]{12}$/),
+          });
+
+          const logCall = log.mock.calls.find(([message]) => message === "[zoho] write rejected");
+          expect(logCall?.[1]).toMatchObject({
+            status: 200,
+            recordStatus: "error",
+            code: "DUPLICATE_DATA",
+            api_name: "Mobile",
+            expected_data_type: "text",
+            payload: {
+              data: [{ Mobile: "******10", Phone: "******10", Last_Name: "Test lead" }],
+              trigger: ["workflow"],
+            },
+          });
+          expect(logCall?.[1]).toHaveProperty("reference");
+        } finally {
+          fetchMock.mockRestore();
+          log.mockRestore();
+        }
+      });
+
+      it("refreshes and retries once when Zoho returns INVALID_TOKEN in a 200 response", async () => {
+        configureZoho();
+        let apiRequests = 0;
+        let tokenRequests = 0;
+        const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+          const url = String(input);
+          if (url.includes("/oauth/v2/token")) {
+            tokenRequests += 1;
+            return new Response(JSON.stringify({ access_token: `access-${tokenRequests}`, expires_in: 3600 }), { status: 200 });
+          }
+          apiRequests += 1;
+          if (apiRequests === 1) {
+            return new Response(JSON.stringify({ code: "INVALID_TOKEN", message: "Access token expired" }), { status: 200 });
+          }
+          return new Response(JSON.stringify({ data: [{ status: "success", code: "SUCCESS", details: { id: "lead-1" } }] }), { status: 200 });
+        });
+        try {
+          const { zohoWrite } = await import("@/lib/zoho/client");
+          await expect(zohoWrite("POST", "/Leads", { Last_Name: "Test lead" })).resolves.toBe("lead-1");
+          expect(apiRequests).toBe(2);
+          expect(tokenRequests).toBe(2);
+        } finally {
+          fetchMock.mockRestore();
+        }
     });
 });

@@ -43,9 +43,11 @@ export const mockRepository: CrmRepository = {
       throw new Error("Duplicate lead");
     }
     const selfAssigned = actor.role === "Sales Executive";
+    const assignee = assignTo ? MOCK_USERS.find((user) => String(user.id) === String(assignTo)) : undefined;
+    if (assignTo && !assignee) throw new Error("The selected owner is not an active assignable team member.");
     const lead: Lead = {
-      ...input, id: `L${101 + state.leads.length}`, status: selfAssigned ? "Assigned to Sales" : "Fresh Lead",
-      assignedTo: selfAssigned ? actor.name : assignTo, assignedToId: selfAssigned ? actor.id : undefined,
+      ...input, id: `L${101 + state.leads.length}`, status: selfAssigned || assignee ? "Assigned to Sales" : "Fresh Lead",
+      assignedTo: (selfAssigned ? actor.name : assignee?.name) ?? null, assignedToId: selfAssigned ? actor.id : assignee?.id,
       source: selfAssigned ? "Direct Call" : input.source,
       createdOn: today(), address: "", touchedBy: [actor.name],
     };
@@ -53,14 +55,17 @@ export const mockRepository: CrmRepository = {
     note(lead.id, actor.name, `Lead created from ${input.source}`);
     return lead;
   },
-  async assignLead(id, assignee, actor) {
+  async assignLead(id, assigneeId, actor) {
     const lead = state.leads.find((item) => item.id === id);
     if (!lead) throw new Error("Lead not found");
-    lead.assignedTo = assignee;
+    const assignee = MOCK_USERS.find((user) => String(user.id) === String(assigneeId));
+    if (!assignee) throw new Error("The selected owner is not an active assignable team member.");
+    lead.assignedTo = assignee.name;
+    lead.assignedToId = assignee.id;
     if (lead.status === "Fresh Lead") lead.status = ASSIGNED_STAGE;
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
-    note(id, actor.name, `Assigned to ${assignee} by ${actor.name}`);
-    return { owner: assignee, status: lead.status, taskCreated: true };
+    note(id, actor.name, `Assigned to ${assignee.name} by ${actor.name}`);
+    return { owner: assignee.name, status: lead.status, taskCreated: true };
   },
   async fixAssignedLeads(actor) {
     if (actor.role !== "Manager") throw new Error("Only managers can fix assigned leads.");
@@ -140,7 +145,12 @@ export const mockRepository: CrmRepository = {
     return q;
   },
 
-  async listVisits() { return state.visits; },
+  async listVisits() {
+    return state.visits.map((visit) => ({
+      ...visit,
+      phone: state.leads.find((lead) => lead.id === visit.leadId)?.phone ?? "",
+    }));
+  },
   async getVisit(id) { return state.visits.find((v) => v.id === id) ?? null; },
   async createVisit(input, actor) {
     const lead = state.leads.find((l) => l.id === input.leadId);

@@ -323,7 +323,11 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
             </div>}
             <div className="flex gap-2">
               <Button type="button" className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>{pending ? "Adding…" : "Add customer"}</Button>
-              <Button type="button" variant="ghost" onClick={() => { setAdding(false); setDuplicateCustomer(null); }} disabled={pending}>Cancel</Button>
+              <Button type="button" variant="ghost" onClick={() => {
+                setAdding(false);
+                setDuplicateCustomer(null);
+                setNl({ name: "", company: "", phone: "", area: "", source: "Direct Call" });
+              }} disabled={pending}>Cancel</Button>
             </div>
           </div>
         ) : (

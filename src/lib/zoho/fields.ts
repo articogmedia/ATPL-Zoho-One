@@ -4,14 +4,23 @@ const LEAD_SOURCE_ALIASES: Record<LeadSource, string[]> = {
   "Meta Ads": ["meta ads", "facebook ads", "facebook", "instagram", "advertisement", "social media"],
   "Google Ads": ["google ads", "google adwords", "adwords", "google", "web research"],
   "Direct Call": ["direct call", "cold call", "telephone", "phone", "call"],
+  "Walk-in": ["walk in", "walk-in", "store visit", "in person"],
+  Referral: ["referral", "employee referral", "customer referral", "partner referral"],
+  Website: ["website", "web site", "website inquiry", "online"],
+  Other: ["other", "others"],
 };
 
-export function zohoLeadSource(source: LeadSource, configuredValues: string[]): string | null {
+export function zohoLeadSource(source: LeadSource, configuredValues: string[], fallbackToOther = true): string | null {
   const normalize = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const values = configuredValues.filter((value) => !!value.trim()).map((value) => ({ value, normalized: normalize(value) }));
   const aliases = LEAD_SOURCE_ALIASES[source].map(normalize);
-  return values.find(({ normalized }) => aliases.includes(normalized))?.value
+  const match = values.find(({ normalized }) => aliases.includes(normalized))?.value
     ?? values.find(({ normalized }) => aliases.some((alias) => normalized.includes(alias) || alias.includes(normalized)))?.value
+    ?? null;
+  if (match || !fallbackToOther || source === "Other") return match;
+  const otherAliases = LEAD_SOURCE_ALIASES.Other.map(normalize);
+  return values.find(({ normalized }) => otherAliases.includes(normalized))?.value
+    ?? values.find(({ normalized }) => otherAliases.some((alias) => normalized.includes(alias) || alias.includes(normalized)))?.value
     ?? null;
 }
 
@@ -77,7 +86,7 @@ export const CALL_STATUS_BY_OUTCOME: Record<CallOutcome, LeadStatus> = {
   "No Answer": "Attempted to Contact",
   Busy: "Attempted to Contact",
   "Call Back Later": "Callback in Future",
-  "Wrong Number": "Junk Lead",
+  "Wrong Number": "Not Responsive",
 };
 
 /** Tolerant READ mapping, so Zoho's stock statuses still land in a sensible bucket. */

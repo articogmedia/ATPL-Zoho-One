@@ -125,6 +125,7 @@ export async function listSiteVisits(schema: SiteVisitsSchema, leads: ReadonlyMa
       module: schema.module,
       leadId: related?.id ?? "",
       customer: lead ? lead.company || lead.name : related?.name ?? "",
+      phone: lead?.phone ?? "",
       address: String(schema.address ? record[schema.address] ?? lead?.address ?? "" : lead?.address ?? ""),
       area: lead?.area ?? "",
       executive: owner?.name ?? "",

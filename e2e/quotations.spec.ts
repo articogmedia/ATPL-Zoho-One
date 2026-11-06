@@ -49,19 +49,38 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
     await expect(offerHeading).toBeInViewport();
 
+    const pdfResponsePromise = page.waitForResponse((response) =>
+      response.url().includes("/api/quotations/pdf") && response.request().method() === "POST",
+    );
     const pdfDownloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "Download PDF" }).click();
+    const pdfResponse = await pdfResponsePromise;
+    expect(pdfResponse.ok()).toBe(true);
+    expect(pdfResponse.headers()["content-type"]).toContain("application/pdf");
     const pdfDownload = await pdfDownloadPromise;
     expect(pdfDownload.suggestedFilename()).toMatch(/^offer-.*\.pdf$/);
     const pdfPath = await pdfDownload.path();
     if (!pdfPath) throw new Error("The generated PDF was not saved.");
-    expect((await readFile(pdfPath)).subarray(0, 4).toString("ascii")).toBe("%PDF");
+    const pdfBytes = await readFile(pdfPath);
+    expect(pdfBytes.length).toBeGreaterThan(0);
+    expect(pdfBytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
 
     await page.context().route("https://wa.me/**", (route) => route.fulfill({ status: 200, body: "ok" }));
+    const sharePdfResponsePromise = page.waitForResponse((response) =>
+      response.url().includes("/api/quotations/pdf") && response.request().method() === "POST",
+    );
+    const whatsappDownloadPromise = page.waitForEvent("download");
     const whatsappPopupPromise = page.waitForEvent("popup");
     await page.getByRole("button", { name: "WhatsApp" }).click();
+    const sharePdfResponse = await sharePdfResponsePromise;
+    expect(sharePdfResponse.ok()).toBe(true);
+    expect(sharePdfResponse.headers()["content-type"]).toContain("application/pdf");
     const whatsappPopup = await whatsappPopupPromise;
     await expect.poll(() => whatsappPopup.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
+    const whatsappDownload = await whatsappDownloadPromise;
+    const whatsappPdfPath = await whatsappDownload.path();
+    if (!whatsappPdfPath) throw new Error("The PDF for WhatsApp sharing was not saved.");
+    expect((await readFile(whatsappPdfPath)).length).toBeGreaterThan(0);
   });
 }
 
@@ -74,12 +93,17 @@ test("new quotation customer can be cancelled or created and selected", async ({
 
   await page.getByRole("button", { name: "New customer" }).click();
   await expect(page.getByLabel("Contact name")).toBeVisible();
+  await page.getByLabel("Contact name").fill("Cancelled customer");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByLabel("Contact name")).toHaveCount(0);
 
   await page.getByRole("button", { name: "New customer" }).click();
+  await expect(page.getByLabel("Contact name")).toHaveValue("");
   await page.getByLabel("Contact name").fill("E2E Quotation Customer");
   await page.getByLabel("Mobile number").fill("8222222299");
+  await page.getByRole("combobox", { name: "Source", exact: true }).click();
+  await page.getByRole("option", { name: "Website", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Source", exact: true })).toContainText("Website");
   await page.getByRole("button", { name: "Add customer" }).click();
   await expect(page.locator("#quote-step-customer")).toHaveCount(0);
   await expect(page.locator("#quote-step-products")).toBeVisible();

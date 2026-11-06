@@ -8,7 +8,7 @@ import { zoho, zohoList, zohoWrite, ZohoError } from "./client";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
-  type ZCall, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
+  type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
 import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitUpdate } from "./site-visits";
 
@@ -27,8 +27,10 @@ export function leadPhoneSearchCriteria(normalizedPhone: string): string {
   );
   return `(${fields.join("or")})`;
 }
-const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description", ...Object.values(FIELD.task)];
-const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result"];
+const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description", "Created_Time", ...Object.values(FIELD.task)];
+const NOTE_FIELDS = ["Note_Title", "Note_Content", "Created_Time", "Owner", "Created_By"];
+const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result", "Description"];
+const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", "Description"];
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
@@ -36,22 +38,44 @@ const LONG = 600_000;   // users, products
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
 const leadCreateLocks = new Map<string, Promise<unknown>>();
-const leadSourceValues = async () => cached("zoho:lead-source-values", LONG, async () => {
+const leadSchema = async () => cached("zoho:lead-schema", LONG, async () => {
   const response = await zoho<{
-    fields?: { api_name?: string; pick_list_values?: { actual_value?: string; display_value?: string }[] }[];
+    fields?: {
+      api_name?: string;
+      field_label?: string;
+      pick_list_values?: { actual_value?: string; display_value?: string }[];
+    }[];
   }>("GET", "/settings/fields", { query: { module: "Leads" } });
-  return response?.fields?.find((field) => field.api_name === "Lead_Source")?.pick_list_values
-    ?.map((item) => item.actual_value?.trim() || item.display_value?.trim() || "")
-    .filter(Boolean) ?? [];
+  const fields = response?.fields ?? [];
+  return {
+    fields,
+    sourceValues: fields.find((field) => field.api_name === "Lead_Source")?.pick_list_values
+      ?.map((item) => item.actual_value?.trim() || item.display_value?.trim() || "")
+      .filter(Boolean) ?? [],
+    areaField: fields.find((field) => field.api_name === "City")?.api_name
+      ?? fields.find((field) => field.api_name === "Area" || field.field_label?.trim().toLowerCase() === "area")?.api_name
+      ?? null,
+  };
 });
-const sourceValueForZoho = async (source: Lead["source"]) => {
-  const values = await leadSourceValues();
-  const value = zohoLeadSource(source, values);
+const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
+  const exactValue = zohoLeadSource(source, sourceValues, false);
+  const value = exactValue ?? zohoLeadSource("Other", sourceValues, false);
+  if (!exactValue && value) {
+    console.warn("[zoho] requested Lead_Source is not configured; using Other", {
+      requestedSource: source,
+      selectedSource: value,
+      configuredValues: sourceValues,
+    });
+  }
   if (!value) {
+    console.warn("[zoho] no configured Lead_Source picklist match", {
+      requestedSource: source,
+      configuredValues: sourceValues,
+    });
     throw new ZohoError(
-      `The Zoho Lead_Source picklist has no value configured for "${source}". Add a matching value in Zoho CRM.`,
+      `The Zoho Lead_Source picklist has no matching value for "${source}" or "Other".`,
       400, "INVALID_PICKLIST", "Lead_Source", source, "GET /settings/fields",
-      { availableValues: values },
+      { availableValues: sourceValues },
     );
   }
   return value;
@@ -97,6 +121,11 @@ const assignableIds = async () => new Set((await listAssignableUsers()).map((u) 
 const userByName = async (name: string) => {
   const u = (await users()).find((x) => x.name === name);
   if (!u) throw new ZohoError(`No active Zoho user named "${name}"`);
+  return u;
+};
+const userById = async (id: string) => {
+  const u = (await listAssignableUsers()).find((x) => String(x.id) === String(id));
+  if (!u) throw new ZohoError("The selected owner is not an active assignable Zoho user.", 400, "INVALID_OWNER", "Owner", id);
   return u;
 };
 
@@ -228,20 +257,28 @@ export const zohoRepository: CrmRepository = {
       if (!forceCreate && await this.findLeadByPhone(input.phone)) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
     const executiveCreatesLead = actor.role === "Sales Executive";
     const owner = executiveCreatesLead
-      ? await userByName(actor.name)
-      : assignTo ? await userByName(assignTo) : null;
+      ? await userById(actor.id)
+      : assignTo ? await userById(assignTo) : null;
     const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
-    const leadSource = await sourceValueForZoho(input.source);
+    const metadata = await leadSchema();
+    const leadSource = sourceValueForZoho(input.source, metadata.sourceValues);
+    const mobile = normalizePhone(input.phone);
+    if (!/^\d{10}$/.test(mobile)) {
+      throw new ZohoError("Mobile number must contain exactly 10 digits.", 400, "INVALID_DATA", "Mobile");
+    }
     const record: Record<string, unknown> = {
       Last_Name: input.name.trim(),
       Company: input.company.trim() || input.name.trim(),
-      Mobile: input.phone,
-      ...(input.area.trim() ? { City: input.area.trim() } : {}),
+      Mobile: mobile,
       Lead_Source: leadSource,
       Lead_Status: WRITE_LEAD_STATUS[status],
       ...(input.remarks.trim() ? { Description: input.remarks.trim() } : {}),
       ...(owner ? { Owner: { id: owner.id } } : {}),
     };
+    if (input.area.trim()) {
+      if (metadata.areaField) record[metadata.areaField] = input.area.trim();
+      else console.warn("[zoho] Area omitted because Leads has no City or Area field", { requestedField: "City/Area" });
+    }
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
     try {
       await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
@@ -300,11 +337,11 @@ export const zohoRepository: CrmRepository = {
     }
   },
 
-  async assignLead(id, assignee, actor) {
+  async assignLead(id, assigneeId, actor) {
     if (actor.role !== "Manager" && actor.role !== "Calling Team") throw new ZohoError("Only managers and the calling team can assign leads.");
     const current = await this.getLead(id);
     if (!current) throw new ZohoError("Lead not found", 404);
-    const owner = await userByName(assignee);
+    const owner = await userById(assigneeId);
     const nextStatus = current.status === "Fresh Lead" ? ASSIGNED_STAGE : current.status;
     const record = {
       Owner: { id: owner.id },
@@ -438,7 +475,7 @@ export const zohoRepository: CrmRepository = {
     if (p.company !== undefined && p.company.trim() !== current.company) { record.Company = p.company.trim() || "-"; parts.push("Company updated"); }
     if (p.phone?.trim() && p.phone.trim() !== current.phone) { record.Mobile = p.phone.trim(); parts.push("Phone updated"); }
     if (p.source && p.source !== current.source) {
-      record.Lead_Source = await sourceValueForZoho(p.source);
+      record.Lead_Source = sourceValueForZoho(p.source, (await leadSchema()).sourceValues);
       parts.push(`Source: ${p.source}`);
     }
 
@@ -487,21 +524,26 @@ export const zohoRepository: CrmRepository = {
 
   async getLeadHistory(id) {
     const json = await zoho<{ data?: ZNote[] }>("GET", `/Leads/${id}/Notes`, {
-      query: { fields: "Note_Content,Created_Time,Created_By", sort_by: "Created_Time", sort_order: "desc", per_page: 50 },
+      query: { fields: NOTE_FIELDS.join(","), sort_by: "Created_Time", sort_order: "desc", per_page: 50 },
     });
     return (json?.data ?? []).map(mapNote);
   },
 
   async getLeadTimeline(id): Promise<LeadTimelineItem[]> {
-    const [notes, calls, tasks] = await Promise.all([
-      zoho<{ data?: ZNote[] }>("GET", `/Leads/${id}/Notes`),
-      zoho<{ data?: ZCall[] }>("GET", `/Leads/${id}/Calls`, { query: { fields: CALL_FIELDS.join(",") } }),
-      zoho<{ data?: ZTask[] }>("GET", `/Leads/${id}/Tasks`, { query: { fields: TASK_FIELDS.join(",") } }),
+    const relatedQuery = (fields: string[]) => ({
+      query: { fields: fields.join(","), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" },
+    });
+    const [notes, calls, tasks, events] = await Promise.all([
+      zoho<{ data?: ZNote[] }>("GET", `/Leads/${id}/Notes`, relatedQuery(NOTE_FIELDS)),
+      zoho<{ data?: ZCall[] }>("GET", `/Leads/${id}/Calls`, relatedQuery(CALL_FIELDS)),
+      zoho<{ data?: ZTask[] }>("GET", `/Leads/${id}/Tasks`, relatedQuery(TASK_FIELDS)),
+      zoho<{ data?: ZEvent[] }>("GET", `/Leads/${id}/Events`, relatedQuery(EVENT_FIELDS)),
     ]);
     const timeline: LeadTimelineItem[] = [
-      ...(notes?.data ?? []).map((n) => ({ date: n.Created_Time?.slice(0, 10) ?? "", user: n.Created_By?.name ?? "", kind: "Note" as const, title: "Note", detail: n.Note_Content ?? "" })),
+      ...(notes?.data ?? []).map((n) => ({ date: n.Created_Time?.slice(0, 10) ?? "", user: n.Owner?.name ?? n.Created_By?.name ?? "", kind: "Note" as const, title: n.Note_Title ?? "Note", detail: n.Note_Content ?? "" })),
       ...(calls?.data ?? []).map((c) => ({ date: c.Call_Start_Time?.slice(0, 10) ?? "", user: c.Owner?.name ?? "", kind: "Call" as const, title: String(c[FIELD.call.result] ?? c.Subject ?? "Call"), detail: String(c.Subject ?? "") })),
       ...(tasks?.data ?? []).map((t) => ({ date: t.Due_Date ?? "", user: t.Owner?.name ?? "", kind: "Task" as const, title: String(t.Subject ?? "Task"), detail: t.Description ?? "" })),
+      ...(events?.data ?? []).map((event) => ({ date: (event.Start_DateTime ?? event.Created_Time)?.slice(0, 10) ?? "", user: event.Owner?.name ?? "", kind: "Event" as const, title: event.Event_Title ?? "Event", detail: event.Description ?? "" })),
     ];
     return timeline.sort((a, b) => b.date.localeCompare(a.date));
   },

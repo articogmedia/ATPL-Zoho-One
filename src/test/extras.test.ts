@@ -72,6 +72,10 @@ describe("zoho mapping", () => {
     expect(normalizeSource("Instagram Lead Ads")).toBe("Meta Ads");
     expect(normalizeSource("Google AdWords")).toBe("Google Ads");
     expect(normalizeSource("Cold Call")).toBe("Direct Call");
+    expect(normalizeSource("Walk-in")).toBe("Walk-in");
+    expect(normalizeSource("Customer Referral")).toBe("Referral");
+    expect(normalizeSource("Website")).toBe("Website");
+    expect(normalizeSource("Other")).toBe("Other");
     expect(normalizeSource(undefined)).toBe("Direct Call");
   });
 
@@ -106,7 +110,7 @@ describe("zoho mapping", () => {
     expect(normalizePhone("+91 98765 43210")).toBe("9876543210");
     expect(CALL_STATUS_BY_OUTCOME).toMatchObject({
       Connected: "Contacted", "No Answer": "Attempted to Contact", Busy: "Attempted to Contact",
-      "Call Back Later": "Callback in Future", "Wrong Number": "Junk Lead",
+      "Call Back Later": "Callback in Future", "Wrong Number": "Not Responsive",
     });
   });
   it("treats assignable owners as assigned and the queue owner as the fresh queue", () => {
@@ -177,11 +181,17 @@ describe("zoho mapping", () => {
     })?.name).toBe("Pavan Kumar");
   });
   it("maps portal sources to values configured in Zoho", () => {
-    const values = ["Advertisement", "Web Research", "Cold Call"];
+    const values = ["Advertisement", "Web Research", "Cold Call", "Walk In", "Referral", "Website", "Other"];
     expect(zohoLeadSource("Meta Ads", values)).toBe("Advertisement");
     expect(zohoLeadSource("Google Ads", values)).toBe("Web Research");
     expect(zohoLeadSource("Direct Call", values)).toBe("Cold Call");
+    expect(zohoLeadSource("Walk-in", values)).toBe("Walk In");
+    expect(zohoLeadSource("Referral", values)).toBe("Referral");
+    expect(zohoLeadSource("Website", values)).toBe("Website");
+    expect(zohoLeadSource("Other", values)).toBe("Other");
     expect(zohoLeadSource("Meta Ads", ["Website"])).toBeNull();
+    expect(zohoLeadSource("Meta Ads", ["Website", "Other"])).toBe("Other");
+    expect(zohoLeadSource("Google Ads", ["Web Research", "Referral"])).toBe("Web Research");
   });
   it("maps tasks to visits using the linked lead's address", () => {
     const lead = mapLead({ id: "L1", Last_Name: "Ramesh", Company: "Clinic", Street: "Plot 45", City: "Kukatpally", Owner: { id: "u1", name: "Anil Kumar" } }, execs);

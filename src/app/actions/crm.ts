@@ -18,24 +18,35 @@ export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; 
 
 class DuplicateLeadError extends Error {
   constructor(readonly lead: DuplicateLeadResult) {
-    super("Mobile number already exists.");
+    super(`Customer already exists. Mobile number is already in use. (Ref: ${newErrorReference()})`);
   }
 }
 
+function isZohoFailure(error: unknown): error is ZohoError {
+  if (error instanceof ZohoError) return true;
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; status?: unknown; code?: unknown };
+  return candidate.name === "ZohoError"
+    || (typeof candidate.code === "string" && (typeof candidate.status === "number" || candidate.status === undefined));
+}
+
 function reportActionFailure(action: string, error: unknown, fallback: string): string {
-  const reference = newErrorReference();
+  const zohoFailure = isZohoFailure(error) ? error : null;
+  const reference = zohoFailure?.reference
+    ? zohoFailure.reference
+    : newErrorReference();
   console.error(`[action] ${action} failed`, {
     reference,
     message: error instanceof Error ? error.message : String(error),
-    zohoStatus: error instanceof ZohoError ? error.status : undefined,
-    zohoCode: error instanceof ZohoError ? error.code : undefined,
-    zohoField: error instanceof ZohoError ? error.field : undefined,
-    zohoDetails: error instanceof ZohoError ? error.details : undefined,
-    zohoOperation: error instanceof ZohoError ? error.operation : undefined,
+    zohoStatus: zohoFailure?.status,
+    zohoCode: zohoFailure?.code,
+    zohoField: zohoFailure?.field,
+    zohoDetails: zohoFailure?.details,
+    zohoOperation: zohoFailure?.operation,
   });
-  return error instanceof ZohoError
-    ? friendlyZohoError(error.status, error.code, error.message, error.field, reference)
-    : `${fallback} (Ref: ${reference})`;
+  return zohoFailure
+    ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference)
+    : `${fallback} Reason: ${error instanceof Error ? "unexpected server error" : "unknown server error"}. (Ref: ${reference})`;
 }
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
@@ -50,7 +61,7 @@ async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Prom
     if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
     if (err instanceof ForbiddenError) return { ok: false, error: err.message };
     if (err instanceof z.ZodError) return { ok: false, error: err.issues[0]?.message ?? "Please check the form values." };
-    if (err instanceof ZohoError) {
+    if (isZohoFailure(err)) {
       const error = reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.");
       if ((err.code === "DUPLICATE_DATA" || err.code === "DUPLICATE_LEAD") && duplicatePhone) {
         const duplicateLookupPhone = duplicatePhone();
@@ -114,12 +125,11 @@ async function ownLeadOrThrow(user: User, leadId: string) {
 
 const newLeadSchema = z.object({
   name: text(120).min(1, "Lead name is required."), company: text(160), phone, area: text(120), source, remarks: text(500),
-  assignedTo: text(120).nullable().optional(), forceCreate: z.boolean().optional(),
+  assignedToId: id.nullable().optional(), forceCreate: z.boolean().optional(),
 });
 
 export async function addLeadAction(input: unknown) {
   let submittedPhone = "";
-  let submittedForceCreate = false;
   return run(async () => {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
@@ -127,18 +137,29 @@ export async function addLeadAction(input: unknown) {
     const duplicate = await crm().findLeadByPhone(data.phone);
     const executive = isExecutive(user);
     const forceCreate = !executive && user.role === "Manager" && data.forceCreate;
-    submittedForceCreate = !!forceCreate;
     if (duplicate && !forceCreate) {
       throw new DuplicateLeadError({ id: duplicate.lead.id, name: duplicate.lead.name, owner: duplicate.lead.assignedTo ?? "Unassigned", status: duplicate.lead.status, matchedField: duplicate.matchedField });
     }
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
-    const assignee = executive ? user.name : data.assignedTo ?? null;
-    if (assignee && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
-    if (assignee && !(await assignableNames()).includes(assignee)) throw new ForbiddenError("Choose a team member.");
-    const lead = await crm().createLead(data, user, assignee, forceCreate);
+    const assigneeId = executive ? user.id : data.assignedToId ?? null;
+    if (assigneeId && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
+    if (assigneeId && !(await crm().listAssignableUsers()).some((member) => String(member.id) === String(assigneeId))) {
+      throw new ForbiddenError("Choose an active team member.");
+    }
+    const lead = await crm().createLead(data, user, assigneeId, forceCreate);
     invalidate("leads", "visits");
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
-  }, () => submittedForceCreate ? "" : submittedPhone);
+  }, () => submittedPhone);
+}
+
+export async function getAssignableUsersAction() {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can load team members.");
+    const members = await crm().listAssignableUsers();
+    if (!members.length) console.warn("[action] no active assignable team members returned by CRM");
+    return members.map(({ id, name }) => ({ id, name }));
+  });
 }
 
 const updateLeadSchema = z.object({
@@ -175,7 +196,7 @@ export async function updateLeadAction(input: unknown) {
   }, () => submittedPhone);
 }
 
-const reassignLeadSchema = z.object({ id, assignedTo: text(120).min(1) });
+const reassignLeadSchema = z.object({ id, assignedToId: id });
 
 export async function reassignLeadAction(input: unknown) {
   return run<{ owner: string; status: string; taskCreated: boolean; taskWarning?: string; zohoUrl?: string }>(async () => {
@@ -183,8 +204,9 @@ export async function reassignLeadAction(input: unknown) {
     if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can reassign leads.");
     const p = reassignLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
-    if (!(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
-    const assignment = await crm().assignLead(p.id, p.assignedTo, user);
+    const assignee = (await crm().listAssignableUsers()).find((member) => String(member.id) === String(p.assignedToId));
+    if (!assignee) throw new ForbiddenError("Choose an active team member.");
+    const assignment = await crm().assignLead(p.id, p.assignedToId, user);
     invalidate("leads");
     return { ...assignment, zohoUrl: zohoLeadUrl(p.id) };
   });
@@ -240,8 +262,8 @@ export async function logCallAction(input: unknown) {
     const user = await requireActionUser("leads");
     const data = callSchema.parse(input);
     await ownLeadOrThrow(user, data.leadId);
-    if ((data.followUp && !data.followUpTime) || (data.outcome === "Call Back Later" && (!data.followUp || !data.followUpTime))) {
-      throw new ForbiddenError("Call Back Later requires a follow-up date and time.");
+    if (data.outcome === "Call Back Later" && !data.followUp) {
+      throw new ForbiddenError("Call Back Later requires a follow-up date.");
     }
     await crm().logCall(data, user);
     invalidate("leads", "visits");

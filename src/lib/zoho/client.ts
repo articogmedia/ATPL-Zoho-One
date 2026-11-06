@@ -1,6 +1,7 @@
 import "server-only";
 import { env, ZOHO_HOSTS } from "@/lib/env";
 import { invalidate } from "@/lib/cache";
+import { newErrorReference } from "@/lib/crm-action-errors";
 import { unstable_cache } from "next/cache";
 
 /** Server-side Zoho CRM client. Tokens never leave the server. */
@@ -13,6 +14,7 @@ export class ZohoError extends Error {
     readonly invalidValue?: unknown,
     readonly operation?: string,
     readonly details?: Record<string, unknown>,
+    readonly reference?: string,
   ) {
     super(message);
     this.name = "ZohoError";
@@ -50,6 +52,7 @@ const API_VERSION = "v6";
 const g = globalThis as unknown as {
   __atplZohoToken?: { value: string; exp: number };
   __atplZohoRefresh?: Promise<string>;
+  __atplZohoForcedRefresh?: Promise<string>;
 };
 
 async function requestAccessToken(): Promise<{ value: string; exp: number }> {
@@ -93,13 +96,14 @@ async function refreshAccessToken(): Promise<string> {
 
 async function accessToken(force = false): Promise<string> {
   if (force) {
-    g.__atplZohoRefresh ??= (async () => {
+    g.__atplZohoToken = undefined;
+    g.__atplZohoForcedRefresh ??= (async () => {
       invalidate("zoho-access-token");
       const fresh = await requestAccessToken();
       g.__atplZohoToken = fresh;
       return fresh.value;
-    })().finally(() => { g.__atplZohoRefresh = undefined; });
-    return g.__atplZohoRefresh;
+    })().finally(() => { g.__atplZohoForcedRefresh = undefined; });
+    return g.__atplZohoForcedRefresh;
   }
   const t = g.__atplZohoToken;
   if (!force && t && t.exp > Date.now()) return t.value;
@@ -143,16 +147,11 @@ export async function zoho<T = unknown>(
   console.info(`[zoho] ${method} ${path} ${res.status} ${Date.now() - started}ms`);
 
   if (res.status === 204) return null;
-  if (res.status === 401 && !retried) {
-    g.__atplZohoToken = undefined;
-    return zoho<T>(method, path, opts, true);
-  }
-
   const json = (await res.json().catch(() => null)) as (T & {
     code?: string;
     message?: string;
-    details?: Record<string, unknown> & { api_name?: string; field?: string; value?: unknown };
-    data?: { code?: string; message?: string; details?: Record<string, unknown> & { api_name?: string; field?: string; value?: unknown } }[];
+    details?: Record<string, unknown> & { api_name?: string; field?: string; param_name?: string; expected_data_type?: string; value?: unknown };
+    data?: { status?: string; code?: string; message?: string; details?: Record<string, unknown> & { api_name?: string; field?: string; param_name?: string; expected_data_type?: string; value?: unknown } }[];
   }) | null;
   if (res.status === 429 && rateLimitAttempt < 2) {
     const retryAfter = Number(res.headers.get("retry-after"));
@@ -160,27 +159,49 @@ export async function zoho<T = unknown>(
     await new Promise((resolve) => setTimeout(resolve, delay));
     return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1);
   }
+  const responseCode = json?.data?.[0]?.code ?? json?.code;
+  if (!retried && (res.status === 401 || responseCode === "INVALID_TOKEN" || responseCode === "INVALID_OAUTHTOKEN")) {
+    g.__atplZohoToken = undefined;
+    return zoho<T>(method, path, opts, true, rateLimitAttempt);
+  }
   if (!res.ok) {
     const recordError = json?.data?.[0];
     const detail = recordError?.details ?? json?.details;
-    const field = detail?.api_name ?? detail?.field;
+    const field = detail?.api_name ?? detail?.field ?? detail?.param_name;
     const code = recordError?.code ?? json?.code;
     const message = recordError?.message ?? json?.message;
+    const reference = newErrorReference();
     console.error("[zoho] request rejected", {
-      method, path, status: res.status,
+      reference, method, path, status: res.status,
       code, message, details: detail, field,
+      param_name: detail?.param_name,
+      expected_data_type: detail?.expected_data_type,
+      response: json,
     });
     throw new ZohoError(
       res.status === 429 ? "Zoho API rate limit reached. Please retry shortly." : message ?? `Zoho request failed (${res.status})`,
-      res.status, code, field, detail?.value, `${method} ${path}`, detail,
+      res.status, code, field, detail?.value, `${method} ${path}`, detail, reference,
     );
   }
   return json;
 }
 
 type WriteResult = {
-  data: { code: string; message?: string; details?: Record<string, unknown> & { id?: string; api_name?: string; value?: unknown } }[];
+  data: { status?: string; code: string; message?: string; details?: Record<string, unknown> & { id?: string; api_name?: string; param_name?: string; expected_data_type?: string; value?: unknown } }[];
 };
+
+function redactWritePayload(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactWritePayload);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key,
+      /^(mobile|phone)$/i.test(key) && item != null
+        ? `******${String(item).replace(/\D/g, "").slice(-2)}`
+        : redactWritePayload(item),
+    ]));
+  }
+  return value;
+}
 
 /** POST/PUT wrapper that fails if ANY record in the response is not SUCCESS, and returns the first id. */
 export async function zohoWrite(
@@ -189,16 +210,45 @@ export async function zohoWrite(
   record: unknown,
   opts: { trigger?: string[] } = {},
 ): Promise<string> {
-  const json = await zoho<WriteResult>(method, path, {
-    body: { data: [record], ...(opts.trigger ? { trigger: opts.trigger } : {}) },
-  });
+  const payload = { data: [record], ...(opts.trigger ? { trigger: opts.trigger } : {}) };
+  let json: WriteResult | null;
+  try {
+    json = await zoho<WriteResult>(method, path, { body: payload });
+  } catch (error) {
+    const reference = error instanceof ZohoError && error.reference
+      ? error.reference
+      : newErrorReference();
+    const details = error instanceof ZohoError ? error.details : undefined;
+    console.error("[zoho] write request failed", {
+      reference, method, path,
+      status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      message: error instanceof Error ? error.message : String(error),
+      details,
+      api_name: details?.api_name ?? (error instanceof ZohoError ? error.field : undefined),
+      expected_data_type: details?.expected_data_type,
+      payload: redactWritePayload(payload),
+    });
+    if (error instanceof ZohoError) {
+      throw new ZohoError(error.message, error.status, error.code, error.field, error.invalidValue, error.operation, error.details, reference);
+    }
+    throw new ZohoError(
+      error instanceof Error ? error.message : "Zoho write request failed",
+      undefined, undefined, undefined, undefined, `${method} ${path}`, undefined, reference,
+    );
+  }
   const first = json?.data?.[0];
-  if (!first || first.code !== "SUCCESS") {
+  if (!first || first.status === "error" || first.code !== "SUCCESS") {
     const message = first?.message ?? "Zoho rejected the change";
     const apiName = first?.details?.api_name;
+    const reference = newErrorReference();
     console.error("[zoho] write rejected", {
-      method, path, status: 200, code: first?.code, message,
-      details: first?.details, field: apiName,
+      reference, method, path, status: 200, recordStatus: first?.status,
+      code: first?.code, message, details: first?.details,
+      api_name: apiName, param_name: first?.details?.param_name,
+      expected_data_type: first?.details?.expected_data_type,
+      response: json,
+      payload: redactWritePayload(payload),
     });
     throw new ZohoError(
       apiName ? `${message} (field: ${apiName})` : message,
@@ -208,6 +258,7 @@ export async function zohoWrite(
       first?.details?.value,
       `${method} ${path}`,
       first?.details,
+      reference,
     );
   }
   return first.details?.id ?? "";

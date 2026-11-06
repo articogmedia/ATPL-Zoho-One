@@ -6,23 +6,25 @@ import { CalendarPlus, Clock3, History, Pencil, Phone, Plus, Search, SlidersHori
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
+import { CallLeadModal } from "@/components/leads/call-lead-modal";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
-import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getLeadTimelineAction, logCallAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
+import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getLeadTimelineAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
   LEAD_SOURCES, LEAD_STATUSES, canAssignLeads, normalizePhone, todayIST,
-  type CallOutcome, type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
+  type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
 } from "@/lib/domain";
 
 type Props = {
-  user: User; leads: Lead[]; executives: string[]; owners: string[]; canAssign: boolean;
+  user: User; leads: Lead[]; executives: string[]; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; owners: string[]; canAssign: boolean;
   fixableLeads: { id: string; name: string; ownerName: string }[];
   initialTab: LeadTab; initialCount: number; tabCounts: Record<LeadTab, number>;
   todaysFollowUps: number; hasAnyLeads: boolean;
 };
 type DrawerMode = "edit" | "history" | "schedule";
-type LeadAction = { type: "call" | "edit" | "reassign" | "delete"; lead: Lead } | null;
+type LeadMutationAction = { type: "edit" | "reassign" | "delete"; lead: Lead };
+type LeadAction = { type: "call"; lead: Lead } | LeadMutationAction | null;
 
 function useBodyScrollLock(open = true) {
   useEffect(() => {
@@ -36,11 +38,6 @@ function useBodyScrollLock(open = true) {
 function whatsappUrl(phone: string): string | null {
   const digits = phone.replace(/\D/g, "").slice(-10);
   return digits.length === 10 ? `https://wa.me/91${digits}` : null;
-}
-
-function phoneUrl(phone: string): string | null {
-  const digits = normalizePhone(phone);
-  return digits.length === 10 ? `tel:+91${digits}` : null;
 }
 
 function leadBucketForTab(lead: Lead): LeadTab {
@@ -75,8 +72,11 @@ function isLeadsResponse(value: unknown): value is LeadsResponse {
     TABS.every(({ id }) => Number.isInteger(counts[id]) && counts[id] >= 0);
 }
 
-export function LeadsClient({ user, leads, executives, owners, canAssign, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
+export function LeadsClient({ user, leads, executives, assignees, assigneesUnavailable, owners, canAssign, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
   const [leadRows, setLeadRows] = useState(leads);
+  const [teamMembers, setTeamMembers] = useState(assignees);
+  const [teamMembersUnavailable, setTeamMembersUnavailable] = useState(assigneesUnavailable);
+  const [retryingTeamMembers, setRetryingTeamMembers] = useState(false);
   const [total, setTotal] = useState(initialCount);
   const [tabCounts, setTabCounts] = useState(initialTabCounts);
   const [todaysFollowUps, setTodaysFollowUps] = useState(initialFollowUps);
@@ -97,18 +97,54 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
   const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Lead | null>(null);
   const [action, setAction] = useState<LeadAction>(null);
+  const leadOverrides = useRef(new Map<string, Partial<Lead> | null>());
+  const applyLeadOverrides = useCallback((rows: Lead[]) => rows.flatMap((lead) => {
+    if (!leadOverrides.current.has(lead.id)) return [lead];
+    const override = leadOverrides.current.get(lead.id);
+    if (override === null) return [];
+    return [{ ...lead, ...override }];
+  }), []);
   const selectLead = useCallback((lead: Lead) => setSelected(lead), []);
-  const startLeadAction = useCallback((type: "call" | "edit" | "reassign" | "delete", lead: Lead) => setAction({ type, lead }), []);
+  const startLeadAction = useCallback((type: "call" | "edit" | "reassign" | "delete", lead: Lead) => {
+    const current = leadRows.find((item) => item.id === lead.id) ?? lead;
+    const override = leadOverrides.current.get(lead.id);
+    setAction({ type, lead: override ? { ...current, ...override } : current });
+  }, [leadRows]);
+  const reloadTeamMembers = useCallback(async () => {
+    if (retryingTeamMembers) return;
+    setRetryingTeamMembers(true);
+    try {
+      const result = await getAssignableUsersAction();
+      if (!result.ok) {
+        setTeamMembers([]);
+        setTeamMembersUnavailable(true);
+        toast.error(result.error);
+        return;
+      }
+      const members = result.data ?? [];
+      setTeamMembers(members);
+      setTeamMembersUnavailable(members.length === 0);
+      if (!members.length) toast.error("No active team members were returned. Please retry or contact an administrator.");
+      else toast.success("Team members loaded");
+    } catch (error) {
+      setTeamMembers([]);
+      setTeamMembersUnavailable(true);
+      toast.error(error instanceof Error ? error.message : "Could not load team members.");
+    } finally {
+      setRetryingTeamMembers(false);
+    }
+  }, [retryingTeamMembers]);
 
   const mergedLeadRows = useMemo(() => {
     if (!justAdded) return leadRows;
-    return [justAdded, ...leadRows.filter((lead) => lead.id !== justAdded.id)];
+    const updatedAdded = leadRows.find((lead) => lead.id === justAdded.id) ?? justAdded;
+    return [updatedAdded, ...leadRows.filter((lead) => lead.id !== justAdded.id)];
   }, [justAdded, leadRows]);
 
   useEffect(() => {
-    setLeadRows(leads);
+    setLeadRows(applyLeadOverrides(leads));
     if (justAdded && leads.some((lead) => lead.id === justAdded.id)) setJustAdded(null);
-  }, [leads, justAdded]);
+  }, [leads, justAdded, applyLeadOverrides]);
   useEffect(() => {
     setTotal(initialCount);
     setTabCounts(initialTabCounts);
@@ -173,14 +209,14 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
       console.info("[leads] GET /api/leads response", { status: response.status, body: result });
     }
     if (!isCurrent()) return;
-    setLeadRows((current) => append
+    setLeadRows((current) => applyLeadOverrides(append
       ? [...current, ...result.leads.filter((lead) => !current.some((item) => item.id === lead.id))]
-      : result.leads);
+      : result.leads));
     setTotal(result.total);
     setTabCounts(result.tabCounts);
     setTodaysFollowUps(result.todaysFollowUps ?? 0);
     setHasAnyLeads(result.hasAnyLeads ?? false);
-  }, [tab, debouncedSearch, source, filters]);
+  }, [tab, debouncedSearch, source, filters, applyLeadOverrides]);
   const runRequest = useCallback(async function runRequest(requestedPage: number, append: boolean, isCurrent: () => boolean = () => true) {
     if (append) setLoadingMore(true);
     else setLoadingRows(true);
@@ -291,7 +327,7 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
         void requestPage(1, false, () => true, targetTab).catch((error: unknown) =>
           toast.error(error instanceof Error ? error.message : "Unable to refresh leads."),
         );
-      }} onCancel={() => setAdding(false)} executives={executives} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
+      }} onCancel={() => setAdding(false)} assignees={teamMembers} assigneesUnavailable={teamMembersUnavailable} retryingAssignees={retryingTeamMembers} onRetryAssignees={() => void reloadTeamMembers()} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (
         loadingRows
@@ -300,12 +336,12 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
       ) : (
         <>
           <div id="leads-list" className="hidden overflow-x-auto rounded-xl border border-border bg-card shadow-sm md:block">
-            <table className="w-full min-w-[900px] text-left">
+            <table className="w-full min-w-[1000px] text-left">
               <thead className="bg-secondary text-xs uppercase tracking-wide text-secondary-foreground">
                 <tr>
                   <th className="px-4 py-3 font-semibold">Lead</th><th className="px-3 py-3 font-semibold">Phone</th>
                   <th className="px-3 py-3 font-semibold">Source</th><th className="px-3 py-3 font-semibold">Created</th>
-                  <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="sticky right-0 w-px whitespace-nowrap bg-secondary px-4 py-3 text-right font-semibold">Action</th>
+                  <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="sticky right-0 z-10 min-w-[200px] whitespace-nowrap bg-secondary px-2 py-3 text-right font-semibold">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -338,16 +374,43 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
         />
       )}
-      {action && <LeadActionModal action={action} executives={executives} onClose={() => setAction(null)} onDone={(patch) => {
-        setLeadRows((current) => action.type === "delete"
-          ? current.filter((lead) => lead.id !== action.lead.id)
-          : current.map((lead) => lead.id === action.lead.id ? { ...lead, ...patch } : lead));
+      {action?.type === "call" && <CallLeadModal lead={action.lead} onClose={() => setAction(null)} onSaved={(status, followUp) => {
         setAction(null);
-        void requestPage(1, false).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Unable to refresh leads."));
+        void requestPage(1, false)
+          .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Unable to refresh leads."))
+          .finally(() => setLeadRows((current) => current.map((lead) => lead.id === action.lead.id
+            ? { ...lead, status, ...(followUp ? { followUp } : {}) }
+            : lead)));
+      }} />}
+      {action && action.type !== "call" && <LeadActionModal key={`${action.type}:${action.lead.id}`} action={action} assignees={teamMembers} assigneesUnavailable={teamMembersUnavailable} retryingAssignees={retryingTeamMembers} onRetryAssignees={() => void reloadTeamMembers()} onClose={() => setAction(null)} onDone={(patch) => {
+        const effectivePatch = {
+          ...(leadOverrides.current.get(action.lead.id) ?? {}),
+          ...patch,
+        };
+        leadOverrides.current.set(action.lead.id, action.type === "delete" ? null : effectivePatch);
+        setJustAdded((current) => current?.id !== action.lead.id
+          ? current
+          : action.type === "delete" ? null : { ...current, ...effectivePatch });
+        setLeadRows((current) => applyLeadOverrides(action.type === "delete"
+          ? current
+          : current.map((lead) => lead.id === action.lead.id ? { ...lead, ...effectivePatch } : lead)));
+        setAction(null);
+        void requestPage(1, false)
+          .then(() => setLeadRows((current) => action.type === "delete"
+            ? current.filter((lead) => lead.id !== action.lead.id)
+            : current.map((lead) => lead.id === action.lead.id ? { ...lead, ...patch } : lead)))
+          .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Unable to refresh leads."));
       }} onAssigned={(name) => {
-        setLeadRows((current) => current.map((lead) => lead.id === action.lead.id
-          ? { ...lead, assignedTo: name, status: lead.status === "Fresh Lead" ? "Assigned to Sales" : lead.status }
-          : lead));
+        const patch: Partial<Lead> = {
+          assignedTo: name,
+          status: action.lead.status === "Fresh Lead" ? "Assigned to Sales" : action.lead.status,
+        };
+        const effectivePatch = { ...(leadOverrides.current.get(action.lead.id) ?? {}), ...patch };
+        leadOverrides.current.set(action.lead.id, effectivePatch);
+        setJustAdded((current) => current?.id === action.lead.id ? { ...current, ...effectivePatch } : current);
+        setLeadRows((current) => applyLeadOverrides(current.map((lead) => lead.id === action.lead.id
+          ? { ...lead, ...effectivePatch }
+          : lead)));
         setAction(null);
         setTab("assigned");
         void requestPage(1, false, () => true, "assigned").catch((error: unknown) =>
@@ -360,24 +423,22 @@ export function LeadsClient({ user, leads, executives, owners, canAssign, fixabl
 }
 
 function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
-  const phone = phoneUrl(lead.phone);
   const whatsapp = whatsappUrl(lead.phone);
-  return <div className="flex justify-end gap-1">
-    {phone && <a href={phone} className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-input px-2 text-sm font-medium hover:bg-secondary" aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={(event) => event.stopPropagation()}><Phone /> <span className="md:hidden 2xl:inline">Call</span></a>}
+  return <div className="flex justify-end gap-2 whitespace-nowrap">
+    {lead.phone && <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={() => onAction("call")}><Phone /></Button>}
     {whatsapp && <a href={whatsapp} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-lg hover:bg-secondary" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
-    <Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
-    {manager && <><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" className="h-11 w-11" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+    <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
+    {manager && <><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
 }
 
 function DesktopActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   const whatsapp = whatsappUrl(lead.phone);
-  const phone = phoneUrl(lead.phone);
-  return <div className="flex justify-end gap-1">
-    {phone && <a href={phone} className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-input px-2 text-sm font-medium hover:bg-secondary" aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`}><Phone /> <span className="hidden 2xl:inline">Call</span></a>}
+  return <div className="flex justify-end gap-2 whitespace-nowrap">
+    {lead.phone && <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={() => onAction("call")}><Phone /></Button>}
     {whatsapp && <a className="grid h-9 w-9 place-items-center rounded-lg hover:bg-secondary" href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
-    <Button size="icon" variant="ghost" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
-    {manager && <><Button size="icon" variant="ghost" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button size="icon" variant="ghost" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+    <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
+    {manager && <><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
 }
 
@@ -390,7 +451,7 @@ const DesktopRow = memo(function DesktopRow({ lead, manager, highlighted, onOpen
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.createdOn || "—"}</td>
       <td className="px-3 py-3"><StatusBadge status={lead.status} />{lead.followUp && lead.followUp <= todayIST() && <div className="mt-1 text-xs font-semibold text-destructive">Overdue</div>}</td>
       <td className="max-w-36 truncate px-3 py-3">{lead.assignedTo ?? "Unassigned"}</td>
-      <td className="w-px whitespace-nowrap px-4 py-3 text-right" onClick={(event) => event.stopPropagation()}><DesktopActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} /></td>
+      <td className="sticky right-0 z-[1] min-w-[200px] whitespace-nowrap bg-card px-2 py-3 text-right group-hover:bg-secondary/50" onClick={(event) => event.stopPropagation()}><DesktopActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} /></td>
     </tr>
   );
 });
@@ -403,7 +464,7 @@ const MobileRow = memo(function MobileRow({ lead, manager, highlighted, onOpen, 
         <div className="min-w-0"><div className="truncate font-semibold">{lead.name}</div><div className="truncate text-xs text-muted-foreground">{lead.company || "No company"}</div></div>
         <StatusBadge status={lead.status} />
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2">{lead.phone ? <a className="inline-flex min-h-11 items-center truncate underline" href={`tel:${lead.phone.replace(/\s/g, "")}`} onClick={(event) => event.stopPropagation()}>{lead.phone}</a> : <span>No phone</span>}<span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
+      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2"><span className="inline-flex min-h-11 items-center truncate">{lead.phone || "No phone"}</span><span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
       {wa && <a className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={wa} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}><WhatsAppIcon className="h-5 w-5" />WhatsApp</a>}
       <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} /></div>
     </div>
@@ -450,8 +511,8 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
   </>;
 }
 
-function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
-  action: Exclude<LeadAction, null>; executives: string[]; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (name: string) => void;
+function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssignees, onRetryAssignees, onClose, onDone, onAssigned }: {
+  action: LeadMutationAction; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (name: string) => void;
 }) {
   useBodyScrollLock(true);
   const [pending, start] = useTransition();
@@ -461,10 +522,8 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
   const [source, setSource] = useState<LeadSource>(action.lead.source);
   const [status, setStatus] = useState<LeadStatus>(action.lead.status);
   const [assignee, setAssignee] = useState("");
-  const [outcome, setOutcome] = useState<CallOutcome>("Connected");
   const [remarks, setRemarks] = useState(action.type === "edit" ? action.lead.remarks : "");
   const [followUp, setFollowUp] = useState(action.lead.followUp ?? "");
-  const [followUpTime, setFollowUpTime] = useState("");
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -472,10 +531,8 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
       const result = action.type === "edit"
         ? await updateLeadAction({ id: action.lead.id, name, company, phone, source, status, remarks, ...(followUp ? { followUp } : {}) })
         : action.type === "reassign"
-          ? await reassignLeadAction({ id: action.lead.id, assignedTo: assignee })
-          : action.type === "delete"
-            ? await deleteLeadAction({ id: action.lead.id })
-            : await logCallAction({ leadId: action.lead.id, outcome, remarks, ...(followUp ? { followUp, followUpTime } : {}) });
+          ? await reassignLeadAction({ id: action.lead.id, assignedToId: assignee })
+          : await deleteLeadAction({ id: action.lead.id });
       if (!result.ok) { toast.error(result.error); return; }
       if (action.type === "reassign") {
         const assignment = result.data as { owner?: string; taskWarning?: string } | undefined;
@@ -484,19 +541,12 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
       }
       else {
         toast.success(action.type === "delete" ? "Lead deleted" : "Lead updated");
-        const status: LeadStatus = outcome === "Connected" ? "Contacted"
-          : outcome === "Call Back Later" ? "Callback in Future"
-          : outcome === "Wrong Number" ? "Not Responsive" : "Attempted to Contact";
-        onDone(action.type === "edit"
-          ? { name, company, phone, source, status, remarks, ...(followUp ? { followUp } : {}) }
-          : action.type === "call"
-            ? { status, ...(followUp ? { followUp, followUpTime } : {}) }
-            : {});
+        onDone(action.type === "edit" ? { name, company, phone, source, status, remarks, ...(followUp ? { followUp } : {}) } : {});
       }
     });
   };
 
-  const title = action.type === "call" ? "Log call" : action.type === "edit" ? "Edit lead" : action.type === "reassign" ? "Reassign owner" : "Delete lead";
+  const title = action.type === "edit" ? "Edit lead" : action.type === "reassign" ? "Reassign owner" : "Delete lead";
   return <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 md:items-center md:p-4" role="presentation">
     <button className="absolute inset-0 cursor-default" aria-label="Close dialog" onClick={onClose} />
     <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="lead-action-title" className="relative max-h-[90dvh] w-full max-w-md space-y-4 overflow-y-auto rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl md:rounded-xl md:pb-5">
@@ -510,14 +560,16 @@ function LeadActionModal({ action, executives, onClose, onDone, onAssigned }: {
         <label className="font-medium">Follow-up date<input type="date" className={`${fieldClass} mt-1 text-sm`} value={followUp} onChange={(event) => setFollowUp(event.target.value)} /></label>
         <label className="font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-24 py-2 text-sm`} value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
       </div>}
-      {action.type === "reassign" && <label className="block font-medium">Assign to<select className={`${fieldClass} mt-1 text-sm`} value={assignee} onChange={(event) => setAssignee(event.target.value)} required><option value="">Select a team member</option>{executives.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>}
-      {action.type === "call" && <div className="grid gap-3">
-        <label className="font-medium">Outcome<SelectField className="mt-1" value={outcome} onValueChange={(value) => setOutcome(value as CallOutcome)} options={["Connected", "No Answer", "Busy", "Wrong Number", "Call Back Later"].map((item) => ({ value: item, label: item }))} /></label>
-        <label className="font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-24 py-2 text-sm`} value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
-        <div className="grid grid-cols-2 gap-2"><label className="font-medium">Follow-up date<input type="date" className={`${fieldClass} mt-1 text-sm`} value={followUp} onChange={(event) => setFollowUp(event.target.value)} /></label><label className="font-medium">Time<input type="time" className={`${fieldClass} mt-1 text-sm`} value={followUpTime} onChange={(event) => setFollowUpTime(event.target.value)} disabled={!followUp} /></label></div>
-      </div>}
-      {action.type === "delete" && <p className="rounded-md bg-destructive/10 p-3 text-sm">This lead will be moved to the Zoho Recycle Bin.</p>}
-      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button><Button type="submit" variant={action.type === "delete" ? "destructive" : "default"} disabled={pending || (action.type === "reassign" && !assignee)}>{pending ? "Saving..." : action.type === "delete" ? "Delete" : action.type === "reassign" ? "Confirm" : action.type === "call" ? "Log call" : "Save"}</Button></div>
+      {action.type === "reassign" && <>
+        <label className="block font-medium">Assign to<select className={`${fieldClass} mt-1 text-sm`} value={assignee} onChange={(event) => setAssignee(event.target.value)} required disabled={assigneesUnavailable}>
+          {assigneesUnavailable
+            ? <option value="" disabled>Couldn&apos;t load team members</option>
+            : <><option value="">Select a team member</option>{assignees.map(({ id, name }) => <option key={id} value={id}>{name}</option>)}</>}
+        </select></label>
+        {assigneesUnavailable && <Button type="button" variant="outline" className="h-9" onClick={onRetryAssignees} disabled={retryingAssignees}>{retryingAssignees ? "Retrying…" : "Retry loading team members"}</Button>}
+      </>}
+      {action.type === "delete" && <p className="rounded-md bg-destructive/10 p-3 text-sm">Delete {action.lead.name}? This can&apos;t be undone.</p>}
+      <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={onClose} disabled={pending}>Cancel</Button><Button type="submit" variant={action.type === "delete" ? "destructive" : "default"} disabled={pending || (action.type === "reassign" && !assignee)}>{pending ? "Saving..." : action.type === "delete" ? "Delete" : action.type === "reassign" ? "Confirm" : "Save"}</Button></div>
     </form>
   </div>;
 }
@@ -530,6 +582,8 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
   const [assignee, setAssignee] = useState(lead.assignedTo ?? "");
   const [remarks, setRemarks] = useState("");
   const [history, setHistory] = useState<LeadTimelineItem[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [comboboxOpen, setComboboxOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState("");
@@ -561,11 +615,22 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
 
   const loadHistory = () => {
     setMode("history");
-    if (history) return;
+    if (historyLoading || (history !== null && !historyError)) return;
+    setHistoryLoading(true);
+    setHistoryError(null);
     void getLeadTimelineAction(lead.id).then((result) => {
       if (result.ok) setHistory(result.data ?? []);
-      else toast.error(result.error);
-    });
+      else {
+        setHistory(null);
+        setHistoryError(result.error);
+        toast.error(result.error);
+      }
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Could not load lead history.";
+      setHistory(null);
+      setHistoryError(message);
+      toast.error(message);
+    }).finally(() => setHistoryLoading(false));
   };
 
   return (
@@ -582,7 +647,7 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
         </div>
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           {mode === "history" ? (
-            <HistoryList history={history} />
+            <HistoryList history={history} loading={historyLoading} error={historyError} onRetry={loadHistory} />
           ) : mode === "schedule" ? (
             <ScheduleForm lead={lead} onDone={() => setMode("edit")} />
           ) : (
@@ -620,8 +685,10 @@ function DrawerTab({ active, onClick, children }: { active: boolean; onClick: ()
   return <button className={`flex h-11 items-center gap-1 border-b-2 px-2 text-sm font-semibold ${active ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`} onClick={onClick}>{children}</button>;
 }
 
-function HistoryList({ history }: { history: LeadTimelineItem[] | null }) {
-  if (history === null) return <p className="text-muted-foreground">Loading history…</p>;
+function HistoryList({ history, loading, error, onRetry }: { history: LeadTimelineItem[] | null; loading: boolean; error: string | null; onRetry: () => void }) {
+  if (loading) return <p role="status" className="text-muted-foreground">Loading history…</p>;
+  if (error) return <div role="alert" className="space-y-3 rounded-lg bg-destructive/5 p-4"><p>{error}</p><Button type="button" variant="outline" onClick={onRetry}>Retry</Button></div>;
+  if (history === null) return <div role="alert" className="space-y-3 rounded-lg bg-destructive/5 p-4"><p>Could not load lead history.</p><Button type="button" variant="outline" onClick={onRetry}>Retry</Button></div>;
   if (!history.length) return <p className="rounded-lg bg-secondary p-4 text-muted-foreground">No history yet.</p>;
   return <ul className="space-y-3 border-l-2 border-border pl-4">{history.map((item, index) => <li key={index}><div className="text-xs text-muted-foreground">{item.date} · {item.user} · {item.kind}</div><div className="mt-1 font-medium">{item.title}</div>{item.detail && <div className="text-sm text-muted-foreground">{item.detail}</div>}</li>)}</ul>;
 }
@@ -646,8 +713,8 @@ function ScheduleForm({ lead, onDone }: { lead: Lead; onDone: () => void }) {
   </div>;
 }
 
-function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }: { onAdded: (lead: Lead) => void; onCancel: () => void; executives: string[]; canAssign: boolean; canForceDuplicate: boolean }) {
-  const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedTo: "" });
+function AddLead({ onAdded, onCancel, assignees, assigneesUnavailable, retryingAssignees, onRetryAssignees, canAssign, canForceDuplicate }: { onAdded: (lead: Lead) => void; onCancel: () => void; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; canAssign: boolean; canForceDuplicate: boolean }) {
+  const [f, setF] = useState({ name: "", company: "", phone: "", area: "", source: "Meta Ads" as LeadSource, remarks: "", assignedToId: "" });
   const [duplicate, setDuplicate] = useState<{ id: string; name: string; owner: string; status: string; matchedField?: "Mobile" | "Phone" } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
   const [flaggedPhone, setFlaggedPhone] = useState<string | null>(null);
@@ -668,6 +735,7 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
     nameRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (event.defaultPrevented) return;
         event.preventDefault();
         close();
         return;
@@ -722,7 +790,7 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
     if (!claimLeadSubmission(submittedRef)) return;
     start(async () => {
       try {
-        const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedTo: f.assignedTo || null, forceCreate });
+        const result = await addLeadAction({ ...f, phone: normalizedPhone, assignedToId: f.assignedToId || null, forceCreate });
         if (result.ok && result.data) onAdded(result.data);
         else if (!result.ok) {
           if (result.duplicate) {
@@ -750,7 +818,13 @@ function AddLead({ onAdded, onCancel, executives, canAssign, canForceDuplicate }
         <div><label htmlFor="add-lead-phone" className="mb-1 block text-sm font-medium">Mobile number *</label><input id="add-lead-phone" className={`${fieldClass} text-base md:text-sm`} aria-invalid={!!errors.phone} value={f.phone} onChange={phoneChanged} inputMode="tel" required maxLength={15} />{errors.phone && <p className="mt-1 text-xs text-destructive">{errors.phone}</p>}</div>
         <div><label htmlFor="add-lead-area" className="mb-1 block text-sm font-medium">Area</label><input id="add-lead-area" className={`${fieldClass} text-base md:text-sm`} value={f.area} onChange={set("area")} maxLength={120} /></div>
         <div><label htmlFor="add-lead-source" className="mb-1 block text-sm font-medium">Source</label><SelectField id="add-lead-source" value={f.source} onValueChange={(value) => setF((current) => ({ ...current, source: value as LeadSource }))} options={LEAD_SOURCES.map((item) => ({ value: item, label: item }))} /></div>
-        {canAssign && <div><label htmlFor="add-lead-assignee" className="mb-1 block text-sm font-medium">Assign to</label><SelectField id="add-lead-assignee" disabled={!executives.length} value={f.assignedTo} onValueChange={(value) => setF((current) => ({ ...current, assignedTo: value }))} options={[{ value: "", label: "Assign to (optional)" }, ...executives.map((name) => ({ value: name, label: name }))]} /></div>}
+        {canAssign && <div>
+          <label htmlFor="add-lead-assignee" className="mb-1 block text-sm font-medium">Assign to</label>
+          <SelectField id="add-lead-assignee" disabled={assigneesUnavailable} value={f.assignedToId} onValueChange={(value) => setF((current) => ({ ...current, assignedToId: value }))} options={assigneesUnavailable
+            ? [{ value: "", label: "Couldn't load team members", disabled: true }]
+            : [{ value: "", label: "Assign to (optional)" }, ...assignees.map(({ id, name }) => ({ value: id, label: name }))]} />
+          {assigneesUnavailable && <Button type="button" variant="outline" className="mt-2 h-9" onClick={onRetryAssignees} disabled={retryingAssignees}>{retryingAssignees ? "Retrying…" : "Retry loading team members"}</Button>}
+        </div>}
         <div className="sm:col-span-2"><label htmlFor="add-lead-remarks" className="mb-1 block text-sm font-medium">Remarks</label><textarea id="add-lead-remarks" className={`${fieldClass} min-h-11 text-base md:text-sm`} value={f.remarks} onChange={set("remarks")} maxLength={500} /></div>
         {duplicate && duplicateMatchesPhone && <div className="rounded-lg border border-destructive bg-card p-3 text-sm text-destructive sm:col-span-2"><p>A lead with this number already exists: <a className="underline" href={`/leads#lead-${duplicate.id}`}>{duplicate.name}</a></p><p className="mt-1 text-xs text-muted-foreground">Matched on {duplicate.matchedField ?? "phone"} · Owner: {duplicate.owner} · Status: {duplicate.status}</p>        {canForceDuplicate && !forceCreate && <Button type="button" variant="outline" className="mt-2 h-11" onClick={() => setForceCreate(true)}>Create anyway</Button>}</div>}
       </div>

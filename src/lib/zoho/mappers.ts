@@ -31,7 +31,8 @@ export type ZQuotedItem = {
 export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
 export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; [k: string]: unknown };
 export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
-export type ZNote = { Note_Content?: string; Created_Time?: string; Created_By?: Ref };
+export type ZEvent = { Event_Title?: string; Start_DateTime?: string; Created_Time?: string; Owner?: Ref; Description?: string };
+export type ZNote = { Note_Title?: string; Note_Content?: string; Created_Time?: string; Owner?: Ref; Created_By?: Ref };
 
 export function parseRoleOverrides(raw?: string): Map<string, Role> {
   const overrides = new Map<string, Role>();
@@ -83,7 +84,11 @@ export function normalizeSource(raw?: string): LeadSource {
   const s = value.toLowerCase();
   if (/meta|facebook|instagram|\bfb\b|\big\b|advertisement|social/.test(s)) return "Meta Ads";
   if (/google|adwords|youtube|web research/.test(s)) return "Google Ads";
-  if (/phone|telephone|walk[- ]?in|direct call|direct|sales executive|inbound|cold call|^call$/.test(s)) return "Direct Call";
+  if (/walk[- ]?in|store visit|in person/.test(s)) return "Walk-in";
+  if (/referral/.test(s)) return "Referral";
+  if (/website|web site|online/.test(s)) return "Website";
+  if (/other/.test(s)) return "Other";
+  if (/phone|telephone|direct call|direct|sales executive|inbound|cold call|^call$/.test(s)) return "Direct Call";
   if (value && !warnedSources.has(s)) {
     warnedSources.add(s);
     console.warn("[zoho] Unknown lead source; using Direct Call", { source: value });
@@ -193,6 +198,7 @@ export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
     id: String(z.id).trim(),
     leadId: related?.id ?? "",
     customer: lead ? lead.company || lead.name : related?.name ?? "",
+    phone: lead?.phone ?? "",
     address: lead?.address ?? "",
     area: lead?.area ?? "",
     executive: z.Owner?.name ?? "",
@@ -210,5 +216,5 @@ export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
 }
 
 export function mapNote(n: ZNote): LeadUpdate {
-  return { date: day(n.Created_Time), user: n.Created_By?.name ?? "", note: n.Note_Content ?? "" };
+  return { date: day(n.Created_Time), user: n.Owner?.name ?? n.Created_By?.name ?? "", note: n.Note_Content ?? "" };
 }

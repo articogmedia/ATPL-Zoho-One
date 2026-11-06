@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { CalendarClock, CheckCircle2, FileText, LoaderCircle, MapPin, Play } from "lucide-react";
+import { CalendarClock, CheckCircle2, FileText, LoaderCircle, MapPin, Phone, Play } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
+import { CallLeadModal } from "@/components/leads/call-lead-modal";
 import { updateVisitAction } from "@/app/actions/crm";
 import { workForTab, type User, type Visit, type WorkTab } from "@/lib/domain";
 import type { PerfRange } from "@/lib/domain";
@@ -69,7 +70,7 @@ export function VisitsClient({ user, visits, executives, today, performance, cal
       <section className="min-w-0 rounded-xl border border-primary/30 bg-accent p-4 shadow-sm">
         <h2 className="mb-3 text-lg font-semibold">Today&apos;s visits ({todays.length})</h2>
         <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} />)}
+          {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} onCallSaved={() => router.refresh()} />)}
           {!todays.length && <p className="text-sm text-muted-foreground">No visits today.</p>}
         </div>
       </section>
@@ -83,15 +84,16 @@ export function VisitsClient({ user, visits, executives, today, performance, cal
       </div>
 
       <div id="work-list" className="grid min-w-0 grid-cols-1 items-stretch gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} />)}
+        {list.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} onCallSaved={() => router.refresh()} />)}
         {!list.length && <p className="text-sm text-muted-foreground">Nothing here.</p>}
       </div>
     </div>
   );
 }
 
-function Item({ v, showExec, today, onStatusChanged }: { v: Visit; showExec: boolean; today: string; onStatusChanged: (status: "In Progress" | "Completed") => void }) {
+function Item({ v, showExec, today, onStatusChanged, onCallSaved }: { v: Visit; showExec: boolean; today: string; onStatusChanged: (status: "In Progress" | "Completed") => void; onCallSaved: () => void }) {
   const [mode, setMode] = useState<"none" | "complete" | "reschedule">("none");
+  const [callOpen, setCallOpen] = useState(false);
   const [notes, setNotes] = useState("");
   const [date, setDate] = useState(v.date);
   const [time, setTime] = useState(v.time);
@@ -168,6 +170,12 @@ function Item({ v, showExec, today, onStatusChanged }: { v: Visit; showExec: boo
           </section>
         </div>
       )}
+
+      {callOpen && <CallLeadModal lead={{ id: v.leadId, name: v.customer, phone: v.phone ?? "" }} onClose={() => setCallOpen(false)} onSaved={() => {
+        setCallOpen(false);
+        onCallSaved();
+      }} />}
+      {v.phone && <Button type="button" variant="outline" className="h-11 w-full" onClick={() => setCallOpen(true)}><Phone className="h-4 w-4" />Call lead</Button>}
 
       {quote
         ? <Button asChild className="h-11 w-full min-w-0 whitespace-normal"><Link href={quote}><FileText className="h-4 w-4" />Quotation</Link></Button>

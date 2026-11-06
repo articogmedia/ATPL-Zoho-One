@@ -131,7 +131,7 @@ describe("performance dashboard", () => {
   });
   it("breaks leads down by source", () => {
     const s = month();
-    expect(s.bySource.map((b) => b.count)).toEqual([5, 4, 2]);
+    expect(s.bySource.map((b) => b.count)).toEqual([5, 4, 2, 0, 0, 0, 0]);
   });
   it("counts site visits scheduled vs completed", () => {
     const s = month();
@@ -205,7 +205,7 @@ describe("performance dashboard", () => {
     ] as Visit[];
     const stats = perfStats(leads, quotes, visits, "month", "2026-10-29", [sales, other], sales);
     expect(stats.totalLeads).toBe(1);
-    expect(stats.bySource.map((item) => item.count)).toEqual([1, 0, 0]);
+    expect(stats.bySource.map((item) => item.count)).toEqual([1, 0, 0, 0, 0, 0, 0]);
     expect(stats.quotesSent).toBe(1);
     expect(stats.scheduled).toBe(1);
     expect(stats.completed).toBe(1);

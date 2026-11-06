@@ -62,6 +62,14 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
   await page.goto("/visits");
 
   const task = page.locator("#work-list article").filter({ has: page.getByRole("button", { name: /Start Work/ }) }).first();
+  await task.getByRole("button", { name: "Call lead" }).click();
+  const callDialog = page.getByRole("dialog", { name: "Call lead" });
+  await expect(callDialog).toBeVisible();
+  await expect(callDialog.getByRole("link", { name: "Open dialer" })).toHaveAttribute("href", /^tel:\+91\d{10}$/);
+  await callDialog.getByRole("button", { name: "Not answered" }).click();
+  await callDialog.getByRole("button", { name: "Save outcome" }).click();
+  await expect(callDialog).toHaveCount(0);
+
   await task.getByRole("button", { name: /Start Work/ }).click();
   await expect(page.getByRole("button", { name: /^In Progress \(/ })).toHaveClass(/bg-primary/);
   const progressTask = page.locator("#work-list article").first();

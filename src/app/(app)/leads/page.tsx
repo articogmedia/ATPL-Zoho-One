@@ -10,11 +10,26 @@ export default async function LeadsPage() {
   const started = Date.now();
   const user = await requireSection("leads");
   const repo = crm();
-  const [all, assignableUsers, fixableLeads] = await Promise.all([
+  const [all, fixableLeads] = await Promise.all([
     repo.listLeads(),
-    repo.listAssignableUsers(),
     user.role === "Manager" ? repo.listFixableAssignedLeads(user) : [],
   ]);
+  let assignableUsers: Awaited<ReturnType<typeof repo.listAssignableUsers>> = [];
+  let assignableUsersFailed = false;
+  try {
+    assignableUsers = await repo.listAssignableUsers();
+    assignableUsersFailed = assignableUsers.length === 0;
+    if (assignableUsersFailed) console.warn("[page] no active assignable users returned for leads");
+  } catch (error) {
+    assignableUsersFailed = true;
+    console.error("[page] active team members unavailable", {
+      message: error instanceof Error ? error.message : String(error),
+      status: error instanceof Error && "status" in error ? error.status : undefined,
+      code: error instanceof Error && "code" in error ? error.code : undefined,
+      details: error instanceof Error && "details" in error ? error.details : undefined,
+      operation: error instanceof Error && "operation" in error ? error.operation : undefined,
+    });
+  }
   const visibleLeads = visibleFor(user, all);
   const tabs: LeadTab[] = ["fresh", "assigned", "callback", "mine", "all"];
   const tabCounts = Object.fromEntries(tabs.map((tab) => [tab, leadsForTab(user, visibleLeads, tab).length])) as Record<LeadTab, number>;
@@ -32,6 +47,8 @@ export default async function LeadsPage() {
       todaysFollowUps={todaysFollowUps}
       hasAnyLeads={visibleLeads.length > 0}
       executives={assignableUsers.map((u) => u.name)}
+      assignees={assignableUsers.map(({ id, name }) => ({ id, name }))}
+      assigneesUnavailable={assignableUsersFailed}
       owners={assignableUsers.map((u) => u.name)}
       canAssign={user.role === "Manager" || user.role === "Calling Team"}
       fixableLeads={fixableLeads}
