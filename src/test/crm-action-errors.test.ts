@@ -57,17 +57,10 @@ describe("friendly Zoho action errors", () => {
     );
   });
 
-  it("maps timeout and token data-centre mismatch to actionable messages", () => {
+  it("maps timeout and connection errors to actionable messages", () => {
     expect(friendlyZohoError(0, "NETWORK_TIMEOUT", "Zoho timed out, please try again", undefined, "TIMEOUT12345"))
       .toBe("Zoho timed out, please try again. (Ref: TIMEOUT12345)");
     expect(friendlyZohoError(0, "NETWORK_ERROR", "Could not connect to the Zoho CRM API", undefined, "NETWORK12345"))
       .toBe("Could not connect to Zoho CRM. Please retry shortly. (Ref: NETWORK12345)");
-    expect(friendlyZohoError(
-      200,
-      "TOKEN_ENVIRONMENT_MISMATCH",
-      "Zoho token does not match the sandbox/live setting (ZOHO_SANDBOX=true). Generate the token for the correct portal.",
-      undefined,
-      "MISMATCH1234",
-    )).toBe("Zoho token does not match the sandbox/live setting (ZOHO_SANDBOX=true). Generate the token for the correct portal. (Ref: MISMATCH1234)");
   });
 });

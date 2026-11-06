@@ -14,9 +14,6 @@ export function friendlyZohoError(
 ): string {
   const suffix = ` (Ref: ${reference})`;
   const responseMessage = message?.trim().toLowerCase() ?? "";
-  if (code === "TOKEN_ENVIRONMENT_MISMATCH") {
-    return `${message?.trim() || "Token does not match the sandbox/live setting. Generate the token for the configured Zoho portal."}${suffix}`;
-  }
   if (code?.startsWith("TOKEN_REFRESH_")) {
     const reason = message?.replace(/^Zoho connection problem:\s*/i, "").trim()
       || "Zoho token is blocked, retry in 1 minute.";

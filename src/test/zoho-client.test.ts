@@ -921,32 +921,31 @@ describe("Zoho write error handling", () => {
       }
     });
 
-    it("rejects a token issued for live when sandbox is configured, then allows a correct token", async () => {
+    it("accepts the same api_domain from a sandbox token without blocking CRM requests", async () => {
       configureZoho();
       let tokenRequests = 0;
+      let crmRequests = 0;
       const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
         if (String(input).includes("/oauth/v2/token")) {
           tokenRequests += 1;
-          const api_domain = tokenRequests === 1 ? "https://www.zohoapis.in" : "https://sandbox.zohoapis.in";
-          return new Response(JSON.stringify({ access_token: `access-${tokenRequests}`, expires_in: 3600, api_domain }), { status: 200 });
+          return new Response(JSON.stringify({
+            access_token: `access-${tokenRequests}`,
+            expires_in: 3600,
+            api_domain: "https://www.zohoapis.in",
+          }), { status: 200 });
         }
+        crmRequests += 1;
         return new Response(JSON.stringify({ data: [] }), { status: 200 });
       });
-      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
       try {
-        const { warmZohoToken } = await import("@/lib/zoho/client");
-        await expect(warmZohoToken()).rejects.toMatchObject({
-          code: "TOKEN_ENVIRONMENT_MISMATCH",
-          message: expect.stringContaining("ZOHO_SANDBOX=true"),
-          reference: expect.stringMatching(/^[A-F0-9]{12}$/),
-        });
+        const { warmZohoToken, zoho } = await import("@/lib/zoho/client");
         await warmZohoToken();
-        expect(tokenRequests).toBe(2);
+        await zoho("GET", "/Leads");
+        expect(tokenRequests).toBe(1);
+        expect(crmRequests).toBe(1);
         expect(Reflect.get(globalThis, "__atplZohoRefreshBlocked")).toBeUndefined();
-        expect(log.mock.calls.some(([label]) => label === "[zoho] token data-centre mismatch")).toBe(true);
       } finally {
         fetchMock.mockRestore();
-        log.mockRestore();
       }
     });
 

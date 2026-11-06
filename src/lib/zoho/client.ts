@@ -119,7 +119,7 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
     );
   }
   const json = (await res.json().catch(() => ({}))) as {
-    access_token?: string; expires_in?: number; api_domain?: string; error?: string; error_description?: string;
+    access_token?: string; expires_in?: number; error?: string; error_description?: string;
     code?: string; message?: string; details?: Record<string, unknown>; field?: string;
   };
   console.info(`[zoho] token ${res.status} ${Date.now() - started}ms`);
@@ -141,29 +141,6 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
       field: json.field,
     });
     throw new ZohoError(message, res.status, json.code ?? json.error, json.field, undefined, "POST /oauth/v2/token", json.details, reference);
-  }
-  if (json.api_domain) {
-    const sandboxToken = (() => {
-      try {
-        return new URL(json.api_domain).hostname.toLowerCase().startsWith("sandbox.");
-      } catch {
-        return false;
-      }
-    })();
-    const sandboxConfigured = e.ZOHO_SANDBOX === "true";
-    if (sandboxToken !== sandboxConfigured) {
-      const reference = newErrorReference();
-      const message = `Zoho token does not match the sandbox/live setting (ZOHO_SANDBOX=${String(e.ZOHO_SANDBOX ?? "false")}). Generate the token for the correct portal.`;
-      console.error("[zoho] token data-centre mismatch", {
-        reference,
-        environment: sandboxConfigured ? "sandbox" : "live",
-        tokenApiHost: json.api_domain,
-        apiHost: hosts().api,
-        elapsedMs: Date.now() - started,
-        message,
-      });
-      throw new ZohoError(message, res.status, "TOKEN_ENVIRONMENT_MISMATCH", undefined, undefined, "POST /oauth/v2/token", { api_domain: json.api_domain }, reference);
-    }
   }
   const lifetimeMs = Math.max(60_000, ((json.expires_in ?? 3600) - 300) * 1000);
   return { value: json.access_token, exp: Date.now() + lifetimeMs };
