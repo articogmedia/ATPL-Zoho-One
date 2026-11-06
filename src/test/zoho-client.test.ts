@@ -17,6 +17,8 @@ beforeEach(async () => {
   delete process.env.ZOHO_ACCOUNTS_URL;
   delete process.env.ZOHO_SANDBOX;
   delete process.env.ZOHO_QUEUE_OWNER_ID;
+  delete process.env.UPSTASH_REDIS_REST_URL;
+  delete process.env.UPSTASH_REDIS_REST_TOKEN;
   vi.doUnmock("@/lib/zoho/client");
   vi.resetModules();
 });
@@ -83,7 +85,7 @@ describe("Zoho lead actions", () => {
         super(message);
       }
     }
-    const list = vi.fn(async (module: string) => {
+    const list = vi.fn(async (module: string, _fields: string[]) => {
       if (module === "Tasks") throw new MockZohoError("Zoho connection problem: token refresh blocked", 400, "TOKEN_REFRESH_RATE_LIMITED");
       return [];
     });
@@ -115,7 +117,7 @@ describe("Zoho lead actions", () => {
         super(message);
       }
     }
-    const list = vi.fn(async () => []);
+    const list = vi.fn(async (_module: string, _fields: string[]) => []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: MockZohoError,
       zoho: vi.fn(async (_method: string, path: string) => {
@@ -1000,6 +1002,75 @@ describe("Zoho write error handling", () => {
       } finally {
         fetchMock.mockRestore();
         log.mockRestore();
+      }
+    });
+
+    it("reuses a shared Upstash access token after the local instance cache is cleared", async () => {
+      configureZoho();
+      process.env.UPSTASH_REDIS_REST_URL = "https://redis.example.test";
+      process.env.UPSTASH_REDIS_REST_TOKEN = "test-upstash-token";
+      const store = new Map<string, string>();
+      let tokenRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (url.includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          return new Response(JSON.stringify({ access_token: "shared-instance-access", expires_in: 3600 }), { status: 200 });
+        }
+        const args = JSON.parse(String(init?.body)) as string[];
+        const [command, key, value] = args;
+        if (command === "GET") return new Response(JSON.stringify({ result: store.get(key!) ?? null }), { status: 200 });
+        if (command === "SET") {
+          if (args.includes("NX") && store.has(key!)) return new Response(JSON.stringify({ result: null }), { status: 200 });
+          store.set(key!, value!);
+          return new Response(JSON.stringify({ result: "OK" }), { status: 200 });
+        }
+        if (command === "DEL") {
+          store.delete(key!);
+          return new Response(JSON.stringify({ result: 1 }), { status: 200 });
+        }
+        if (command === "EVAL") {
+          if (store.get(args[3]!) === args[4]) store.delete(args[3]!);
+          return new Response(JSON.stringify({ result: 1 }), { status: 200 });
+        }
+        throw new Error(`Unexpected Redis command ${command}`);
+      });
+      try {
+        let { warmZohoToken } = await import("@/lib/zoho/client");
+        await warmZohoToken();
+        expect(tokenRequests).toBe(1);
+        Reflect.deleteProperty(globalThis, "__atplZohoToken");
+        vi.resetModules();
+        ({ warmZohoToken } = await import("@/lib/zoho/client"));
+        await warmZohoToken();
+        expect(tokenRequests).toBe(1);
+        expect([...store.values()].some((value) => value.includes("shared-instance-access"))).toBe(true);
+      } finally {
+        fetchMock.mockRestore();
+      }
+    });
+
+    it("retries a transient read-side 5xx once without refreshing the access token", async () => {
+      configureZoho();
+      let tokenRequests = 0;
+      let apiRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          return new Response(JSON.stringify({ access_token: "read-retry-access", expires_in: 3600 }), { status: 200 });
+        }
+        apiRequests += 1;
+        return apiRequests === 1
+          ? new Response(JSON.stringify({ code: "INTERNAL_ERROR" }), { status: 503 })
+          : new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+      try {
+        const { zoho } = await import("@/lib/zoho/client");
+        await expect(zoho("GET", "/Leads")).resolves.toMatchObject({ data: [] });
+        expect(apiRequests).toBe(2);
+        expect(tokenRequests).toBe(1);
+      } finally {
+        fetchMock.mockRestore();
       }
     });
 });

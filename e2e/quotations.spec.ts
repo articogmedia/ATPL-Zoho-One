@@ -24,8 +24,6 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await page.goto("/quotations");
     await expect(page.getByRole("heading", { name: "Create Quotation" })).toBeVisible();
     await page.locator("#quote-step-customer ul button").first().click();
-    await expect(page.locator("#quote-step-products")).toHaveCount(0);
-    await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect(page.locator("#quote-step-customer")).toHaveCount(0);
     await expect(page.locator("#quote-step-products")).toBeVisible();
 
@@ -108,6 +106,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
 }
 
 test("new quotation customer can be cancelled or created and selected", async ({ page }) => {
+  const mobile = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
@@ -123,7 +122,7 @@ test("new quotation customer can be cancelled or created and selected", async ({
   await page.getByRole("button", { name: "New customer" }).click();
   await expect(page.getByLabel("Contact name")).toHaveValue("");
   await page.getByLabel("Contact name").fill("E2E Quotation Customer");
-  await page.getByLabel("Mobile number").fill("8222222299");
+  await page.getByLabel("Mobile number").fill(mobile);
   await page.getByRole("combobox", { name: "Source", exact: true }).click();
   await page.getByRole("option", { name: "Website", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Source", exact: true })).toContainText("Website");
@@ -133,7 +132,7 @@ test("new quotation customer can be cancelled or created and selected", async ({
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.locator("#quote-step-customer")).toContainText("E2E Quotation Customer");
-  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.locator("#quote-step-customer ul button").filter({ hasText: "E2E Quotation Customer" }).click();
   await expect(page.locator("#quote-step-products")).toBeVisible();
   await page.getByRole("button", { name: "Item 1 product" }).click();
   const productDialog = page.getByRole("dialog", { name: "Choose product" });

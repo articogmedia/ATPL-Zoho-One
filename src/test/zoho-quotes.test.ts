@@ -89,7 +89,7 @@ describe("Zoho quotation creation", () => {
       Discount: 4000,
       Grand_Total: 240000,
     }));
-    expect(infoLog).toHaveBeenCalledWith("[zoho] creating quote with Lead_Ref", expect.objectContaining({
+    expect(infoLog).toHaveBeenCalledWith("[zoho] creating quote", expect.objectContaining({
       leadId: "lead-1",
       leadIdMatchesRequest: true,
       leadRefField: "Lead_Ref",
@@ -102,6 +102,9 @@ describe("Zoho quotation creation", () => {
         system_mandatory: true,
       }),
       payloadKeys: expect.arrayContaining(["Lead_Ref", "Product_Details"]),
+      requestBody: {
+        data: [expect.objectContaining({ Lead_Ref: { id: "lead-1" } })],
+      },
     }));
     expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
       Quoted_Items: expect.anything(),
@@ -150,7 +153,7 @@ describe("Zoho quotation creation", () => {
     }));
   });
 
-  it("does not send a Leads ID to a lookup targeting another module", async () => {
+  it("omits an unusable lookup and keeps the lead ID in the subject", async () => {
     const write = vi.fn(async () => "should-not-save");
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") {
@@ -182,15 +185,16 @@ describe("Zoho quotation creation", () => {
       offerNo: "245/26-27",
       leadId: "lead-1",
       items: [{ productId: "product-1", qty: 1, discount: 0 }],
-    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).rejects.toMatchObject({
-      message: "Quotes field Lead_Ref targets Accounts, not Leads.",
-      code: "INVALID_LEAD_REFERENCE",
-      field: "Lead_Ref",
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
+      leadId: "lead-1",
     });
-    expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.anything());
+    expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
+      Subject: expect.stringContaining("[Lead ID: lead-1]"),
+    }));
+    expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({ Lead_Ref: expect.anything() }));
   });
 
-  it("fails clearly when Lead_Ref is missing from Quotes metadata without guessing its type", async () => {
+  it("creates the quote without guessing when Lead_Ref is missing from metadata", async () => {
     const write = vi.fn(async () => "quote-absent");
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") return { fields: quoteFields.fields.filter((field) => field.api_name !== "Lead_Ref") };
@@ -218,11 +222,13 @@ describe("Zoho quotation creation", () => {
       offerNo: "243/26-27",
       leadId: "lead-1",
       items: [{ productId: "product-1", qty: 1, discount: 0 }],
-    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).rejects.toMatchObject({
-      message: "Required field missing: Lead_Ref",
-      field: "Lead_Ref",
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
+      leadId: "lead-1",
     });
-    expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.anything());
+    expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
+      Subject: expect.stringContaining("[Lead ID: lead-1]"),
+    }));
+    expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({ Lead_Ref: expect.anything() }));
   });
 
   it("reports all mandatory Quotes fields omitted by the payload together", async () => {

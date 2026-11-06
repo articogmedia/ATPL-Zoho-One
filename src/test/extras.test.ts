@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAdvanceLeadStatus, financialYear, isAssignable, nextOfferNo, normalizePhone, quoteTotals, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
+import { canAdvanceLeadStatus, canUpdateWorkItem, financialYear, isAssignable, leadsForTab, nextOfferNo, normalizePhone, quotationCustomers, quoteTotals, reassignLeadOptimistically, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
 import { CALL_STATUS_BY_OUTCOME, zohoLeadSource } from "@/lib/zoho/fields";
 import { mapLead, mapQuote, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
@@ -10,6 +10,56 @@ describe("demo login safety", () => {
   it("hides demo buttons in production unless explicitly allowed", () => {
     expect(productionDemoLoginAllowed("production", "demo", true, false)).toBe(false);
     expect(productionDemoLoginAllowed("production", "demo", true, true)).toBe(true);
+  });
+});
+
+describe("optimistic lead reassignment", () => {
+  it("removes a reassigned lead from My Leads and updates tab counts", () => {
+    const reshma = { id: "reshma", name: "Reshma", role: "Manager" as const };
+    const lead = {
+      id: "L1", name: "Customer", company: "", phone: "9876543210", area: "", source: "Direct Call" as const,
+      status: "Fresh Lead" as const, assignedTo: null, ownerId: "reshma",
+      remarks: "", createdOn: "2026-11-06", address: "", touchedBy: [],
+    };
+    const result = reassignLeadOptimistically(reshma, lead, { id: "saikiran", name: "Sai Kiran" }, {
+      fresh: 1, assigned: 0, callback: 0, mine: 1, all: 1,
+    });
+
+    expect(result.lead).toMatchObject({
+      assignedTo: "Sai Kiran", assignedToId: "saikiran", ownerId: "saikiran", status: "Assigned to Sales",
+    });
+    expect(leadsForTab(reshma, [result.lead], "mine")).toHaveLength(0);
+    expect(leadsForTab(reshma, [result.lead], "all")).toHaveLength(1);
+    expect(result.tabCounts).toEqual({ fresh: 0, assigned: 1, callback: 0, mine: 0, all: 1 });
+  });
+});
+
+describe("quotation customer selection", () => {
+  it("keeps every visible customer, including Assigned to Sales leads", () => {
+    const leads = Array.from({ length: 24 }, (_, index) => ({
+      id: `L${index}`, name: `Customer ${index}`, company: "", phone: `987654${String(index).padStart(4, "0")}`,
+      area: "", source: "Direct Call" as const, status: index % 2 ? "Assigned to Sales" as const : "Fresh Lead" as const,
+      assignedTo: null, ownerId: "manager-1", remarks: "", createdOn: "", address: "", touchedBy: [],
+    }));
+    expect(quotationCustomers(leads, "")).toHaveLength(24);
+    expect(quotationCustomers(leads, "").filter((lead) => lead.status === "Assigned to Sales")).toHaveLength(12);
+  });
+});
+
+describe("work update authorization", () => {
+  const task = {
+    id: "task-1", leadId: "lead-1", customer: "Customer", address: "", area: "", executive: "Sai Kiran",
+    executiveId: "sai-id", type: "Call", isVisit: false, date: "2026-11-06", time: "10:00",
+    status: "Assigned" as const, nextAction: "", followUp: "", notes: "", done: false,
+  };
+
+  it("allows managers to update another executive's task", () => {
+    expect(canUpdateWorkItem({ id: "manager-id", name: "Manager", role: "Manager" }, task)).toBe(true);
+  });
+
+  it("prevents an executive from updating another executive's task", () => {
+    expect(canUpdateWorkItem({ id: "other-id", name: "Other", role: "Sales Executive" }, task)).toBe(false);
+    expect(canUpdateWorkItem({ id: "sai-id", name: "Sai Kiran", role: "Sales Executive" }, task)).toBe(true);
   });
 });
 
@@ -171,13 +221,17 @@ describe("zoho mapping", () => {
     expect(mapUser({ id: "1", full_name: "A", email: "A@EXAMPLE.COM", role: { name: "Manager" } }, overrides)?.role).toBe("Calling Team");
     expect(mapUser({ id: "2", full_name: "B", role: { name: "Unknown" } })).toBeNull();
   });
-  it("normalizes duplicated Zoho user name parts", () => {
+  it("prefers Zoho full_name and cleans composed names", () => {
     expect(mapUser({
-      id: "1", full_name: "Pavan Pavan Kumar", first_name: "Pavan", last_name: "Pavan Kumar",
+      id: "1", full_name: "Pavan Kumar", first_name: "Pavan", last_name: "Pavan Kumar",
       role: { name: "Sales Executive" },
     })?.name).toBe("Pavan Kumar");
     expect(mapUser({
-      id: "2", full_name: "Pavan Pavan Kumar", role: { name: "Sales Executive" },
+      id: "2", full_name: "", first_name: "Sai", last_name: "Kiran",
+      role: { name: "Sales Executive" },
+    })?.name).toBe("Sai Kiran");
+    expect(mapUser({
+      id: "3", full_name: "  Pavan   Kumar  ", role: { name: "Sales Executive" },
     })?.name).toBe("Pavan Kumar");
   });
   it("maps portal sources to values configured in Zoho", () => {
@@ -205,6 +259,13 @@ describe("zoho mapping", () => {
     expect(mapTaskStatus("In Progress")).toBe("In Progress");
     expect(mapTaskStatus("Completed")).toBe("Completed");
     expect(mapTaskStatus("completed")).toBe("Completed");
+  });
+  it("normalizes the Zoho Owner reference used by the lead list", () => {
+    const lead = mapLead({
+      id: "L2", Last_Name: "Customer", Lead_Status: "Assigned to Sales",
+      Owner: { id: "u1", name: "Pavan Pavan Kumar" },
+    }, execs);
+    expect(lead.assignedTo).toBe("Pavan Kumar");
   });
   it("uses the quotation subject when offer number and linked customer are unavailable", () => {
     const quote = mapQuote({

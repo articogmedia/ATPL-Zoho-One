@@ -3,6 +3,7 @@
 import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
+import { toast } from "sonner";
 import { loginAction } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
 
@@ -14,10 +15,18 @@ export function LoginForm() {
   const [capsLockOn, setCapsLockOn] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const [retried, setRetried] = useState(false);
+  const [returnTo, setReturnTo] = useState("");
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     void fetch("/api/warm", { method: "GET", cache: "no-store" }).catch(() => undefined);
+    const params = new URLSearchParams(window.location.search);
+    const destination = params.get("returnTo");
+    if (destination) setReturnTo(destination);
+    if (params.get("expired") === "1") {
+      toast.error("Session expired, please sign in again");
+      window.history.replaceState(null, "", "/login");
+    }
   }, []);
 
   useEffect(() => {
@@ -66,6 +75,7 @@ export function LoginForm() {
 
   return (
     <form ref={formRef} action={action} onSubmit={handleSubmit} className="space-y-4" noValidate>
+      <input type="hidden" name="returnTo" value={returnTo} />
       <label htmlFor="login-username" className="block text-sm font-medium text-slate-700">
         Username
         <input id="login-username" name="username" value={username} onChange={(event) => setUsername(event.target.value)} required placeholder="Enter your username" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} className="mt-1 h-12 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 text-base focus:bg-white focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary" />

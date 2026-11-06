@@ -25,14 +25,14 @@ export interface CrmRepository {
   findLeadByPhone(phone: string): Promise<{ lead: Lead; matchedField: "Mobile" | "Phone" } | null>;
   listAssignableUsers(): Promise<User[]>;
   createLead(input: NewLead, actor: User, assignToId: string | null, forceCreate?: boolean): Promise<Lead>;
-  assignLead(id: string, assigneeId: string, actor: User): Promise<{ owner: string; status: string; taskCreated: boolean; taskWarning?: string }>;
+  assignLead(id: string, assigneeId: string, actor: User): Promise<{ owner: string; ownerId: string; status: string; taskCreated: boolean; taskWarning?: string }>;
   fixAssignedLeads(actor: User): Promise<number>;
   listFixableAssignedLeads(actor: User): Promise<{ id: string; name: string; ownerName: string }[]>;
   updateLead(id: string, patch: LeadPatch, actor: User): Promise<void>;
   deleteLead(id: string): Promise<void>;
   getLeadHistory(id: string): Promise<LeadUpdate[]>;
   getLeadTimeline(id: string): Promise<LeadTimelineItem[]>;
-  logCall(input: LogCallInput, actor: User): Promise<void>;
+  logCall(input: LogCallInput, actor: User): Promise<{ historyWarning?: string }>;
   listCalls(): Promise<CallActivity[]>;
 
   listProducts(): Promise<Product[]>;
@@ -44,5 +44,5 @@ export interface CrmRepository {
   getVisitsWarning?(): string | null;
   getVisit(id: string): Promise<Visit | null>;
   createVisit(input: NewVisit, actor: User): Promise<void>;
-  updateVisit(id: string, patch: VisitPatch, actor: User): Promise<void>;
+  updateVisit(id: string, patch: VisitPatch, actor: User, current?: Visit): Promise<void>;
 }

@@ -23,6 +23,18 @@ function firstAllowedPage(user: User) {
     : first === "performance" ? "/performance" : "/home";
 }
 
+function allowedReturnPath(value: string, user: User, fallback: string): string {
+  const allowed: Record<string, Parameters<typeof canAccess>[1]> = {
+    "/leads": "leads",
+    "/quotations": "quotations",
+    "/visits": "visits",
+    "/performance": "performance",
+  };
+  const path = value.split(/[?#]/, 1)[0] ?? "";
+  if (!Object.hasOwn(allowed, path) || !canAccess(user.role, allowed[path]!)) return fallback;
+  return value.startsWith("/") && !value.startsWith("//") ? value : fallback;
+}
+
 async function prefetchLandingData(user: User, path: string) {
   const logFailure = (resource: string, error: unknown) => console.error("[auth] landing data prefetch failed", {
     reference: newErrorReference(),
@@ -67,7 +79,10 @@ export async function demoLogin(userId: string) {
   const user = STATIC_USERS.find((candidate) =>
     candidate.username === userId || candidate.zohoUserId === userId);
   if (!user) redirect("/login");
-  const portalUser = staticUserAsPortalUser(user);
+  const staticPortalUser = staticUserAsPortalUser(user);
+  const portalUser = process.env.DATA_SOURCE === "mock"
+    ? { ...staticPortalUser, id: (await crm().listUsers()).find((candidate) => candidate.name === user.name)?.id ?? staticPortalUser.id }
+    : staticPortalUser;
   const destination = firstAllowedPage(portalUser);
   await createSession(portalUser, user.username);
   void prefetchLandingData(portalUser, destination);
@@ -102,7 +117,8 @@ export async function loginAction(_: unknown, formData: FormData) {
   }
   await loginAttemptStore.delete(username);
   const portalUser = staticUserAsPortalUser(user);
-  const destination = firstAllowedPage(portalUser);
+  const fallback = firstAllowedPage(portalUser);
+  const destination = allowedReturnPath(String(formData.get("returnTo") ?? ""), portalUser, fallback);
   await createSession(portalUser, user.username);
   console.info(`[auth] login success ${Date.now() - started}ms`);
   void prefetchLandingData(portalUser, destination);

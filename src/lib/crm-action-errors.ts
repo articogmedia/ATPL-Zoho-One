@@ -11,9 +11,13 @@ export function friendlyZohoError(
   field?: string,
   reference = code || String(status || "CRM"),
   operation?: string,
+  details?: Record<string, unknown>,
 ): string {
   const suffix = ` (Ref: ${reference})`;
   const responseMessage = message?.trim().toLowerCase() ?? "";
+  if (status === 404 && /task|visit/.test(responseMessage)) {
+    return `This task no longer exists, refreshing…${suffix}`;
+  }
   if (code?.startsWith("TOKEN_REFRESH_")) {
     const reason = message?.replace(/^Zoho connection problem:\s*/i, "").trim()
       || "Zoho token is blocked, retry in 1 minute.";
@@ -26,12 +30,20 @@ export function friendlyZohoError(
     return `Customer already exists. Mobile number is already in use.${suffix}`;
   }
   if (code === "MANDATORY_NOT_FOUND") {
+    if (field === "Lead_Ref") {
+      const expected = typeof details?.expected_data_type === "string" ? ` Zoho expects ${details.expected_data_type}.` : "";
+      return `Zoho Quotes requires field Lead_Ref.${expected} Check its field type and layout configuration.${suffix}`;
+    }
     return `${field ? `Required field missing: ${field}` : "A required field is missing."}${suffix}`;
   }
   if (code === "INVALID_PICKLIST" || (field === "Lead_Source" && (code === "INVALID_DATA" || responseMessage.includes("picklist")))) {
     return `Lead source is not valid in CRM.${suffix}`;
   }
   if (code === "INVALID_DATA") {
+    if (field === "Lead_Ref") {
+      const expected = typeof details?.expected_data_type === "string" ? ` Zoho expects ${details.expected_data_type}.` : "";
+      return `Zoho rejected the lead reference in Quotes field Lead_Ref.${expected} Check the field type and lookup target.${suffix}`;
+    }
     if (field === "Mobile" || field === "Phone") return `Enter a valid 10-digit mobile number.${suffix}`;
     if (field === "Company") return `Required field missing: Company${suffix}`;
     return field

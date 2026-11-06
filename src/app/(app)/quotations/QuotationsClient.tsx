@@ -2,16 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Image from "next/image";
-import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, LoaderCircle, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
+import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { addLeadAction, createQuoteAction, getQuoteDetailAction, markQuotationSentAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { splitQuotationItems } from "@/lib/quotation-presentation";
-import { LEAD_SOURCES, formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
+import { LEAD_SOURCES, formatINR, quoteTotals, quotationCustomers, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
 type WizardState = {
@@ -76,6 +77,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: "Direct Call" as LeadSource });
   const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
   const [pending, start] = useTransition();
+  const [customerRetryable, setCustomerRetryable] = useState(false);
   const [quoteSaveError, setQuoteSaveError] = useState("");
   const [savedQuotes, setSavedQuotes] = useState(quotes);
   const [savedOpen, setSavedOpen] = useState(false);
@@ -86,6 +88,24 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const savedSearchRef = useRef<HTMLInputElement>(null);
   const savedButtonRef = useRef<HTMLButtonElement>(null);
   const previousStep = useRef(step);
+
+  useEffect(() => {
+    const saved = readExpiredAction<{ type: string; payload: Partial<WizardState> & Partial<typeof nl> }>();
+    if (saved?.type === "add-customer") {
+      setNl((current) => ({ ...current, ...saved.payload }));
+      setAdding(true);
+      clearExpiredAction();
+    } else if (saved?.type === "create-quote") {
+      setWizard((current) => ({
+        ...current,
+        ...saved.payload,
+        step: 2,
+        savedQuotation: undefined,
+        quotationSent: false,
+      }));
+      clearExpiredAction();
+    }
+  }, []);
 
   const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
   const items = rows.flatMap((r) => { const p = byId.get(r.productId); return p ? [{ productId: p.id, model: p.model, description: p.description, unit: p.unit, price: p.price, qty: r.qty, discount: r.discount }] : []; });
@@ -132,10 +152,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     }
   }, [readOnlyQuote]);
 
-  const matches = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    return myLeads.filter((l) => !s || [l.name, l.company, l.phone, l.area].some((f) => f.toLowerCase().includes(s))).slice(0, 6);
-  }, [q, myLeads]);
+  const matches = useMemo(() => quotationCustomers(myLeads, q), [q, myLeads]);
 
   const focusProducts = () => {
     requestAnimationFrame(() => {
@@ -181,9 +198,17 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     focusProducts();
   };
 
+  const selectCustomer = (id: string) => {
+    setLeadId(id);
+    setStep(2);
+    focusProducts();
+  };
+
   const saveNewLead = () => start(async () => {
     const res = await addLeadAction({ ...nl, remarks: "Added from Create Quotation" });
     if (res.ok && res.data) {
+      setCustomerRetryable(false);
+      clearExpiredAction();
       setCreated((current) => [res.data!, ...current.filter((item) => item.id !== res.data!.id)]);
       setLeadId(res.data.id);
       setStep(2);
@@ -195,6 +220,11 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     } else if (!res.ok && res.duplicate) {
       setDuplicateCustomer(res.duplicate);
     } else if (!res.ok) {
+      if (isSessionExpiredMessage(res.error)) {
+        redirectForExpiredSession({ type: "add-customer", payload: nl });
+        return;
+      }
+      setCustomerRetryable(isRetryableActionMessage(res.error));
       toast.error(res.error);
     }
   });
@@ -218,6 +248,13 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
       validateQuoteLine(row.qty, row.discount, byId.get(row.productId)!.price) === null);
     const res = await createQuoteAction({ leadId: lead.id, subject, items: selectedRows });
     if (!res.ok) {
+      if (isSessionExpiredMessage(res.error)) {
+        redirectForExpiredSession({
+          type: "create-quote",
+          payload: { ...wizard, subject, step: 2, savedQuotation: undefined },
+        });
+        return;
+      }
       setQuoteSaveError(res.error);
       toast.error(res.error);
       return;
@@ -340,7 +377,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               <Button type="button" variant="outline" className="mt-2" onClick={() => selectDuplicateCustomer(duplicateCustomer)}>Use this customer</Button>
             </div>}
             <div className="flex gap-2">
-              <Button type="button" className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>{pending ? "Adding…" : "Add customer"}</Button>
+              <Button type="button" className="flex-1" onClick={saveNewLead} disabled={pending || !nl.name.trim() || !nl.phone.trim()}>{pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}{pending ? "Adding…" : customerRetryable ? "Retry add customer" : "Add customer"}</Button>
               <Button type="button" variant="ghost" onClick={() => {
                 setAdding(false);
                 setDuplicateCustomer(null);
@@ -351,9 +388,8 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         ) : (
           <>
             {presetLeadError && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{presetLeadError}</div>}
-            {lead && <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary p-3 text-secondary-foreground">
-              <div><div className="font-semibold">{lead.company || lead.name}</div><div className="text-sm">{lead.name} · {lead.phone} · {lead.area}</div></div>
-              <Button type="button" disabled={pending} onClick={() => { setStep(2); focusProducts(); }}>Next</Button>
+            {lead && <div className="rounded-lg bg-secondary p-3 text-secondary-foreground">
+              <div className="font-semibold">{lead.company || lead.name}</div><div className="text-sm">{lead.name} · {lead.phone} · {lead.area}</div>
             </div>}
             <div className="flex gap-2">
               <div className="relative flex-1">
@@ -362,10 +398,10 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               </div>
               <Button type="button" variant="outline" onClick={() => setAdding(true)}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
             </div>
-            <ul className="divide-y rounded-lg border">
+            <ul className="max-h-[min(55vh,32rem)] divide-y overflow-y-auto rounded-lg border">
               {matches.map((l) => (
                 <li key={l.id}>
-                  <button type="button" aria-pressed={leadId === l.id} className={`w-full p-3 text-left hover:bg-secondary ${leadId === l.id ? "bg-secondary" : ""}`} onClick={() => setLeadId(String(l.id).trim())}>
+                  <button type="button" aria-pressed={leadId === l.id} className={`w-full p-3 text-left hover:bg-secondary ${leadId === l.id ? "bg-secondary" : ""}`} onClick={() => selectCustomer(String(l.id).trim())}>
                     <div className="font-medium">{l.company || l.name}</div>
                     <div className="text-sm text-muted-foreground">{l.name} · {l.phone} · {l.area}</div>
                   </button>
@@ -381,7 +417,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
         <h2 className="text-lg font-semibold">Step 2 · Products</h2>
         {quoteSaveError && <div role="alert" className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
           <span>{quoteSaveError}</span>
-          <Button type="button" variant="outline" className="shrink-0" disabled={pending || !productsValid} onClick={previewOffer}>Retry save</Button>
+          {productsValid && <Button type="button" variant="outline" className="shrink-0" disabled={pending} onClick={previewOffer}>Retry save</Button>}
         </div>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="hidden overflow-x-auto lg:block">
@@ -393,7 +429,7 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
                 <tr key={i} className="border-b">
                   <td className="p-2">{i + 1}</td>
-                  <td className="p-2"><ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} />{!p && <p className="mt-1 text-xs text-muted-foreground">Select a product</p>}</td>
+                  <td className="p-2"><ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} /></td>
                   <td className="p-2">{p?.unit}</td>
                   <td className="p-2"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
                   <td className="p-2 text-right">{formatINR(p?.price ?? 0)}</td>
@@ -410,7 +446,6 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               <div className="flex min-h-11 items-center justify-between"><span className="font-semibold">Item {i + 1}</span>
                 <Button variant="ghost" size="icon" className="h-11 w-11" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></div>
               <ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} />
-              {!p && <p className="text-sm text-muted-foreground">Select a product</p>}
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Quantity ({p?.unit || "Unit"})</span><div className="grid grid-cols-[44px_1fr_44px]"><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-r-none" aria-label={`Decrease quantity for item ${i + 1}`} onClick={() => setQty(i, String(Math.max(1, r.qty - 1)))}><Minus /></Button><input aria-label={`Quantity for item ${i + 1}`} type="number" min={1} inputMode="numeric" className={`${fieldClass} min-h-11 rounded-none text-center text-base`} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-l-none" aria-label={`Increase quantity for item ${i + 1}`} onClick={() => setQty(i, String(r.qty + 1))}><Plus /></Button></div></label>
                 <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Discount</span><input aria-label={`Discount for item ${i + 1}`} type="number" min={0} inputMode="numeric" className={`${fieldClass} min-h-11 text-base`} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></label>

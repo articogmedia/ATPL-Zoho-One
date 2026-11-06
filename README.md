@@ -74,7 +74,7 @@ src/test/                vitest unit tests
 
 ## Known limits (be upfront with the client)
 
-- Reads the latest `ZOHO_MAX_LEADS` (default 1000) leads. Beyond that, add server-side search (Zoho search API).
+- Reads up to `ZOHO_MAX_LEADS` leads (default 5000), paging through Zoho's 200-record pages. Set it to the org's expected lead count (maximum 5000).
 - The cache is per server instance. If you run several instances, move it to Redis/Upstash.
 - "Download PDF" uses the browser print dialog (matches the Lovable build). A pixel-exact Excel-template PDF
   needs a Zoho quote template or a server-side PDF step — a separate, scoped task.

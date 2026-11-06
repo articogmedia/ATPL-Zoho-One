@@ -10,7 +10,7 @@ import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
   type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
-import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitUpdate } from "./site-visits";
+import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitRecord, mapSiteVisitUpdate } from "./site-visits";
 
 const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Street", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
 
@@ -46,6 +46,7 @@ type QuoteFieldMetadata = {
   system_mandatory?: boolean;
   required?: boolean;
   is_mandatory?: boolean;
+  read_only?: boolean;
 };
 
 type QuoteLayoutField = {
@@ -64,41 +65,25 @@ type QuoteLayout = {
   sections?: { fields?: QuoteLayoutField[] }[];
 };
 
-function quoteLeadReference(field: QuoteFieldMetadata, leadId: string): string | { id: string } {
+function quoteLeadReference(field: QuoteFieldMetadata, leadId: string): string | { id: string } | undefined {
   const normalizedLeadId = leadId.trim();
   if (!normalizedLeadId) throw new ZohoError("The selected lead has no Zoho record ID.", 400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead);
+  if (field.read_only) return undefined;
   const dataType = field.data_type?.trim().toLowerCase();
   if (dataType === "lookup") {
     const targetModule = field.lookup?.module?.api_name?.trim();
     if (targetModule?.toLowerCase() !== "leads") {
-      throw new ZohoError(
-        targetModule
-          ? `Quotes field ${FIELD.quote.lead} targets ${targetModule}, not Leads.`
-          : `Quotes field ${FIELD.quote.lead} has no lookup target in Zoho metadata.`,
-        400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead,
-        targetModule, "GET /settings/fields?module=Quotes",
-        { targetModule: targetModule ?? null, data_type: field.data_type, json_type: field.json_type },
-      );
+      return undefined;
     }
     return { id: normalizedLeadId };
   }
   if (["text", "string", "singleline", "single_line"].includes(dataType ?? "")) {
     if (field.max_length !== undefined && normalizedLeadId.length > field.max_length) {
-      throw new ZohoError(
-        `Lead ID exceeds the maximum length for Quotes field ${FIELD.quote.lead}.`,
-        400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead, undefined,
-        "GET /settings/fields?module=Quotes",
-        { max_length: field.max_length, leadIdLength: normalizedLeadId.length, data_type: field.data_type, json_type: field.json_type },
-      );
+      return undefined;
     }
     return normalizedLeadId;
   }
-  throw new ZohoError(
-    `Unsupported Zoho data type "${field.data_type ?? "unknown"}" for Quotes field ${FIELD.quote.lead}.`,
-    400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead, undefined,
-    "GET /settings/fields?module=Quotes",
-    { data_type: field.data_type ?? null, json_type: field.json_type ?? null },
-  );
+  return undefined;
 }
 
 function requiredQuoteLayoutFields(layouts: QuoteLayout[]): { layout: string | null; fields: string[] } {
@@ -356,8 +341,10 @@ const leads = cache(async function leads(): Promise<Lead[]> {
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));
 
 async function addNote(leadId: string, title: string, content: string) {
+  const parentId = leadId.trim();
+  if (!parentId) throw new ZohoError("Cannot create a note without a Zoho Lead ID.", 400, "INVALID_LEAD_REFERENCE", "Parent_Id");
   await zohoWrite("POST", "/Notes", {
-    Note_Title: title, Note_Content: content, Parent_Id: { id: leadId, module: { api_name: "Leads" } },
+    Note_Title: title, Note_Content: content, Parent_Id: { id: parentId }, se_module: "Leads",
   });
 }
 
@@ -512,9 +499,8 @@ export const zohoRepository: CrmRepository = {
 
   async assignLead(id, assigneeId, actor) {
     if (actor.role !== "Manager" && actor.role !== "Calling Team") throw new ZohoError("Only managers and the calling team can assign leads.");
-    const current = await this.getLead(id);
+    const [current, owner] = await Promise.all([this.getLead(id), userById(assigneeId)]);
     if (!current) throw new ZohoError("Lead not found", 404);
-    const owner = await userById(assigneeId);
     const nextStatus = current.status === "Fresh Lead" ? ASSIGNED_STAGE : current.status;
     const record = {
       Owner: { id: owner.id },
@@ -595,7 +581,7 @@ export const zohoRepository: CrmRepository = {
       });
     }
     invalidate("leads", "users", "visits");
-    return { owner: owner.name, status: mapLead(persisted, await assignableIds()).status, taskCreated, taskWarning };
+    return { owner: owner.name, ownerId: String(owner.id), status: mapLead(persisted, await assignableIds()).status, taskCreated, taskWarning };
   },
 
   async fixAssignedLeads(actor) {
@@ -724,16 +710,33 @@ export const zohoRepository: CrmRepository = {
   async logCall(input, actor) {
     const lead = await this.getLead(input.leadId);
     if (!lead) throw new ZohoError("Lead not found", 404);
+    if (!lead.id.trim() || lead.id.trim() !== input.leadId.trim()) {
+      throw new ZohoError("The selected lead ID does not match the CRM record.", 400, "INVALID_LEAD_REFERENCE", "What_Id");
+    }
     const status = CALL_STATUS_BY_OUTCOME[input.outcome];
     await zohoWrite("POST", "/Calls", {
       Subject: `${input.outcome} - ${lead.name}`,
-      What_Id: { id: lead.id }, Call_Type: "Outbound",
+      What_Id: { id: lead.id }, $se_module: "Leads", Call_Type: "Outbound",
       [FIELD.call.result]: input.outcome,
       [FIELD.call.startTime]: new Date().toISOString(),
       Description: input.remarks || undefined, Owner: { id: actor.id },
     });
     await zohoWrite("PUT", `/Leads/${lead.id}`, { Lead_Status: WRITE_LEAD_STATUS[status] }, { trigger: ["workflow"] });
-    await addNote(lead.id, "Call logged", `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name} at ${new Date().toISOString()})`);
+    let historyWarning: string | undefined;
+    try {
+      await addNote(lead.id, "Call logged", `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name} at ${new Date().toISOString()})`);
+    } catch (error) {
+      historyWarning = "Call outcome saved, but its history note could not be added.";
+      console.error("[zoho] call outcome saved but lead-history note failed", {
+        leadId: lead.id,
+        operation: "POST /Notes",
+        status: error instanceof ZohoError ? error.status : undefined,
+        code: error instanceof ZohoError ? error.code : undefined,
+        field: error instanceof ZohoError ? error.field : undefined,
+        reference: error instanceof ZohoError ? error.reference : undefined,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (input.followUp) {
       const owner = lead.assignedTo ? await userByName(lead.assignedTo) : actor;
       await zohoWrite("POST", "/Tasks", {
@@ -744,6 +747,7 @@ export const zohoRepository: CrmRepository = {
       });
     }
     invalidate("leads", "users", "visits");
+    return { historyWarning };
   },
 
   async listCalls(): Promise<CallActivity[]> {
@@ -823,17 +827,6 @@ export const zohoRepository: CrmRepository = {
     }
     const schema = await quoteSchema();
     const leadReferenceField = schema.fieldsByName.get(FIELD.quote.lead);
-    if (!leadReferenceField) {
-      console.error("[zoho] required Quotes lead-reference field is missing from module metadata", {
-        operation: "GET /settings/fields?module=Quotes",
-        requiredField: FIELD.quote.lead,
-      });
-      throw new ZohoError(
-        `Required field missing: ${FIELD.quote.lead}`,
-        400, "MANDATORY_NOT_FOUND", FIELD.quote.lead, undefined,
-        "GET /settings/fields?module=Quotes", { missingFields: [FIELD.quote.lead] },
-      );
-    }
     // Prices come from the Zoho catalogue, never from the browser.
     const lines = input.items.map((i) => {
       const p = products.find((x) => x.id === i.productId);
@@ -843,11 +836,10 @@ export const zohoRepository: CrmRepository = {
     });
     const totals = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price, discount: l.discount })));
     const customer = lead.company || lead.name;
-    const leadReference = quoteLeadReference(leadReferenceField, lead.id);
+    const leadReference = leadReferenceField ? quoteLeadReference(leadReferenceField, lead.id) : undefined;
     const quoteRecord: Record<string, unknown> = {
       Subject: `Offer ${input.offerNo} - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
-      [FIELD.quote.lead]: leadReference,
       Product_Details: lines.map((line) => ({
         product: { id: line.p.id },
         quantity: line.qty,
@@ -859,12 +851,31 @@ export const zohoRepository: CrmRepository = {
       })),
       Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
     };
+    if (leadReference !== undefined) quoteRecord[FIELD.quote.lead] = leadReference;
+    else {
+      const reason = !leadReferenceField ? "field missing from Quotes metadata"
+        : leadReferenceField.read_only ? "field is read-only"
+          : leadReferenceField.data_type?.toLowerCase() === "lookup"
+            ? `lookup target is ${leadReferenceField.lookup?.module?.api_name ?? "unknown"}, not Leads`
+            : `unsupported field type ${leadReferenceField.data_type ?? "unknown"}`;
+      console.warn("[zoho] omitting unusable optional quote lead reference", {
+        field: FIELD.quote.lead,
+        reason,
+        leadId: lead.id,
+      });
+      if (schema.fieldNames.has("Description") && schema.fieldsByName.get("Description")?.read_only !== true) {
+        quoteRecord.Description = `Related lead ID: ${lead.id}`;
+      } else {
+        quoteRecord.Subject = `${quoteRecord.Subject} [Lead ID: ${lead.id}]`;
+      }
+    }
     if (schema.fieldNames.has(FIELD.quote.offerNo)) quoteRecord[FIELD.quote.offerNo] = input.offerNo;
     else console.warn("[zoho] quote offer number custom field is unavailable; retaining it in Subject", {
       requestedField: FIELD.quote.offerNo,
     });
     const payloadFields = new Set(Object.keys(quoteRecord));
-    const missingMandatory = schema.mandatoryFields.filter((field) => !payloadFields.has(field));
+    const missingMandatory = schema.mandatoryFields
+      .filter((field) => field !== FIELD.quote.lead && !payloadFields.has(field));
     if (missingMandatory.length) {
       const layoutRequiredMissing = missingMandatory.filter((field) => schema.layoutRequiredFields.includes(field));
       const reason = layoutRequiredMissing.length && schema.mandatoryLayout
@@ -890,28 +901,30 @@ export const zohoRepository: CrmRepository = {
       );
     }
     const zohoHosts = hosts();
-    console.info("[zoho] creating quote with Lead_Ref", {
+    console.info("[zoho] creating quote", {
       operation: "POST /Quotes",
       environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
       apiHost: zohoHosts.api,
       leadId: lead.id.trim(),
       leadIdMatchesRequest: lead.id.trim() === requestedLeadId,
-      leadRefField: FIELD.quote.lead,
-      leadRefValue: leadReference,
+      leadRefField: leadReferenceField?.api_name ?? null,
+      leadRefValue: leadReference ?? null,
       leadRefValueType: leadReference === null ? "null" : Array.isArray(leadReference) ? "array" : typeof leadReference,
       fieldMetadata: {
-        api_name: leadReferenceField.api_name,
-        data_type: leadReferenceField.data_type,
-        json_type: leadReferenceField.json_type,
-        lookup_module_api_name: leadReferenceField.lookup?.module?.api_name ?? null,
-        system_mandatory: leadReferenceField.system_mandatory ?? null,
-        required: leadReferenceField.required ?? null,
-        is_mandatory: leadReferenceField.is_mandatory ?? null,
-        max_length: leadReferenceField.max_length ?? null,
+        api_name: leadReferenceField?.api_name ?? null,
+        data_type: leadReferenceField?.data_type ?? null,
+        json_type: leadReferenceField?.json_type ?? null,
+        lookup_module_api_name: leadReferenceField?.lookup?.module?.api_name ?? null,
+        system_mandatory: leadReferenceField?.system_mandatory ?? null,
+        required: leadReferenceField?.required ?? null,
+        is_mandatory: leadReferenceField?.is_mandatory ?? null,
+        read_only: leadReferenceField?.read_only ?? null,
+        max_length: leadReferenceField?.max_length ?? null,
       },
       mandatoryLayout: schema.mandatoryLayout,
       layoutRequiredFields: schema.layoutRequiredFields,
       payloadKeys: Object.keys(quoteRecord),
+      requestBody: { data: [quoteRecord] },
     });
     const id = await zohoWrite("POST", "/Quotes", {
       ...quoteRecord,
@@ -955,7 +968,32 @@ export const zohoRepository: CrmRepository = {
     }
   },
   getVisitsWarning() { return taskMetadataWarning; },
-  async getVisit(id) { return (await this.listVisits()).find((v) => v.id === id) ?? null; },
+  async getVisit(id) {
+    const encodedId = encodeURIComponent(id);
+    try {
+      const response = await zoho<{ data?: ZTask[] }>("GET", `/Tasks/${encodedId}`, {
+        query: { fields: [...new Set([...TASK_FIELDS, ...STANDARD_TASK_FIELDS])].join(",") },
+      });
+      const task = response?.data?.[0];
+      if (task) return mapTask(task, await leadMap());
+    } catch (error) {
+      if (!(error instanceof ZohoError) || error.status !== 404) throw error;
+    }
+
+    const schema = await getSiteVisitsSchema();
+    if (!schema?.lead || !schema.date) return null;
+    try {
+      const fields = [...new Set([schema.lead, schema.date, schema.time, schema.status, schema.address, schema.notes, schema.nextAction, schema.followUp, "Owner", "Name"].filter(Boolean) as string[])];
+      const response = await zoho<{ data?: Record<string, unknown>[] }>("GET", `/${schema.module}/${encodedId}`, {
+        query: { fields: fields.join(",") },
+      });
+      const record = response?.data?.[0];
+      return record ? mapSiteVisitRecord(schema, record, await leadMap()) : null;
+    } catch (error) {
+      if (error instanceof ZohoError && error.status === 404) return null;
+      throw error;
+    }
+  },
 
   async createVisit(input, actor) {
     const [owner, lead] = await Promise.all([userByName(input.executive), this.getLead(input.leadId)]);
@@ -985,8 +1023,8 @@ export const zohoRepository: CrmRepository = {
     invalidate("visits");
   },
 
-  async updateVisit(id, p, actor) {
-    const current = await this.getVisit(id);
+  async updateVisit(id, p, actor, existingVisit) {
+    const current = existingVisit ?? await this.getVisit(id);
     if (!current) throw new ZohoError("Visit not found", 404);
     if (current.module) {
       const schema = await getSiteVisitsSchema();

@@ -46,6 +46,13 @@ export type Lead = {
   followUpTime?: string;
 };
 
+export function quotationCustomers(leads: Lead[], query: string): Lead[] {
+  const search = query.trim().toLowerCase();
+  return leads.filter((lead) =>
+    !search || [lead.name, lead.company, lead.phone, lead.area].some((value) => value.toLowerCase().includes(search)),
+  );
+}
+
 export function canAdvanceLeadStatus(current: LeadStatus, target: "Site Visit Scheduled" | "Quotation Sent"): boolean {
   if (["Won", "Lost Lead", "Junk Lead", "Not Qualified"].includes(current)) return false;
   const rank: Partial<Record<LeadStatus, number>> = {
@@ -295,6 +302,10 @@ export function visibleFor<T extends { assignedTo?: string | null; assignedToId?
     (!r.ownerId && !r.assignedToId && !r.executiveId && (r.assignedTo ?? r.executive) === user.name));
 }
 
+export function canUpdateWorkItem(user: User, visit: Visit): boolean {
+  return user.role !== "Sales Executive" || visibleFor(user, [visit]).length > 0;
+}
+
 export type LeadTab = "fresh" | "assigned" | "callback" | "mine" | "all";
 export type LeadBucket = "fresh" | "assigned" | "callback" | "other";
 
@@ -317,13 +328,71 @@ export type LeadFilters = {
   to?: string;
 };
 
+function matchesLeadFilters(lead: Lead, search: string, source: LeadSource | "All", filters: LeadFilters): boolean {
+  const q = search.trim().toLowerCase();
+  if (source !== "All" && lead.source !== source) return false;
+  if (filters.owner && filters.owner !== "All" && (lead.assignedTo ?? "Unassigned") !== filters.owner) return false;
+  if (filters.stage && filters.stage !== "All" && lead.status !== filters.stage) return false;
+  if (filters.from && lead.createdOn < filters.from) return false;
+  if (filters.to && lead.createdOn > filters.to) return false;
+  return !q || [lead.name, lead.company, lead.phone.replace(/\s/g, ""), lead.phone, lead.id]
+    .some((field) => field.toLowerCase().includes(q));
+}
+
+export function reassignLeadOptimistically(
+  user: User,
+  lead: Lead,
+  assignee: Pick<User, "id" | "name">,
+  tabCounts: Record<LeadTab, number>,
+  search = "",
+  source: LeadSource | "All" = "All",
+  filters: LeadFilters = {},
+): { lead: Lead; tabCounts: Record<LeadTab, number> } {
+  const reassigned: Lead = {
+    ...lead,
+    assignedTo: assignee.name,
+    assignedToId: String(assignee.id),
+    ownerId: String(assignee.id),
+    status: lead.status === "Fresh Lead" ? "Assigned to Sales" : lead.status,
+  };
+  const nextCounts = { ...tabCounts };
+  for (const tab of ["fresh", "assigned", "callback", "mine", "all"] as const) {
+    nextCounts[tab] = Math.max(0, nextCounts[tab] + leadTabMembership(user, reassigned, tab, search, source, filters) -
+      leadTabMembership(user, lead, tab, search, source, filters));
+  }
+  return { lead: reassigned, tabCounts: nextCounts };
+}
+
+export function adjustLeadTabCounts(
+  user: User,
+  before: Lead | null,
+  after: Lead | null,
+  tabCounts: Record<LeadTab, number>,
+  search = "",
+  source: LeadSource | "All" = "All",
+  filters: LeadFilters = {},
+): Record<LeadTab, number> {
+  const nextCounts = { ...tabCounts };
+  for (const tab of ["fresh", "assigned", "callback", "mine", "all"] as const) {
+    nextCounts[tab] = Math.max(0, nextCounts[tab] +
+      leadTabMembership(user, after, tab, search, source, filters) -
+      leadTabMembership(user, before, tab, search, source, filters));
+  }
+  return nextCounts;
+}
+
+function leadTabMembership(
+  user: User, lead: Lead | null, tab: LeadTab, search: string, source: LeadSource | "All", filters: LeadFilters,
+): number {
+  return lead && leadsForTab(user, [lead], tab, search, source, filters).length ? 1 : 0;
+}
+
 /** Leads for a tab, after role visibility, search and source filter. */
 export function leadsForTab(
   user: User, leads: Lead[], tab: LeadTab, search = "", source: LeadSource | "All" = "All", filters: LeadFilters = {},
 ): Lead[] {
   if (tab === "fresh" && user.role === "Sales Executive") return [];
   if (tab === "all" && user.role !== "Manager") return [];
-  const q = search.trim().toLowerCase();
   return visibleFor(user, leads).filter((l) => {
     if (tab !== "all" && tab !== "mine" && leadBucket(l) !== tab) return false;
     if (tab === "mine" && !(
@@ -332,13 +401,7 @@ export function leadsForTab(
       l.assignedTo === user.name ||
       (user.role === "Calling Team" && l.touchedBy.includes(user.name))
     )) return false;
-    if (source !== "All" && l.source !== source) return false;
-    if (filters.owner && filters.owner !== "All" && (l.assignedTo ?? "Unassigned") !== filters.owner) return false;
-    if (filters.stage && filters.stage !== "All" && l.status !== filters.stage) return false;
-    if (filters.from && l.createdOn < filters.from) return false;
-    if (filters.to && l.createdOn > filters.to) return false;
-    if (q && ![l.name, l.company, l.phone.replace(/\s/g, ""), l.phone, l.id].some((f) => f.toLowerCase().includes(q))) return false;
-    return true;
+    return matchesLeadFilters(l, search, source, filters);
   }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
 }
 

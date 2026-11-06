@@ -3,6 +3,12 @@ import type { Lead, LeadUpdate, Product, Quotation, User, Visit } from "@/lib/do
 /** Sample data used only when DATA_SOURCE=mock (demo, tests, UI review without Zoho). */
 export const MOCK_USERS: User[] = [
   {
+    "id": "reshma",
+    "name": "Reshma",
+    "role": "Manager",
+    "email": "reshma@example.com"
+  },
+  {
     "id": "pavan",
     "name": "Pavan",
     "role": "Manager",

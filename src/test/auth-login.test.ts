@@ -49,6 +49,40 @@ describe("static login lockout", () => {
     await expect(loginAction(null, form("wrong"))).resolves.toEqual({ error: "Invalid username or password" });
   });
 
+  it("returns to the originally requested allowed route after session expiry", async () => {
+    const users = await import("@/lib/auth/users");
+    const navigation = await import("next/navigation");
+    vi.mocked(users.verifyStaticCredentials).mockReturnValue({
+      username: "manager", name: "Manager", role: "Manager", passwordEnv: "ATPL_MANAGER_PASSWORD",
+    });
+    const { loginAction } = await import("@/app/actions/auth");
+    const data = new FormData();
+    data.set("username", "manager");
+    data.set("password", "correct");
+    data.set("returnTo", "/quotations?lead=5725767000000123456");
+
+    await loginAction(null, data);
+
+    expect(navigation.redirect).toHaveBeenCalledWith("/quotations?lead=5725767000000123456");
+  });
+
+  it("does not redirect a user to an external URL after session expiry", async () => {
+    const users = await import("@/lib/auth/users");
+    const navigation = await import("next/navigation");
+    vi.mocked(users.verifyStaticCredentials).mockReturnValue({
+      username: "manager", name: "Manager", role: "Manager", passwordEnv: "ATPL_MANAGER_PASSWORD",
+    });
+    const { loginAction } = await import("@/app/actions/auth");
+    const data = new FormData();
+    data.set("username", "manager");
+    data.set("password", "correct");
+    data.set("returnTo", "//example.com");
+
+    await loginAction(null, data);
+
+    expect(navigation.redirect).toHaveBeenCalledWith("/leads");
+  });
+
   it("does not allow the correct password while the account is locked", async () => {
     const users = await import("@/lib/auth/users");
     vi.mocked(users.verifyStaticCredentials).mockImplementation((_username, password) =>

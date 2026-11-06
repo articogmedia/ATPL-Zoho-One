@@ -64,6 +64,14 @@ credentials or requests to another Zoho region.
 `ZOHO_ROLE_OVERRIDES` is optional. `ZOHO_CRM_WEB_BASE` is optional and enables
 the **Open in Zoho** link after lead create/assignment.
 
+For multi-instance Vercel deployments, configure `UPSTASH_REDIS_REST_URL` and
+`UPSTASH_REDIS_REST_TOKEN` from a private Upstash Redis database. The portal uses
+these values to share the Zoho access token and coordinate refreshes across
+serverless instances, reducing OAuth refresh bursts. The access token is stored
+with a short expiry and is never logged or sent to the browser. Without these
+variables, each instance falls back to its process-local cache and single-flight
+refresh. Keep the Upstash token server-only; it is also used by login rate limiting.
+
 For static portal login, set `ATPL_RESHMA_PASSWORD`, `ATPL_PAVAN_PASSWORD`, and
 `ATPL_SAIKIRAN_PASSWORD`. The static users in `src/lib/auth/users.ts` use the
 matching active CRM user ids. The static login

@@ -2,9 +2,9 @@
 
 import Link, { useLinkStatus } from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
-import { Suspense, useEffect, type ReactNode } from "react";
-import { BarChart3, ClipboardList, FileText, Home, LogOut, MapPin } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Suspense, useEffect, useState, type ReactNode } from "react";
+import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, RotateCw } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,40 @@ const NAV = [
 
 export function AppShell({ user, inactivityMinutes = 30, children }: { user: { name: string; role: Role }; inactivityMinutes?: number; children: ReactNode }) {
   const path = usePathname();
+  const router = useRouter();
+  const [newVersionAvailable, setNewVersionAvailable] = useState(false);
   const items = NAV.filter((n) => canAccess(user.role, n.s));
+
+  useEffect(() => {
+    let lastRefresh = Date.now();
+    const refreshVisiblePage = () => {
+      if (document.visibilityState !== "visible" || Date.now() - lastRefresh < 60_000) return;
+      lastRefresh = Date.now();
+      router.refresh();
+    };
+    const versionMismatch = (message: string) => {
+      if (/failed to find server action|chunkloaderror|loading chunk .* failed/i.test(message)) {
+        setNewVersionAvailable(true);
+        return true;
+      }
+      return false;
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      const message = event.reason instanceof Error ? `${event.reason.name}: ${event.reason.message}` : String(event.reason);
+      if (versionMismatch(message)) event.preventDefault();
+    };
+    const onError = (event: ErrorEvent) => { versionMismatch(`${event.message} ${event.error?.name ?? ""}`); };
+    document.addEventListener("visibilitychange", refreshVisiblePage);
+    window.addEventListener("focus", refreshVisiblePage);
+    window.addEventListener("unhandledrejection", onUnhandledRejection);
+    window.addEventListener("error", onError);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshVisiblePage);
+      window.removeEventListener("focus", refreshVisiblePage);
+      window.removeEventListener("unhandledrejection", onUnhandledRejection);
+      window.removeEventListener("error", onError);
+    };
+  }, [router]);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -86,6 +119,10 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           </div>
         </header>
         <main className="mx-auto min-w-0 w-full max-w-[1280px] flex-1 overflow-visible px-4 pb-28 pt-5 md:px-8 md:pb-10">
+          {newVersionAvailable && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+            <span className="inline-flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" />A new version is available. Reload to continue safely.</span>
+            <Button type="button" variant="outline" className="h-10" onClick={() => window.location.reload()}><RotateCw className="h-4 w-4" /> Reload</Button>
+          </div>}
           <Suspense fallback={<div className="space-y-4" aria-label="Loading"><div className="h-8 w-48 animate-pulse rounded-lg bg-secondary" /><div className="h-32 animate-pulse rounded-xl bg-secondary" /></div>}>
             {children}
           </Suspense>

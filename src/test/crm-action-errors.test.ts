@@ -21,6 +21,8 @@ describe("friendly Zoho action errors", () => {
       .toBe("Lead source is not valid in CRM. (Ref: R2)");
     expect(friendlyZohoError(400, "MANDATORY_NOT_FOUND", "Missing field", "Company", "R3"))
       .toBe("Required field missing: Company (Ref: R3)");
+    expect(friendlyZohoError(400, "INVALID_DATA", "Invalid lookup", "Lead_Ref", "R7", "POST /Quotes", { expected_data_type: "lookup" }))
+      .toBe("Zoho rejected the lead reference in Quotes field Lead_Ref. Zoho expects lookup. Check the field type and lookup target. (Ref: R7)");
     expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R4"))
       .toBe("Zoho permissions are insufficient. Reconnect with Leads create/read and field metadata read access. (Ref: R4)");
     expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R5", "GET /settings/fields"))
@@ -62,5 +64,10 @@ describe("friendly Zoho action errors", () => {
       .toBe("Zoho timed out, please try again. (Ref: TIMEOUT12345)");
     expect(friendlyZohoError(0, "NETWORK_ERROR", "Could not connect to the Zoho CRM API", undefined, "NETWORK12345"))
       .toBe("Could not connect to Zoho CRM. Please retry shortly. (Ref: NETWORK12345)");
+  });
+
+  it("reports a missing work item as not found rather than an ownership denial", () => {
+    expect(friendlyZohoError(404, "NOT_FOUND", "This task no longer exists, refreshing…", undefined, "TASK404", "GET /Tasks/task-1"))
+      .toBe("This task no longer exists, refreshing… (Ref: TASK404)");
   });
 });

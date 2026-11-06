@@ -108,39 +108,39 @@ function isoTime(value: unknown): string {
 
 export async function listSiteVisits(schema: SiteVisitsSchema, leads: ReadonlyMap<string, Lead>): Promise<Visit[]> {
   if (!schema.lead || !schema.date) return [];
-  const leadField = schema.lead!;
-  const dateField = schema.date!;
   const fields = [...new Set([schema.lead, schema.date, schema.time, schema.status, schema.address, schema.notes, schema.nextAction, schema.followUp, "Owner", "Name"].filter(Boolean) as string[])];
   const records = await zohoList<Record<string, unknown>>(schema.module, fields, 1000);
-  return records.map((record) => {
-    const related = record[leadField] as { id?: string; name?: string } | undefined;
-    const lead = related?.id ? leads.get(related.id) : undefined;
-    const rawStatus = String(schema.status ? record[schema.status] ?? "" : "");
-    const status: VisitStatus = Object.entries(schema.statusValues).find(([, value]) => value && value === rawStatus)?.[0] as VisitStatus ??
-      (/progress|started/i.test(rawStatus) ? "In Progress" : /complete|done|closed/i.test(rawStatus) ? "Completed" : "Assigned");
-    const owner = record.Owner as { name?: string; id?: string } | undefined;
-    const dateValue = record[dateField];
-    return {
-      id: String(record.id ?? ""),
-      module: schema.module,
-      leadId: related?.id ?? "",
-      customer: lead ? lead.company || lead.name : related?.name ?? "",
-      phone: lead?.phone ?? "",
-      address: String(schema.address ? record[schema.address] ?? lead?.address ?? "" : lead?.address ?? ""),
-      area: lead?.area ?? "",
-      executive: owner?.name ?? "",
-      executiveId: owner?.id,
-      type: String(record[schema.nextAction ?? ""] ?? record.Name ?? "Site Visit"),
-      isVisit: true,
-      date: isoDate(dateValue),
-      time: isoTime(schema.time ? record[schema.time] : String(dateValue).slice(11, 16)),
-      status,
-      nextAction: String(schema.nextAction ? record[schema.nextAction] ?? "" : ""),
-      followUp: isoDate(schema.followUp ? record[schema.followUp] : ""),
-      notes: String(schema.notes ? record[schema.notes] ?? "" : ""),
-      done: status === "Completed",
-    };
-  }).filter((visit) => visit.id && visit.leadId);
+  return records.map((record) => mapSiteVisitRecord(schema, record, leads)).filter((visit) => visit.id && visit.leadId);
+}
+
+export function mapSiteVisitRecord(schema: SiteVisitsSchema, record: Record<string, unknown>, leads: ReadonlyMap<string, Lead>): Visit {
+  const related = (schema.lead ? record[schema.lead] : undefined) as { id?: string; name?: string } | undefined;
+  const lead = related?.id ? leads.get(related.id) : undefined;
+  const rawStatus = String(schema.status ? record[schema.status] ?? "" : "");
+  const status: VisitStatus = Object.entries(schema.statusValues).find(([, value]) => value && value === rawStatus)?.[0] as VisitStatus ??
+    (/progress|started/i.test(rawStatus) ? "In Progress" : /complete|done|closed/i.test(rawStatus) ? "Completed" : "Assigned");
+  const owner = record.Owner as { name?: string; id?: string } | undefined;
+  const dateValue = schema.date ? record[schema.date] : "";
+  return {
+    id: String(record.id ?? ""),
+    module: schema.module,
+    leadId: related?.id ?? "",
+    customer: lead ? lead.company || lead.name : related?.name ?? "",
+    phone: lead?.phone ?? "",
+    address: String(schema.address ? record[schema.address] ?? lead?.address ?? "" : lead?.address ?? ""),
+    area: lead?.area ?? "",
+    executive: owner?.name ?? "",
+    executiveId: owner?.id,
+    type: String((schema.nextAction ? record[schema.nextAction] : undefined) ?? record.Name ?? "Site Visit"),
+    isVisit: true,
+    date: isoDate(dateValue),
+    time: isoTime(schema.time ? record[schema.time] : String(dateValue).slice(11, 16)),
+    status,
+    nextAction: String(schema.nextAction ? record[schema.nextAction] ?? "" : ""),
+    followUp: isoDate(schema.followUp ? record[schema.followUp] : ""),
+    notes: String(schema.notes ? record[schema.notes] ?? "" : ""),
+    done: status === "Completed",
+  };
 }
 
 export function mapSiteVisitUpdate(schema: SiteVisitsSchema, patch: { status?: VisitStatus; date?: string; time?: string; notes?: string; followUp?: string }): Record<string, unknown> {

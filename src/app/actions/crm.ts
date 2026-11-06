@@ -10,7 +10,7 @@ import { hosts, ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAdvanceLeadStatus, canAssignLeads, isExecutive, nextOfferNo, todayIST, visibleFor,
+  LEAD_SOURCES, LEAD_STATUSES, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, nextOfferNo, todayIST, visibleFor,
   normalizePhone, type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
 } from "@/lib/domain";
 
@@ -69,7 +69,7 @@ function reportActionFailure(action: string, error: unknown, fallback: string, e
       .slice(0, 180)})`
     : "";
   return zohoFailure
-    ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference, zohoFailure.operation)
+    ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference, zohoFailure.operation, zohoFailure.details)
     : error instanceof Error && /timeout|timed out|abort/i.test(`${error.message} ${String(error.cause ?? "")}`)
       ? `Zoho timed out, please try again. (Ref: ${reference})`
       : `${fallback}${safeReason} (Ref: ${reference})`;
@@ -218,7 +218,7 @@ export async function updateLeadAction(input: unknown) {
 const reassignLeadSchema = z.object({ id, assignedToId: id });
 
 export async function reassignLeadAction(input: unknown) {
-  return run<{ owner: string; status: string; taskCreated: boolean; taskWarning?: string; zohoUrl?: string }>(async () => {
+  return run<{ owner: string; ownerId: string; status: string; taskCreated: boolean; taskWarning?: string; zohoUrl?: string }>(async () => {
     const user = await requireActionUser("leads");
     if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can reassign leads.");
     const p = reassignLeadSchema.parse(input);
@@ -284,8 +284,9 @@ export async function logCallAction(input: unknown) {
     if (data.outcome === "Call Back Later" && !data.followUp) {
       throw new ForbiddenError("Call Back Later requires a follow-up date.");
     }
-    await crm().logCall(data, user);
+    const result = await crm().logCall(data, user);
     invalidate("leads", "visits");
+    return result;
   });
 }
 
@@ -419,8 +420,11 @@ export async function updateVisitAction(input: unknown) {
     const user = await requireActionUser("visits");
     const p = visitPatchSchema.parse(input);
     const visit = await crm().getVisit(p.id);
-    if (!visit || visibleFor(user, [visit]).length === 0) throw new ForbiddenError("You can only update your own work.");
-    await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user);
+    if (!visit) throw new ZohoError("This task no longer exists, refreshing…", 404, "NOT_FOUND", undefined, undefined, `GET /Tasks/${p.id}`);
+    if (!canUpdateWorkItem(user, visit)) {
+      throw new ForbiddenError("You can only update your own work.");
+    }
+    await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user, visit);
     invalidate("visits");
     revalidatePath("/visits");
   });

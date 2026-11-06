@@ -1,4 +1,5 @@
 import "server-only";
+import { randomUUID } from "node:crypto";
 import { env, ZOHO_HOSTS } from "@/lib/env";
 import { newErrorReference } from "@/lib/crm-action-errors";
 
@@ -51,6 +52,7 @@ const g = globalThis as unknown as {
   __atplZohoToken?: { value: string; exp: number };
   __atplZohoRefresh?: Promise<string>;
   __atplZohoRefreshBlocked?: { until: number; error: ZohoError };
+  __atplZohoRedisWarningLogged?: boolean;
 };
 
 function refreshFailure(error: unknown): { delay: number; message: string; code: string } | null {
@@ -146,10 +148,159 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
   return { value: json.access_token, exp: Date.now() + lifetimeMs };
 }
 
-async function accessToken(force = false): Promise<string> {
-  if (force) g.__atplZohoToken = undefined;
+function redisConfig() {
+  const url = process.env.UPSTASH_REDIS_REST_URL?.trim();
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN?.trim();
+  return url && token ? { url: url.replace(/\/$/, ""), token } : undefined;
+}
+
+function sharedTokenKeys() {
+  const e = env();
+  const key = `atpl:zoho:${e.ZOHO_CLIENT_ID}:${new URL(hosts().api).hostname}`;
+  return { token: `${key}:access-token`, lock: `${key}:refresh-lock`, blocked: `${key}:refresh-blocked` };
+}
+
+async function redisCommand(args: string[]): Promise<unknown | undefined> {
+  const config = redisConfig();
+  if (!config) return undefined;
+  try {
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(args),
+      cache: "no-store",
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!response.ok) throw new Error(`Upstash REST request returned ${response.status}`);
+    const result = await response.json() as { result?: unknown; error?: string };
+    if (result.error) throw new Error(result.error);
+    return result.result;
+  } catch (error) {
+    if (!g.__atplZohoRedisWarningLogged) {
+      console.error("[zoho] shared token store unavailable; using instance-local token cache", {
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      g.__atplZohoRedisWarningLogged = true;
+    }
+    return undefined;
+  }
+}
+
+async function sharedToken(): Promise<{ value: string; exp: number } | undefined> {
+  if (!redisConfig()) return undefined;
+  const { token } = sharedTokenKeys();
+  const result = await redisCommand(["GET", token]);
+  if (typeof result !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(result) as { value?: unknown; exp?: unknown };
+    return typeof parsed.value === "string" && typeof parsed.exp === "number" && parsed.exp > Date.now()
+      ? { value: parsed.value, exp: parsed.exp }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function sharedBlockedError(): Promise<ZohoError | undefined> {
+  if (!redisConfig()) return undefined;
+  const { blocked } = sharedTokenKeys();
+  const result = await redisCommand(["GET", blocked]);
+  if (typeof result !== "string") return undefined;
+  try {
+    const entry = JSON.parse(result) as { until?: unknown; message?: unknown; code?: unknown; status?: unknown; reference?: unknown };
+    if (typeof entry.until !== "number" || entry.until <= Date.now() || typeof entry.message !== "string") return undefined;
+    const minutes = Math.max(1, Math.ceil((entry.until - Date.now()) / 60_000));
+    return new ZohoError(
+      `Zoho token is blocked, retry in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+      typeof entry.status === "number" ? entry.status : undefined,
+      typeof entry.code === "string" ? entry.code : "TOKEN_REFRESH_BLOCKED",
+      undefined, undefined, "POST /oauth/v2/token", undefined,
+      typeof entry.reference === "string" ? entry.reference : undefined,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+async function saveSharedToken(token: { value: string; exp: number }) {
+  if (!redisConfig()) return;
+  const { token: tokenKey, blocked } = sharedTokenKeys();
+  const ttlSeconds = Math.max(60, Math.ceil((token.exp - Date.now()) / 1000));
+  await redisCommand(["SET", tokenKey, JSON.stringify(token), "EX", String(ttlSeconds)]);
+  await redisCommand(["DEL", blocked]);
+}
+
+async function releaseSharedLock(key: string, value: string) {
+  await redisCommand([
+    "EVAL",
+    "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
+    "1", key, value,
+  ]);
+}
+
+async function requestSharedAccessToken(rejectedToken?: string): Promise<{ value: string; exp: number }> {
+  if (!redisConfig()) return requestAccessToken();
+  const keys = sharedTokenKeys();
+  const endAt = Date.now() + 12_000;
+  while (Date.now() < endAt) {
+    const cached = await sharedToken();
+    if (cached && (!rejectedToken || cached.value !== rejectedToken)) return cached;
+    const blocked = await sharedBlockedError();
+    if (blocked) throw blocked;
+
+    const lockValue = randomUUID();
+    const acquired = await redisCommand(["SET", keys.lock, lockValue, "NX", "EX", "15"]);
+    if (acquired === undefined) return requestAccessToken();
+    if (acquired === "OK") {
+      try {
+        const latest = await sharedToken();
+        if (latest && (!rejectedToken || latest.value !== rejectedToken)) return latest;
+        const token = await requestAccessToken();
+        await saveSharedToken(token);
+        return token;
+      } catch (error) {
+        const policy = refreshFailure(error);
+        if (policy) {
+          const original = error instanceof ZohoError ? error : undefined;
+          const reference = original?.reference ?? newErrorReference();
+          await redisCommand(["SET", keys.blocked, JSON.stringify({
+            until: Date.now() + policy.delay,
+            message: policy.message,
+            code: policy.code,
+            status: original?.status,
+            reference,
+          }), "EX", String(Math.ceil(policy.delay / 1000))]);
+        }
+        throw error;
+      } finally {
+        await releaseSharedLock(keys.lock, lockValue);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new ZohoError(
+    "Zoho token refresh is taking longer than expected. Please retry shortly.",
+    undefined, "TOKEN_REFRESH_IN_PROGRESS", undefined, undefined, "POST /oauth/v2/token",
+  );
+}
+
+async function accessToken(force = false, rejectedToken?: string): Promise<string> {
   const cached = g.__atplZohoToken;
+  if (force && cached && cached.value !== rejectedToken && cached.exp > Date.now()) return cached.value;
+  if (force && cached?.value === rejectedToken) g.__atplZohoToken = undefined;
   if (!force && cached && cached.exp > Date.now()) return cached.value;
+  const shared = await sharedToken();
+  if (shared && (!force || shared.value !== rejectedToken)) {
+    g.__atplZohoToken = shared;
+    return shared.value;
+  }
+  if (force && shared?.value === rejectedToken && redisConfig()) {
+    await redisCommand(["DEL", sharedTokenKeys().token]);
+  }
   const blocked = g.__atplZohoRefreshBlocked;
   if (blocked && blocked.until > Date.now()) {
     const minutes = Math.max(1, Math.ceil((blocked.until - Date.now()) / 60_000));
@@ -160,10 +311,12 @@ async function accessToken(force = false): Promise<string> {
     );
   }
   if (blocked) g.__atplZohoRefreshBlocked = undefined;
+  const sharedBlock = await sharedBlockedError();
+  if (sharedBlock) throw sharedBlock;
   if (!g.__atplZohoRefresh) {
     const refreshPromise = (async () => {
       try {
-        const fresh = await requestAccessToken();
+        const fresh = await requestSharedAccessToken(force ? rejectedToken : undefined);
         g.__atplZohoToken = fresh;
         g.__atplZohoRefreshBlocked = undefined;
         return fresh.value;
@@ -215,6 +368,7 @@ export async function zoho<T = unknown>(
   rateLimitAttempt = 0,
   correlationReference?: string,
   networkRetryAttempt = 0,
+  rejectedToken?: string,
 ): Promise<T | null> {
   const started = Date.now();
   const url = new URL(`${hosts().api}/crm/${API_VERSION}${path}`);
@@ -222,7 +376,7 @@ export async function zoho<T = unknown>(
   const requestPath = `${path}${url.search}`;
   const operation = `${method} ${requestPath}`;
 
-  const token = await accessToken(retried);
+  const token = await accessToken(retried, rejectedToken);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -238,7 +392,7 @@ export async function zoho<T = unknown>(
     const message = error instanceof Error ? error.message : String(error);
     const zohoHosts = hosts();
     const retryableNetworkError = /ECONNRESET|ETIMEDOUT|timeout|timed out|fetch failed/i.test(message);
-    const canRetryWrite = method !== "GET" && networkRetryAttempt < 1 && retryableNetworkError;
+    const canRetryRequest = networkRetryAttempt < 1 && retryableNetworkError;
     console.error("[zoho] request transport failed", {
       reference, method, path: requestPath, status: undefined,
       elapsedMs: Date.now() - started,
@@ -246,12 +400,12 @@ export async function zoho<T = unknown>(
       environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
       errorName: error instanceof Error ? error.name : typeof error,
       message, cause: error instanceof Error ? error.cause : undefined,
-      retrying: canRetryWrite,
+      retrying: canRetryRequest,
       stack: error instanceof Error ? error.stack : undefined,
       payload: redactWritePayload(opts.body),
     });
-    if (canRetryWrite) {
-      return zoho<T>(method, path, opts, retried, rateLimitAttempt, reference, networkRetryAttempt + 1);
+    if (canRetryRequest) {
+      return zoho<T>(method, path, opts, retried, rateLimitAttempt, reference, networkRetryAttempt + 1, rejectedToken);
     }
     const timedOut = /timeout|timed out|ETIMEDOUT|aborted/i.test(message);
     throw new ZohoError(
@@ -280,12 +434,20 @@ export async function zoho<T = unknown>(
     const retryAfter = Number(res.headers.get("retry-after"));
     const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 4000) : 250 * 2 ** rateLimitAttempt;
     await new Promise((resolve) => setTimeout(resolve, delay));
-    return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1, correlationReference, networkRetryAttempt);
+    return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1, correlationReference, networkRetryAttempt, rejectedToken);
   }
   const responseCode = json?.data?.[0]?.code ?? json?.code;
   const tokenExpired = responseCode === "INVALID_TOKEN" || responseCode === "INVALID_OAUTHTOKEN";
   const shouldRetryToken = !retried && (tokenExpired || (res.status === 401 && responseCode !== "OAUTH_SCOPE_MISMATCH" && responseCode !== "NO_PERMISSION"));
   const rawResponseBody = parsedBody ? redactWritePayload(parsedBody) : rawBody;
+  if (method === "GET" && res.status >= 500 && networkRetryAttempt < 1) {
+    const reference = correlationReference ?? newErrorReference();
+    console.warn("[zoho] retrying transient read response", {
+      reference, method, path: requestPath, status: res.status, retrying: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return zoho<T>(method, path, opts, retried, rateLimitAttempt, reference, networkRetryAttempt + 1, rejectedToken);
+  }
   if (shouldRetryToken) {
     const reference = correlationReference ?? newErrorReference();
     const recordError = json?.data?.[0];
@@ -301,7 +463,7 @@ export async function zoho<T = unknown>(
       rawResponseBody,
       payload: redactWritePayload(opts.body),
     });
-    return zoho<T>(method, path, opts, true, rateLimitAttempt, reference, networkRetryAttempt);
+    return zoho<T>(method, path, opts, true, rateLimitAttempt, reference, networkRetryAttempt, token);
   }
   if (!res.ok || tokenExpired) {
     const reference = correlationReference ?? newErrorReference();

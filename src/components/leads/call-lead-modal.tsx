@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Phone, X } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { LoaderCircle, Phone, X } from "lucide-react";
 import { toast } from "sonner";
 import { logCallAction } from "@/app/actions/crm";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/ui-bits";
 import { normalizePhone, type CallOutcome, type LeadStatus } from "@/lib/domain";
+import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 
 const OUTCOMES: { value: CallOutcome; label: string; status: LeadStatus }[] = [
   { value: "Connected", label: "Answered", status: "Contacted" },
@@ -17,19 +18,32 @@ const OUTCOMES: { value: CallOutcome; label: string; status: LeadStatus }[] = [
 ];
 
 export function CallLeadModal({
-  lead, onClose, onSaved,
+  lead, onClose, onOptimistic, onRollback, onPendingChange, onSaved,
 }: {
   lead: { id: string; name: string; phone: string };
   onClose: () => void;
+  onOptimistic?: (status: LeadStatus, followUp?: string) => void;
+  onRollback?: () => void;
+  onPendingChange?: (pending: boolean) => void;
   onSaved: (status: LeadStatus, followUp?: string) => void;
 }) {
   const [outcome, setOutcome] = useState<CallOutcome | null>(null);
   const [followUp, setFollowUp] = useState("");
   const [remarks, setRemarks] = useState("");
+  const [retryableError, setRetryableError] = useState(false);
   const [pending, start] = useTransition();
   const digits = normalizePhone(lead.phone);
   const phone = digits.length === 10 ? `+91${digits}` : "";
   const whatsapp = digits.length === 10 ? `https://wa.me/91${digits}` : "";
+
+  useEffect(() => {
+    const saved = readExpiredAction<{ type: string; payload: { leadId?: string; outcome?: CallOutcome; remarks?: string; followUp?: string } }>();
+    if (saved?.type !== "call-outcome" || saved.payload.leadId !== lead.id) return;
+    setOutcome(saved.payload.outcome ?? null);
+    setRemarks(saved.payload.remarks ?? "");
+    setFollowUp(saved.payload.followUp ?? "");
+    clearExpiredAction();
+  }, [lead.id]);
 
   const copyNumber = async () => {
     try {
@@ -44,19 +58,43 @@ export function CallLeadModal({
   const saveOutcome = () => {
     const selected = OUTCOMES.find((item) => item.value === outcome);
     if (!selected || (selected.value === "Call Back Later" && !followUp)) return;
+    onOptimistic?.(selected.status, selected.value === "Call Back Later" ? followUp : undefined);
+    onPendingChange?.(true);
     start(async () => {
-      const result = await logCallAction({
-        leadId: lead.id,
-        outcome: selected.value,
-        remarks,
-        ...(selected.value === "Call Back Later" && followUp ? { followUp } : {}),
-      });
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
+      try {
+        const result = await logCallAction({
+          leadId: lead.id,
+          outcome: selected.value,
+          remarks,
+          ...(selected.value === "Call Back Later" && followUp ? { followUp } : {}),
+        });
+        if (!result.ok) {
+          onRollback?.();
+          if (isSessionExpiredMessage(result.error)) {
+            redirectForExpiredSession({
+              type: "call-outcome",
+              payload: {
+                leadId: lead.id, outcome: selected.value, remarks,
+                ...(selected.value === "Call Back Later" && followUp ? { followUp } : {}),
+              },
+            });
+            return;
+          }
+          setRetryableError(isRetryableActionMessage(result.error));
+          toast.error(result.error);
+          return;
+        }
+        setRetryableError(false);
+        if (result.data?.historyWarning) toast.warning(result.data.historyWarning);
+        else toast.success("Call outcome saved");
+        onSaved(selected.status, selected.value === "Call Back Later" ? followUp : undefined);
+      } catch (error) {
+        onRollback?.();
+        setRetryableError(true);
+        toast.error(error instanceof Error ? error.message : "Could not save the call outcome. Please retry.");
+      } finally {
+        onPendingChange?.(false);
       }
-      toast.success("Call outcome saved");
-      onSaved(selected.status, selected.value === "Call Back Later" ? followUp : undefined);
     });
   };
 
@@ -107,7 +145,8 @@ export function CallLeadModal({
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" disabled={pending} onClick={onClose}>Cancel</Button>
           <Button type="button" disabled={pending || !outcome || (outcome === "Call Back Later" && !followUp)} onClick={saveOutcome}>
-            {pending ? "Saving…" : "Save outcome"}
+            {pending && <LoaderCircle className="animate-spin" aria-hidden="true" />}
+            {pending ? "Saving…" : retryableError ? "Retry save" : "Save outcome"}
           </Button>
         </div>
       </section>

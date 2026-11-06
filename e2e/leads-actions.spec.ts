@@ -1,7 +1,20 @@
 import { expect, test } from "@playwright/test";
 
+declare global {
+  interface Window {
+    __advanceTime: (milliseconds: number) => void;
+  }
+}
+
 test("manager can create and manage a lead from the list", async ({ page }) => {
   await page.addInitScript(() => {
+    const originalNow = Date.now.bind(Date);
+    let offset = 0;
+    Date.now = () => originalNow() + offset;
+    Object.defineProperty(window, "__advanceTime", {
+      configurable: true,
+      value: (milliseconds: number) => { offset += milliseconds; },
+    });
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText: async (value: string) => { window.name = value; } },
@@ -12,6 +25,18 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
   await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
   await page.goto("/leads");
+  await expect(page.getByRole("heading", { name: "Manage Leads" })).toBeVisible();
+  await page.waitForTimeout(1000);
+  const refreshRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("leads") || request.url().includes("_rsc")) refreshRequests.push(request.url());
+  });
+  await page.evaluate(() => {
+    window.__advanceTime(10 * 60 * 1000);
+    window.dispatchEvent(new Event("focus"));
+  });
+  await page.waitForTimeout(1000);
+  expect(refreshRequests.length).toBeGreaterThan(0);
 
   const allLeadsTab = page.locator('[data-tab="all"]');
   const initialCount = Number((await allLeadsTab.textContent())?.match(/\((\d+)\)/)?.[1]);
@@ -68,11 +93,15 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   const confirm = reassignDialog.getByRole("button", { name: "Confirm" });
   await expect(confirm).toBeDisabled();
   await expect(reassignDialog).toContainText("E2E Lead Updated");
-  await expect(reassignDialog.getByLabel("Assign to").locator("option")).toContainText(["Select a team member", "Pavan", "Sai Kiran", "Anil", "Ravi"]);
-  await reassignDialog.getByLabel("Assign to").selectOption("anil");
+  await reassignDialog.getByLabel("Assign to").click();
+  await expect(page.getByRole("option", { name: "Sai Kiran", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "Anil", exact: true })).toHaveCount(0);
+  await page.getByRole("option", { name: "Sai Kiran", exact: true }).click();
   await expect(confirm).toBeEnabled();
   await confirm.click();
-  await expect(page.locator("#leads-list tbody tr").filter({ hasText: "E2E Lead Updated" })).toBeVisible();
+  const reassignedRow = page.locator("#leads-list tbody tr").filter({ hasText: "E2E Lead Updated" });
+  await expect(reassignedRow).toBeVisible();
+  await expect(reassignedRow).toContainText("Sai Kiran");
 
   await page.locator('[data-tab="all"]').click();
   const allLeadsRow = page.locator("#leads-list tbody tr").filter({ hasText: "E2E Lead Updated" });
@@ -84,6 +113,51 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   await expect(deleteDialog.getByText("Delete E2E Lead Updated? This can't be undone.")).toBeVisible();
   await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(allLeadsRow).toHaveCount(0);
+});
+
+test("reassign immediately removes an owner from My Leads but keeps the lead in All Leads", async ({ page }) => {
+  const mobile = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/leads");
+  await expect(page.getByRole("heading", { name: "Manage Leads" })).toBeVisible();
+  const initialMineCount = Number((await page.locator('[data-tab="mine"]').textContent())?.match(/\((\d+)\)/)?.[1]);
+
+  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await page.getByLabel("Lead name *").fill("Reassignment Membership Lead");
+  await page.getByLabel("Mobile number *").fill(mobile);
+  await page.getByLabel("Assign to").click();
+  await page.getByRole("option", { name: "Reshma", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
+
+  const leadText = "Reassignment Membership Lead";
+  await expect(page.locator("#leads-list tbody tr").filter({ hasText: leadText })).toBeVisible();
+  await expect(page.locator('[data-tab="all"]')).toHaveAttribute("aria-selected", "true");
+  await page.locator('[data-tab="mine"]').click();
+  const mineTab = page.locator('[data-tab="mine"]');
+  await expect(mineTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#leads-list tbody tr").filter({ hasText: leadText })).toBeVisible();
+  await expect(mineTab).toContainText(`(${initialMineCount + 1})`);
+  const mineCountBefore = Number((await mineTab.textContent())?.match(/\((\d+)\)/)?.[1]);
+  const assignedCountBefore = Number((await page.locator('[data-tab="assigned"]').textContent())?.match(/\((\d+)\)/)?.[1]);
+
+  await page.locator("#leads-list tbody tr").filter({ hasText: leadText })
+    .getByRole("button", { name: `Reassign ${leadText}` }).click();
+  const dialog = page.getByRole("dialog", { name: "Reassign owner" });
+  await dialog.getByLabel("Assign to").click();
+  await page.getByRole("option", { name: "Sai Kiran", exact: true }).click();
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+
+  await expect(page.locator("#leads-list tbody tr").filter({ hasText: leadText })).toHaveCount(0);
+  await expect(mineTab).toContainText(`(${mineCountBefore - 1})`);
+  await expect(page.locator('[data-tab="assigned"]')).toContainText(`(${assignedCountBefore})`);
+
+  await page.locator('[data-tab="all"]').click();
+  const allRow = page.locator("#leads-list tbody tr").filter({ hasText: leadText });
+  await expect(allRow).toBeVisible();
+  await expect(allRow).toContainText("Sai Kiran");
 });
 
 test("mobile lead cards fit narrow viewports and have one WhatsApp action", async ({ page }) => {

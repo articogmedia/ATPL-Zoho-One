@@ -40,6 +40,12 @@ export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Ca
 export type ZEvent = { Event_Title?: string; Start_DateTime?: string; Created_Time?: string; Owner?: Ref; Description?: string };
 export type ZNote = { Note_Title?: string; Note_Content?: string; Created_Time?: string; Owner?: Ref; Created_By?: Ref };
 
+export function cleanZohoDisplayName(value?: string | null): string {
+  return (value ?? "").trim().split(/\s+/).filter((part, index, parts) =>
+    index === 0 || part.toLowerCase() !== parts[index - 1]?.toLowerCase(),
+  ).join(" ");
+}
+
 export function parseRoleOverrides(raw?: string): Map<string, Role> {
   const overrides = new Map<string, Role>();
   for (const entry of raw?.split(",") ?? []) {
@@ -75,12 +81,12 @@ export function mapRole(u: ZUser, overrides?: ReadonlyMap<string, Role>): Role |
 
 export function mapUser(u: ZUser, overrides?: ReadonlyMap<string, Role>): User | null {
   const role = mapRole(u, overrides);
-  const firstName = u.first_name?.trim();
-  const lastName = u.last_name?.trim();
-  const composed = [firstName, lastName].filter(Boolean).join(" ") || u.full_name.trim();
-  const name = composed.split(/\s+/).filter((part, index, parts) =>
-    index === 0 || part.toLowerCase() !== parts[index - 1]?.toLowerCase(),
-  ).join(" ");
+  const firstName = u.first_name?.trim().replace(/\s+/g, " ");
+  const lastName = u.last_name?.trim().replace(/\s+/g, " ");
+  const composed = firstName && lastName
+    ? `${lastName.toLowerCase().startsWith(firstName.toLowerCase()) ? "" : `${firstName} `}${lastName}`
+    : firstName || lastName;
+  const name = cleanZohoDisplayName(u.full_name?.trim().replace(/\s+/g, " ") || composed);
   return role ? { id: ownerId(u.id)!, name, role, email: u.email } : null;
 }
 
@@ -124,7 +130,7 @@ export function normalizeStatus(raw?: string): LeadStatus {
 }
 
 export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutives?: ReadonlySet<string>): Lead {
-  const ownerName = z.Owner?.name ?? "";
+  const ownerName = cleanZohoDisplayName(z.Owner?.name);
   const zohoOwnerId = ownerId(z.Owner?.id);
   const status = normalizeStatus(z.Lead_Status);
   const isSalesOwnedFreshLead = status === "Fresh Lead" && !!zohoOwnerId && !!salesExecutives && salesExecutives.has(zohoOwnerId);
@@ -171,7 +177,7 @@ export function mapQuote(
     offerNo,
     leadId,
     customer,
-    executive: z.Owner?.name ?? "",
+    executive: cleanZohoDisplayName(z.Owner?.name),
     ownerId: ownerId(z.Owner?.id),
     total: z.Grand_Total ?? 0,
     date: day(z.Created_Time),
@@ -213,7 +219,7 @@ export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
     phone: lead?.phone ?? "",
     address: lead?.address ?? "",
     area: lead?.area ?? "",
-    executive: z.Owner?.name ?? "",
+    executive: cleanZohoDisplayName(z.Owner?.name),
     executiveId: ownerId(z.Owner?.id),
     type: String(z[FIELD.task.type] || z.Subject || "Work"),
     isVisit: z[FIELD.task.isSiteVisit] === true,
@@ -228,5 +234,5 @@ export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
 }
 
 export function mapNote(n: ZNote): LeadUpdate {
-  return { date: day(n.Created_Time), user: n.Owner?.name ?? n.Created_By?.name ?? "", note: n.Note_Content ?? "" };
+  return { date: day(n.Created_Time), user: cleanZohoDisplayName(n.Owner?.name ?? n.Created_By?.name), note: n.Note_Content ?? "" };
 }

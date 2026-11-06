@@ -47,7 +47,9 @@ export const mockRepository: CrmRepository = {
     if (assignTo && !assignee) throw new Error("The selected owner is not an active assignable team member.");
     const lead: Lead = {
       ...input, id: `L${101 + state.leads.length}`, status: selfAssigned || assignee ? "Assigned to Sales" : "Fresh Lead",
-      assignedTo: (selfAssigned ? actor.name : assignee?.name) ?? null, assignedToId: selfAssigned ? actor.id : assignee?.id,
+      assignedTo: (selfAssigned ? actor.name : assignee?.name) ?? null,
+      assignedToId: selfAssigned ? actor.id : assignee?.id,
+      ownerId: selfAssigned ? actor.id : assignee?.id,
       source: selfAssigned ? "Direct Call" : input.source,
       createdOn: today(), address: "", touchedBy: [actor.name],
     };
@@ -62,10 +64,11 @@ export const mockRepository: CrmRepository = {
     if (!assignee) throw new Error("The selected owner is not an active assignable team member.");
     lead.assignedTo = assignee.name;
     lead.assignedToId = assignee.id;
+    lead.ownerId = String(assignee.id);
     if (lead.status === "Fresh Lead") lead.status = ASSIGNED_STAGE;
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
     note(id, actor.name, `Assigned to ${assignee.name} by ${actor.name}`);
-    return { owner: assignee.name, status: lead.status, taskCreated: true };
+    return { owner: assignee.name, ownerId: String(assignee.id), status: lead.status, taskCreated: true };
   },
   async fixAssignedLeads(actor) {
     if (actor.role !== "Manager") throw new Error("Only managers can fix assigned leads.");
@@ -122,6 +125,7 @@ export const mockRepository: CrmRepository = {
     lead.followUpTime = input.followUpTime;
     note(lead.id, actor.name, `Call: ${input.outcome}${input.remarks ? ` · ${input.remarks}` : ""}`);
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
+    return {};
   },
   async listCalls(): Promise<CallActivity[]> { return []; },
 
