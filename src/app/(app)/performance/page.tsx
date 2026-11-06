@@ -3,6 +3,9 @@ import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
 import { perfStats, todayIST, type PerfRange } from "@/lib/domain";
 import { matchPortalUserToZohoUser, missingPortalUsers, portalRole, STATIC_USERS } from "@/lib/auth/users";
+import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
+import { PageLoadError } from "@/components/PageLoadError";
+import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "Performance" };
 export const dynamic = "force-dynamic";
@@ -14,13 +17,27 @@ const RANGES: { id: PerfRange; label: string }[] = [
 ];
 export default async function PerformancePage({ searchParams }: { searchParams: Promise<{ range?: string }> }) {
   const started = Date.now();
+  const perf = beginPagePerf("performance");
   const viewer = await requireSection("performance");
   const { range: raw } = await searchParams;
   const range: PerfRange = RANGES.some((r) => r.id === raw) ? (raw as PerfRange) : "month";
 
   const repo = crm();
-  const [leads, quotes, visits, liveUsers] = await Promise.all([repo.listLeads(), repo.listQuotes(), repo.listVisits(), repo.listUsers()]);
+  let leads: Awaited<ReturnType<typeof repo.listLeads>>;
+  let quotes: Awaited<ReturnType<typeof repo.listQuotes>>;
+  let visits: Awaited<ReturnType<typeof repo.listVisits>>;
+  let liveUsers: Awaited<ReturnType<typeof repo.listUsers>>;
+  try {
+    [leads, quotes, visits, liveUsers] = await withPageTimeout(Promise.all([
+      repo.listLeads(), repo.listQuotes(), repo.listVisits(), repo.listUsers(),
+    ]));
+  } catch (error) {
+    console.error("[page] performance data load failed", { message: error instanceof Error ? error.message : String(error) });
+    endPagePerf(perf);
+    return <PageLoadError message="Performance data is temporarily unavailable. Retry without leaving this page." />;
+  }
   console.info(`[page] performance ${Date.now() - started}ms`);
+  endPagePerf(perf);
   const executives = STATIC_USERS.map((user) => ({
     id: (matchPortalUserToZohoUser(user, liveUsers)?.id ?? user.zohoUserId ?? "").trim(),
     name: user.role === "Manager" ? `${user.name} (Manager)` : user.name,

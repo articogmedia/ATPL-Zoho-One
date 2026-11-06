@@ -23,9 +23,13 @@ export type ZQuotedItem = {
   product?: Ref | string;
   quantity?: number | string;
   list_price?: number | string;
+  Unit_Price?: number | string;
   total?: number | string;
+  Total?: number | string;
   total_after_discount?: number | string;
+  Total_After_Discount?: number | string;
   net_total?: number | string;
+  Net_Total?: number | string;
   Product_Name?: Ref | string;
   Quantity?: number | string;
   List_Price?: number | string;
@@ -35,6 +39,12 @@ export type ZQuotedItem = {
   Usage_Unit?: string;
 };
 export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
+export type QuoteLineItemsField = "Quoted_Items" | "Product_Details";
+
+export function quoteLineItemsField(fieldNames: Iterable<string>): QuoteLineItemsField {
+  const names = new Set(fieldNames);
+  return names.has("Quoted_Items") ? "Quoted_Items" : "Product_Details";
+}
 export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; [k: string]: unknown };
 export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
 export type ZEvent = { Event_Title?: string; Start_DateTime?: string; Created_Time?: string; Owner?: Ref; Description?: string };
@@ -163,15 +173,21 @@ export function mapQuote(
   z: ZQuote,
   leadsById: ReadonlyMap<string, Lead>,
   productsById?: ReadonlyMap<string, Product>,
+  quoteFieldNames?: Iterable<string>,
 ): Quotation {
+  const lineItemsField = quoteLineItemsField(
+    quoteFieldNames ?? ["Quoted_Items", "Product_Details"].filter((field) => field in z),
+  );
   const rawLeadRef = z[FIELD.quote.lead];
   const ref = rawLeadRef && typeof rawLeadRef === "object" ? rawLeadRef as Ref : undefined;
   const textLeadId = typeof rawLeadRef === "string" ? rawLeadRef.trim() : "";
   const leadId = ref?.id ?? textLeadId;
   const lead = leadId ? leadsById.get(leadId) : undefined;
+  const account = z.Account_Name && typeof z.Account_Name === "object" ? z.Account_Name as Ref : undefined;
+  const contact = z.Contact_Name && typeof z.Contact_Name === "object" ? z.Contact_Name as Ref : undefined;
   const subjectMatch = /^Offer\s+(.+?)\s+-\s+(.+)$/.exec(String(z.Subject ?? "").trim());
   const offerNo = String(z[FIELD.quote.offerNo] ?? "").trim() || subjectMatch?.[1] || "";
-  const customer = (lead ? lead.company || lead.name : "") || subjectMatch?.[2] || ref?.name || "";
+  const customer = (lead ? lead.company || lead.name : "") || account?.name || contact?.name || ref?.name || subjectMatch?.[2] || "";
   return {
     id: String(z.id).trim(),
     offerNo,
@@ -182,7 +198,7 @@ export function mapQuote(
     total: z.Grand_Total ?? 0,
     date: day(z.Created_Time),
     status: String(z.Status ?? "Draft"),
-    items: (z.Product_Details ?? z.Quoted_Items)?.map((item) => {
+    items: z[lineItemsField]?.map((item) => {
       const product = item.product ?? item.Product_Name;
       const reference = typeof product === "string" ? undefined : product;
       const catalogProduct = reference?.id ? productsById?.get(reference.id) : undefined;
@@ -192,7 +208,7 @@ export function mapQuote(
         model: reference?.name ?? (typeof product === "string" ? product : catalogProduct?.model ?? ""),
         description: item.Description ?? catalogProduct?.description ?? "",
         unit: item.Usage_Unit ?? item.Unit ?? catalogProduct?.unit ?? "Nos",
-        price: number(item.list_price ?? item.List_Price),
+        price: number(item.list_price ?? item.List_Price ?? item.Unit_Price),
         qty: number(item.quantity ?? item.Quantity),
         discount: number(item.Discount),
       };

@@ -1,18 +1,19 @@
 import "server-only";
 import { cache } from "react";
-import { canAdvanceLeadStatus, isAssignable, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadTimelineItem, type User } from "@/lib/domain";
-import { cached, invalidate } from "@/lib/cache";
+import { canAdvanceLeadStatus, isAssignable, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadTimelineItem, type Product, type User } from "@/lib/domain";
+import { cached, invalidate, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
 import { hosts, zoho, zohoList, zohoWrite, ZohoError } from "./client";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
-  type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
+  quoteLineItemsField, type QuoteLineItemsField, type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
 import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitRecord, mapSiteVisitUpdate } from "./site-visits";
 
-const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Street", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
+const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
+const LEAD_DETAIL_FIELDS = [...LEAD_FIELDS, "Street", "Created_By", "Modified_By"];
 
 export function leadPhoneMatch(record: ZLead, normalizedPhone: string): "Mobile" | "Phone" | null {
   if (normalizePhone(String(record.Mobile ?? "")) === normalizedPhone) return "Mobile";
@@ -31,7 +32,7 @@ const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_I
 const NOTE_FIELDS = ["Note_Title", "Note_Content", "Created_Time", "Owner", "Created_By"];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result", "Description"];
 const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", "Description"];
-const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
+const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", "Account_Name", "Contact_Name", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products, and field metadata
@@ -47,6 +48,18 @@ type QuoteFieldMetadata = {
   required?: boolean;
   is_mandatory?: boolean;
   read_only?: boolean;
+  pick_list_values?: { actual_value?: string; display_value?: string }[];
+  subform_fields?: QuoteLineItemFieldMetadata[];
+  fields?: QuoteLineItemFieldMetadata[];
+};
+
+type QuoteLineItemFieldMetadata = {
+  api_name?: string;
+  field_label?: string;
+  data_type?: string;
+  required?: boolean;
+  system_mandatory?: boolean;
+  is_mandatory?: boolean;
 };
 
 type QuoteLayoutField = {
@@ -167,6 +180,72 @@ const quoteSchema = async () => {
       .map((field) => [field.api_name, field])),
   };
 };
+
+function quoteLineItemsPayload(
+  lineItemsField: QuoteLineItemsField,
+  lines: { p: Product; qty: number; discount: number; amount: number }[],
+  fieldMetadata?: QuoteFieldMetadata,
+): Record<string, unknown>[] {
+  const subfields = fieldMetadata?.subform_fields ?? fieldMetadata?.fields ?? [];
+  const availableNames = new Set(subfields.map((field) => field.api_name).filter((name): name is string => !!name));
+  if (subfields.length) {
+    console.info("[zoho] Quotes line-item field metadata", {
+      lineItemsField,
+      subfieldApiNames: [...availableNames],
+    });
+  } else {
+    console.info("[zoho] Quotes line-item subfield metadata unavailable; using documented inventory fields", {
+      lineItemsField,
+    });
+  }
+
+  return lines.map(({ p, qty, discount, amount }) => {
+    if (lineItemsField === "Product_Details") {
+      return {
+        product: { id: p.id },
+        quantity: qty,
+        list_price: p.price,
+        Discount: discount,
+        total: p.price * qty,
+        total_after_discount: amount,
+        net_total: amount,
+        ...(p.description ? { Description: p.description } : {}),
+      };
+    }
+
+    const candidates: Record<string, unknown> = {
+      Product_Name: { id: p.id },
+      Quantity: qty,
+      List_Price: p.price,
+      Unit_Price: p.price,
+      Discount: discount,
+      Total: p.price * qty,
+      Net_Total: amount,
+      Total_After_Discount: amount,
+      Description: p.description,
+    };
+    const newItem: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(candidates)) {
+      if ((!subfields.length || availableNames.has(name)) && value !== undefined && value !== "") newItem[name] = value;
+    }
+    if (subfields.length && !availableNames.has("List_Price") && availableNames.has("Unit_Price")) {
+      delete newItem.List_Price;
+    } else {
+      delete newItem.Unit_Price;
+    }
+    const lineTax = subfields.find((field) =>
+      field.api_name === "Line_Tax" && (field.required || field.system_mandatory || field.is_mandatory),
+    );
+    if (lineTax) {
+      console.warn("[zoho] Quotes line-item Line_Tax is mandatory but no tax was specified; sending an empty tax list", {
+        lineItemsField,
+        field: lineTax.api_name,
+      });
+      newItem.Line_Tax = [];
+    }
+    return newItem;
+  });
+}
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
   const exactValue = zohoLeadSource(source, sourceValues, false);
   const value = exactValue ?? zohoLeadSource("Other", sourceValues, false);
@@ -348,6 +427,23 @@ async function addNote(leadId: string, title: string, content: string) {
   });
 }
 
+async function quotePage(page: number) {
+  const schema = await quoteSchema();
+  return cached(`quotes:page:${page}`, SHORT, async () => {
+    const response = await zoho<{ data?: ZQuote[]; info?: { more_records?: boolean } }>("GET", "/Quotes", {
+      query: {
+        fields: QUOTE_FIELDS.join(","),
+        per_page: 200,
+        page,
+        sort_by: "Created_Time",
+        sort_order: "desc",
+      },
+    });
+    const quotes = (response?.data ?? []).map((record) => mapQuote(record, new Map(), undefined, schema.fieldNames));
+    return { quotes, hasMore: response?.info?.more_records === true };
+  });
+}
+
 export const zohoRepository: CrmRepository = {
   listUsers: users,
   listAssignableUsers,
@@ -357,18 +453,52 @@ export const zohoRepository: CrmRepository = {
   },
 
   listLeads: leads,
+  async searchLeads(query, page = 1) {
+    const normalized = query.trim().replace(/\s+/g, " ");
+    if (normalized.length < 2) return { leads: [], hasMore: false };
+    const criteriaValue = normalized.replace(/[\\(),:]/g, "\\$&");
+    const criteria = `(${["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City"]
+      .map((field) => `(${field}:contains:${criteriaValue})`).join("or")})`;
+    const response = await zoho<{ data?: ZLead[]; info?: { more_records?: boolean } }>("GET", "/Leads/search", {
+      query: { fields: LEAD_FIELDS.join(","), criteria, per_page: 200, page: Math.max(1, Math.floor(page)) },
+    });
+    const [assignable, allUsers] = await Promise.all([assignableIds(), users()]);
+    const salesExecutives = new Set(allUsers.filter((user) => user.role === "Sales Executive").map((user) => String(user.id).trim()));
+    return {
+      leads: (response?.data ?? []).map((record) => mapLead(record, assignable, salesExecutives))
+        .sort((a, b) => b.createdOn.localeCompare(a.createdOn)),
+      hasMore: response?.info?.more_records === true,
+    };
+  },
   async getLead(id) {
-    const cachedLead = (await leadMap()).get(id);
-    if (cachedLead) return cachedLead;
     try {
       const response = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${encodeURIComponent(id)}`, {
-        query: { fields: LEAD_FIELDS.join(",") },
+        query: { fields: LEAD_DETAIL_FIELDS.join(",") },
       });
       const record = response?.data?.[0];
       if (!record) throw new ZohoError("Lead not found", 404, "NOT_FOUND", undefined, undefined, `GET /Leads/${id}`);
-      const [assignable, allUsers] = await Promise.all([assignableIds(), users()]);
+      const [assignable, allUsers, relatedTasks] = await Promise.all([
+        assignableIds(),
+        users(),
+        zoho<{ data?: ZTask[] }>("GET", `/Leads/${encodeURIComponent(id)}/Tasks`, {
+          query: { fields: TASK_FIELDS.join(","), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" },
+        }).catch((error: unknown) => {
+          console.error("[zoho] related Tasks unavailable while loading lead details", {
+            leadId: id,
+            status: error instanceof ZohoError ? error.status : undefined,
+            code: error instanceof ZohoError ? error.code : undefined,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }),
+      ]);
       const salesExecutives = new Set(allUsers.filter((user) => user.role === "Sales Executive").map((user) => String(user.id).trim()));
-      return mapLead(record, assignable, salesExecutives);
+      const lead = mapLead(record, assignable, salesExecutives);
+      const followUpTask = (relatedTasks?.data ?? [])
+        .map((task) => ({ date: String(task[FIELD.task.followUp] ?? ""), time: String(task[FIELD.task.visitTime] ?? "") }))
+        .filter((task) => task.date)
+        .sort((left, right) => right.date.localeCompare(left.date))[0];
+      return followUpTask ? { ...lead, followUp: followUpTask.date, followUpTime: followUpTask.time } : lead;
     } catch (error) {
       if (error instanceof ZohoError && error.status === 404) return null;
       throw error;
@@ -769,8 +899,12 @@ export const zohoRepository: CrmRepository = {
         ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],
         ["Product_Name", "Unit_Price"],
       ];
+      const rememberedFields = await cached<string[] | null>("zoho:products-field-set", LONG, async () => null);
+      const attempts = rememberedFields
+        ? [rememberedFields, ...fieldAttempts.filter((fields) => fields.join(",") !== rememberedFields.join(","))]
+        : fieldAttempts;
       let lastError: unknown;
-      for (const fields of fieldAttempts) {
+      for (const fields of attempts) {
         try {
           const raw = await zohoList<ZProduct & { Product_Active?: boolean }>("Products", fields, 1000, {
             sort_by: "id",
@@ -780,6 +914,7 @@ export const zohoRepository: CrmRepository = {
             .filter((product) => product.Product_Active !== false)
             .filter((product) => Boolean(product.Product_Name?.trim()))
             .map(mapProduct));
+          await setCachedValue("zoho:products-field-set", LONG, fields);
           if (products.length === 0) invalidate("products");
           return products;
         } catch (error) {
@@ -803,19 +938,28 @@ export const zohoRepository: CrmRepository = {
 
   async listQuotes() {
     return cached("quotes", SHORT, async () => {
-      const [raw, map] = await Promise.all([zohoList<ZQuote>("Quotes", QUOTE_FIELDS, 1000), leadMap()]);
-      return raw.map((z) => mapQuote(z, map));
+      return (await quotePage(1)).quotes;
     });
+  },
+  async listQuotesPage(page) {
+    return quotePage(Math.max(1, Math.floor(page)));
   },
 
   async getQuote(id) {
+    const schema = await quoteSchema();
+    const lineItemsField = quoteLineItemsField(schema.fieldNames);
     const response = await zoho<{ data?: ZQuote[] }>("GET", `/Quotes/${encodeURIComponent(id)}`, {
-      query: { fields: [...QUOTE_FIELDS, "Product_Details"].join(",") },
+      query: { fields: [...new Set([...QUOTE_FIELDS, lineItemsField])].join(",") },
     });
     const record = response?.data?.[0];
     if (!record) return null;
-    const [map, products] = await Promise.all([leadMap(), this.listProducts()]);
-    return mapQuote(record, map, new Map(products.map((product) => [product.id, product])));
+    const rawLead = record[FIELD.quote.lead];
+    const leadId = rawLead && typeof rawLead === "object" && "id" in rawLead
+      ? String(rawLead.id ?? "").trim()
+      : typeof rawLead === "string" ? rawLead.trim() : "";
+    const [lead, products] = await Promise.all([leadId ? this.getLead(leadId) : null, this.listProducts()]);
+    const map = new Map(lead ? [[lead.id, lead]] : []);
+    return mapQuote(record, map, new Map(products.map((product) => [product.id, product])), schema.fieldNames);
   },
 
   async createQuote(input, actor, executive) {
@@ -827,6 +971,8 @@ export const zohoRepository: CrmRepository = {
     }
     const schema = await quoteSchema();
     const leadReferenceField = schema.fieldsByName.get(FIELD.quote.lead);
+    const lineItemsField = quoteLineItemsField(schema.fieldNames);
+    const lineItemsMetadata = schema.fieldsByName.get(lineItemsField);
     // Prices come from the Zoho catalogue, never from the browser.
     const lines = input.items.map((i) => {
       const p = products.find((x) => x.id === i.productId);
@@ -840,15 +986,7 @@ export const zohoRepository: CrmRepository = {
     const quoteRecord: Record<string, unknown> = {
       Subject: `Offer ${input.offerNo} - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
-      Product_Details: lines.map((line) => ({
-        product: { id: line.p.id },
-        quantity: line.qty,
-        list_price: line.p.price,
-        Discount: line.discount,
-        total: line.p.price * line.qty,
-        total_after_discount: line.amount,
-        net_total: line.amount,
-      })),
+      [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata),
       Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
     };
     if (leadReference !== undefined) quoteRecord[FIELD.quote.lead] = leadReference;
@@ -873,9 +1011,26 @@ export const zohoRepository: CrmRepository = {
     else console.warn("[zoho] quote offer number custom field is unavailable; retaining it in Subject", {
       requestedField: FIELD.quote.offerNo,
     });
+    if (schema.mandatoryFields.includes("Valid_Till") && !("Valid_Till" in quoteRecord)) {
+      const validTill = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      quoteRecord.Valid_Till = validTill;
+    }
+    if (schema.mandatoryFields.includes("Quote_Stage") && !("Quote_Stage" in quoteRecord)) {
+      const stage = schema.fieldsByName.get("Quote_Stage")?.pick_list_values ?? [];
+      const draft = stage.find((option) => (option.actual_value ?? option.display_value ?? "").trim().toLowerCase() === "draft");
+      if (draft) quoteRecord.Quote_Stage = draft.actual_value?.trim() || draft.display_value?.trim();
+    }
+    for (const field of schema.mandatoryFields) {
+      if (field in quoteRecord) continue;
+      const addressValue = field === "Billing_Street" || field === "Shipping_Street" ? lead.address.trim()
+        : field === "Billing_City" || field === "Shipping_City" ? lead.area.trim()
+          : "";
+      if (addressValue) quoteRecord[field] = addressValue;
+    }
     const payloadFields = new Set(Object.keys(quoteRecord));
     const missingMandatory = schema.mandatoryFields
-      .filter((field) => field !== FIELD.quote.lead && !payloadFields.has(field));
+      .filter((field) => field !== FIELD.quote.lead &&
+        (!payloadFields.has(field) || (field === lineItemsField && lines.length === 0)));
     if (missingMandatory.length) {
       const layoutRequiredMissing = missingMandatory.filter((field) => schema.layoutRequiredFields.includes(field));
       const reason = layoutRequiredMissing.length && schema.mandatoryLayout
@@ -888,6 +1043,8 @@ export const zohoRepository: CrmRepository = {
         mandatoryLayout: schema.mandatoryLayout,
         layoutRequiredMissing,
         payloadFields: [...payloadFields],
+        lineItemsField,
+        lineCount: lines.length,
       });
       throw new ZohoError(
         reason,
@@ -897,6 +1054,8 @@ export const zohoRepository: CrmRepository = {
           mandatoryFields: schema.mandatoryFields,
           mandatoryLayout: schema.mandatoryLayout,
           layoutRequiredMissing,
+          lineItemsField,
+          lineCount: lines.length,
         },
       );
     }
@@ -923,6 +1082,9 @@ export const zohoRepository: CrmRepository = {
       },
       mandatoryLayout: schema.mandatoryLayout,
       layoutRequiredFields: schema.layoutRequiredFields,
+      lineItemsField,
+      lineItemSubfields: (lineItemsMetadata?.subform_fields ?? lineItemsMetadata?.fields ?? [])
+        .map((field) => field.api_name).filter(Boolean),
       payloadKeys: Object.keys(quoteRecord),
       requestBody: { data: [quoteRecord] },
     });

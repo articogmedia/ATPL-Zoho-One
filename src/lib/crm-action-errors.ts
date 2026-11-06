@@ -15,6 +15,12 @@ export function friendlyZohoError(
 ): string {
   const suffix = ` (Ref: ${reference})`;
   const responseMessage = message?.trim().toLowerCase() ?? "";
+  if (field === "Quoted_Items" || field === "Product_Details") {
+    const detail = message?.trim().replace(/\s+/g, " ").slice(0, 180);
+    const expected = typeof details?.expected_data_type === "string" ? ` Expected ${details.expected_data_type}.` : "";
+    const path = typeof details?.json_path === "string" ? ` Path: ${details.json_path}.` : "";
+    return `Zoho rejected Quotes line items in ${field}.${expected}${path}${detail ? ` ${detail}` : ""}${suffix}`;
+  }
   if (status === 404 && /task|visit/.test(responseMessage)) {
     return `This task no longer exists, refreshing…${suffix}`;
   }

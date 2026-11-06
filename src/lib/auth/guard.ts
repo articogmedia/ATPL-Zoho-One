@@ -1,9 +1,9 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { canAccess, type Section, type User } from "@/lib/domain";
-import { crm } from "@/lib/crm";
+import { cached } from "@/lib/cache";
 import { readSession } from "./session";
-import { STATIC_USERS, portalRole, resolvePortalUserZohoId, staticUserAsPortalUser } from "./users";
+import { STATIC_USERS, portalRole, staticUserAsPortalUser } from "./users";
 
 export class ForbiddenError extends Error {
   constructor(message = "You are not allowed to do that.") {
@@ -12,40 +12,14 @@ export class ForbiddenError extends Error {
   }
 }
 
-/**
- * Resolves the signed-in user from the cookie AND re-checks them against the CRM user list,
- * so a user deactivated or re-roled in Zoho loses access without waiting for the cookie to expire.
- */
 export async function currentUser(): Promise<User | null> {
   const s = await readSession();
   if (!s) return null;
   const staticUser = STATIC_USERS.find((u) => u.username === s.username && portalRole(u.role) === s.role);
-  if (staticUser) {
-    let zohoUserId = staticUser.zohoUserId?.trim() ?? "";
-    try {
-      const users = await crm().listUsers();
-      zohoUserId = resolvePortalUserZohoId(staticUser, users);
-    } catch (error) {
-      console.error("[auth] Could not resolve sandbox CRM user; using configured user id", {
-        username: staticUser.username,
-        configuredId: zohoUserId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-    return staticUserAsPortalUser(staticUser, zohoUserId);
-  }
-  let liveUsers;
-  try {
-    liveUsers = await crm().listUsers();
-  } catch (error) {
-    console.error("[auth] Could not validate live Zoho user", {
-      uid: s.uid,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
-  const live = liveUsers.find((u) => u.id === s.uid);
-  return live ?? null;
+  const resolved = staticUser
+    ? staticUserAsPortalUser(staticUser, s.zohoUserId || staticUser.zohoUserId || s.uid)
+    : { id: s.zohoUserId || s.uid, name: s.name, role: s.role };
+  return cached(`auth:portal-user:${s.uid}`, 5 * 60_000, async () => resolved);
 }
 
 /** For pages: redirect to login if signed out. */

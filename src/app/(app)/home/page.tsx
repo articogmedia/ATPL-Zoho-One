@@ -1,35 +1,53 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { BarChart3, ClipboardList, FileText, MapPin } from "lucide-react";
 import { crm } from "@/lib/crm";
 import { requireUser } from "@/lib/auth/guard";
-import { canAccess, hourIST, visibleFor, type Section } from "@/lib/domain";
+import { canAccess, hourIST, visibleFor, type Section, type User } from "@/lib/domain";
+import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
+import { withPageTimeout } from "@/lib/page-timeout";
+import { PageLoadError } from "@/components/PageLoadError";
 
 export const metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
 
+async function HomeCount({ section, user }: { section: Section; user: User }) {
+  const repo = crm();
+  try {
+    if (section === "leads") return <Count>{visibleFor(user, await withPageTimeout(repo.listLeads())).length}</Count>;
+    if (section === "quotations") return <Count>{visibleFor(user, await withPageTimeout(repo.listQuotes())).length}</Count>;
+    if (section === "visits") return <Count>{visibleFor(user, await withPageTimeout(repo.listVisits())).filter((visit) => !visit.done).length}</Count>;
+    return null;
+  } catch (error) {
+    console.error("[home] count unavailable", {
+      section,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return <PageLoadError message={`The ${section} count is temporarily unavailable.`} />;
+  }
+}
+
+function Count({ children }: { children: number }) {
+  return <span className="inline-flex min-w-8 items-center justify-center rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground" aria-label={`${children} items`}>{children}</span>;
+}
+
 export default async function Home() {
-  const started = Date.now();
+  const perf = beginPagePerf("home");
   const user = await requireUser();
   const hour = hourIST();
   const part = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-  const repo = crm();
-  const [leads, quotes, visits] = await Promise.all([
-    canAccess(user.role, "leads") ? repo.listLeads() : [],
-    canAccess(user.role, "quotations") ? repo.listQuotes() : [],
-    canAccess(user.role, "visits") ? repo.listVisits() : [],
-  ]);
 
-  const cards: { s: Section; to: string; label: string; desc: string; icon: typeof ClipboardList; count?: number }[] = [
-    { s: "leads", to: "/leads", label: "Manage Leads", icon: ClipboardList, count: visibleFor(user, leads).length,
+  const cards: { s: Section; to: string; label: string; desc: string; icon: typeof ClipboardList }[] = [
+    { s: "leads", to: "/leads", label: "Manage Leads", icon: ClipboardList,
       desc: user.role === "Calling Team" ? "Add new customer enquiries and keep them updated." : "Track enquiries and update their status." },
-    { s: "quotations", to: "/quotations", label: "Create Quotation", icon: FileText, count: visibleFor(user, quotes).length,
+    { s: "quotations", to: "/quotations", label: "Create Quotation", icon: FileText,
       desc: "Pick products, auto-fill approved prices and create the offer." },
-    { s: "visits", to: "/visits", label: "My Work & Site Visits", icon: MapPin, count: visibleFor(user, visits).filter((v) => !v.done).length,
+    { s: "visits", to: "/visits", label: "My Work & Site Visits", icon: MapPin,
       desc: "Your assignments, site visits and follow-ups." },
     { s: "performance", to: "/performance", label: "Performance", icon: BarChart3, desc: "Lead sources, visits, conversions and executive results." },
   ];
-  console.info(`[page] home ${Date.now() - started}ms`);
 
+  endPagePerf(perf);
   return (
     <>
       <section className="mb-6 rounded-xl bg-primary p-5 text-primary-foreground shadow-elegant sm:p-6">
@@ -43,7 +61,9 @@ export default async function Home() {
             className="group flex min-h-36 flex-col justify-between gap-6 rounded-xl border border-border bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-primary hover:shadow-elegant sm:p-6">
             <div className="flex items-start justify-between gap-3">
               <div className="grid h-12 w-12 place-items-center rounded-xl bg-accent text-accent-foreground"><c.icon className="h-6 w-6" /></div>
-              {typeof c.count === "number" && <span className="inline-flex min-w-8 items-center justify-center rounded-full bg-secondary px-3 py-1 text-xs font-bold text-secondary-foreground" aria-label={`${c.count} items`}>{c.count}</span>}
+              {c.s !== "performance" && <Suspense fallback={<span className="h-7 w-10 animate-pulse rounded-full bg-secondary" aria-label="Loading count" />}>
+                <HomeCount section={c.s} user={user} />
+              </Suspense>}
             </div>
             <div>
               <div className="text-lg font-bold leading-tight">{c.label}</div>

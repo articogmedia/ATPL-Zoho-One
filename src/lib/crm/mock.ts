@@ -32,6 +32,14 @@ export const mockRepository: CrmRepository = {
   async findUserByEmail(email) { return MOCK_USERS.find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null; },
 
   async listLeads() { return [...state.leads].sort((a, b) => b.createdOn.localeCompare(a.createdOn)); },
+  async searchLeads(query, page = 1) {
+    const normalized = query.trim().toLowerCase();
+    const matches = state.leads.filter((lead) =>
+      [lead.name, lead.company, lead.phone, lead.area].some((value) => value.toLowerCase().includes(normalized)),
+    ).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
+    const start = (Math.max(1, Math.floor(page)) - 1) * 200;
+    return { leads: matches.slice(start, start + 200), hasMore: matches.length > start + 200 };
+  },
   async getLead(id) { return state.leads.find((l) => l.id === id) ?? null; },
   async findLeadByPhone(phone) {
     const lead = state.leads.find((lead) => normalizePhone(lead.phone) === normalizePhone(phone));
@@ -131,6 +139,11 @@ export const mockRepository: CrmRepository = {
 
   async listProducts() { return MOCK_PRODUCTS; },
   async listQuotes() { return [...state.quotes].sort((a, b) => b.date.localeCompare(a.date)); },
+  async listQuotesPage(page) {
+    const quotes = [...state.quotes].sort((a, b) => b.date.localeCompare(a.date));
+    const start = (Math.max(1, Math.floor(page)) - 1) * 200;
+    return { quotes: quotes.slice(start, start + 200), hasMore: quotes.length > start + 200 };
+  },
   async getQuote(id) { return state.quotes.find((quote) => quote.id === id) ?? null; },
   async createQuote(input, actor, executive) {
     const lead = state.leads.find((l) => l.id === input.leadId);

@@ -32,6 +32,7 @@ function mockRepository(noteFailure = false) {
       }
     },
     zoho: vi.fn(async (_method: string, path: string) => {
+      if (path === `/Leads/${leadId}`) return { data: [{ id: leadId, Last_Name: "Call test lead", Company: "Call test lead", Mobile: "9876543210", Lead_Status: "Fresh Lead", Owner: { id: "manager-1", name: "Manager" } }] };
       if (path === "/users") return { users: [{ id: "manager-1", full_name: "Manager", role: { name: "Manager" }, profile: { name: "Administrator" } }] };
       if (path === "/settings/fields") {
         return { fields: ["Subject", "Status", "Due_Date", "Owner", "What_Id", "Who_Id", "Description"].map((api_name) => ({ api_name })) };

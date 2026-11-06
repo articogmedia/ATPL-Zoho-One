@@ -3,6 +3,7 @@ import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 20;
 
 export async function GET() {
   const started = Date.now();

@@ -3,11 +3,12 @@
 import Link, { useLinkStatus } from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { Suspense, useEffect, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, RotateCw } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
 const NAV = [
   { s: "leads" as Section, to: "/leads", label: "Manage Leads", short: "Leads", icon: ClipboardList },
@@ -20,14 +21,32 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   const path = usePathname();
   const router = useRouter();
   const [newVersionAvailable, setNewVersionAvailable] = useState(false);
+  const pendingNavigation = useRef<{ pathname: string; href: string; timer: number; fallback?: number } | null>(null);
   const items = NAV.filter((n) => canAccess(user.role, n.s));
 
   useEffect(() => {
-    let lastRefresh = Date.now();
-    const refreshVisiblePage = () => {
-      if (document.visibilityState !== "visible" || Date.now() - lastRefresh < 60_000) return;
-      lastRefresh = Date.now();
-      router.refresh();
+    const clearNavigation = () => {
+      const current = pendingNavigation.current;
+      if (!current) return;
+      window.clearTimeout(current.timer);
+      if (current.fallback !== undefined) window.clearTimeout(current.fallback);
+      pendingNavigation.current = null;
+    };
+    const onNavigationClick = (event: MouseEvent) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      const clicked = event.target instanceof Element ? event.target : null;
+      const anchor = clicked?.closest<HTMLAnchorElement>("a[href]");
+      if (!anchor || anchor.target === "_blank") return;
+      const target = new URL(anchor.href, window.location.href);
+      if (target.origin !== window.location.origin || target.pathname === window.location.pathname) return;
+      clearNavigation();
+      const state: NonNullable<typeof pendingNavigation.current> = { pathname: target.pathname, href: target.href, timer: 0 };
+      state.timer = window.setTimeout(() => {
+        toast.info("Taking longer than usual - retrying");
+        router.refresh();
+        state.fallback = window.setTimeout(() => window.location.assign(state.href), 5_000);
+      }, 10_000);
+      pendingNavigation.current = state;
     };
     const versionMismatch = (message: string) => {
       if (/failed to find server action|chunkloaderror|loading chunk .* failed/i.test(message)) {
@@ -41,17 +60,23 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       if (versionMismatch(message)) event.preventDefault();
     };
     const onError = (event: ErrorEvent) => { versionMismatch(`${event.message} ${event.error?.name ?? ""}`); };
-    document.addEventListener("visibilitychange", refreshVisiblePage);
-    window.addEventListener("focus", refreshVisiblePage);
+    document.addEventListener("click", onNavigationClick, true);
     window.addEventListener("unhandledrejection", onUnhandledRejection);
     window.addEventListener("error", onError);
     return () => {
-      document.removeEventListener("visibilitychange", refreshVisiblePage);
-      window.removeEventListener("focus", refreshVisiblePage);
+      clearNavigation();
+      document.removeEventListener("click", onNavigationClick, true);
       window.removeEventListener("unhandledrejection", onUnhandledRejection);
       window.removeEventListener("error", onError);
     };
   }, [router]);
+
+  useEffect(() => {
+    if (pendingNavigation.current?.pathname !== path) return;
+    window.clearTimeout(pendingNavigation.current.timer);
+    if (pendingNavigation.current.fallback !== undefined) window.clearTimeout(pendingNavigation.current.fallback);
+    pendingNavigation.current = null;
+  }, [path]);
 
   useEffect(() => {
     let timer: number | undefined;
@@ -75,7 +100,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       <aside className="hidden w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:h-dvh lg:overflow-y-auto">
         <Link href="/home" className="flex items-center gap-2 px-6 py-6">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
-            <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" priority />
+            <Image src="/brand/atpl-mark-512.png" width={40} height={40} sizes="40px" quality={100} alt="ATPL mark" priority />
           </span>
           <div>
             <div className="whitespace-nowrap text-lg font-bold leading-tight">ATPL Sales Portal</div>
@@ -83,12 +108,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           </div>
         </Link>
         <nav className="mt-2 flex flex-col gap-1 px-3">
-          <Link href="/home" prefetch className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
+          <Link href="/home" className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
             <PendingNavContent icon={Home} label="Home" />
           </Link>
           {items.map((n) => (
             <Link key={n.to} href={n.to}
-              prefetch
               className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors ${path === n.to ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
               <PendingNavContent icon={n.icon} label={n.label} />
             </Link>
@@ -100,7 +124,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
           <Link href="/home" className="flex min-w-0 items-center gap-2 lg:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
-                <Image src="/brand/atpl-mark-512.png" width={32} height={32} alt="ATPL mark" />
+                <Image src="/brand/atpl-mark-512.png" width={40} height={40} sizes="40px" quality={100} alt="ATPL mark" priority />
               </span>
             <span className="max-[379px]:hidden truncate text-sm font-semibold">ATPL Sales Portal</span>
           </Link>
@@ -131,12 +155,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
 
       {items.length > 0 && (
         <nav className="fixed inset-x-0 bottom-0 z-30 grid min-h-[64px] border-t border-border bg-card px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0,1fr))` }}>
-          <Link href="/home" prefetch className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
+          <Link href="/home" className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
             <PendingNavContent icon={Home} label="Home" vertical />
           </Link>
           {items.map((n) => (
             <Link key={n.to} href={n.to}
-              prefetch
               className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
               <PendingNavContent icon={n.icon} label={n.short} vertical />
             </Link>

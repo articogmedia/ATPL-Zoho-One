@@ -17,7 +17,7 @@ describe("quotation PDF route", () => {
     const request = new NextRequest("http://localhost/api/quotations/pdf", {
       method: "POST",
       body: JSON.stringify({ leadId: "L1", offerNo: "239/26-27", subject: "Offer", items: [{ productId: "P1", qty: 1 }] }),
-    }, 15_000);
+    });
     const response = await POST(request);
     expect(response.status).toBe(401);
   });

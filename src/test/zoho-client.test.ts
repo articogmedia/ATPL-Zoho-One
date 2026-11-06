@@ -56,7 +56,11 @@ describe("Zoho products catalogue", () => {
     });
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: MockZohoError,
-      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? leadSourceSettings : ({ data: [] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields"
+        ? leadSourceSettings
+        : path === "/Leads/lead-1"
+          ? { data: [{ id: "lead-1", Last_Name: "Old Lead", Company: "Old Co", Mobile: "8888888888", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }] }
+          : ({ data: [] })),
       zohoList: list,
       zohoWrite: vi.fn(),
     }));
@@ -75,6 +79,12 @@ describe("Zoho products catalogue", () => {
     for (const call of list.mock.calls) {
       expect(call[3]).toEqual({ sort_by: "id", sort_order: "asc" });
     }
+
+    const callsBeforeRefresh = list.mock.calls.length;
+    invalidate("products");
+    await zohoRepository.listProducts();
+    expect(list.mock.calls).toHaveLength(callsBeforeRefresh + 1);
+    expect(list.mock.calls.at(-1)?.[1]).toEqual(["Product_Name", "Unit_Price"]);
   });
 });
 
@@ -137,7 +147,11 @@ describe("Zoho lead actions", () => {
   it("matches +91, spaced, and leading-zero phone formats by phone field", async () => {
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
-      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? leadSourceSettings : ({ data: [] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields"
+        ? leadSourceSettings
+        : path === "/Leads/lead-1"
+          ? { data: [{ id: "lead-1", Last_Name: "Old Lead", Company: "Old Co", Mobile: "8888888888", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }] }
+          : ({ data: [] })),
       zohoList: vi.fn(async () => []),
       zohoWrite: vi.fn(),
     }));
@@ -206,7 +220,11 @@ describe("Zoho lead actions", () => {
 
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
-      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields" ? leadSourceSettings : ({ data: [] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields"
+        ? leadSourceSettings
+        : path === "/Leads/lead-1"
+          ? { data: [{ id: "lead-1", Last_Name: "Old Lead", Company: "Old Co", Mobile: "8888888888", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }] }
+          : ({ data: [] })),
       zohoList: vi.fn(async () => [{ id: "lead-1", Last_Name: "Old Lead", Company: "Old Co", Mobile: "8888888888", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }]),
       zohoWrite: write,
     }));
@@ -223,6 +241,7 @@ describe("Zoho lead actions", () => {
 
   it("assigns a lead, advances Fresh Lead, notes it, and creates a call task", async () => {
     const writes: { method: string; path: string; record: Record<string, unknown> }[] = [];
+    let leadReads = 0;
     const write = vi.fn(async (method: string, path: string, record: Record<string, unknown>) => {
       writes.push({ method, path, record });
       return path === "/Leads/lead-1" ? "ok" : "created";
@@ -231,7 +250,7 @@ describe("Zoho lead actions", () => {
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
       zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
-        ? { data: [{ id: "lead-1", Last_Name: "Lead", Lead_Status: "Assigned to Sales", Owner: { id: "1394515000001147001", name: "Pavan" } }] }
+        ? { data: [{ id: "lead-1", Last_Name: "Lead", Lead_Status: leadReads++ === 0 ? "Fresh Lead" : "Assigned to Sales", Owner: leadReads === 1 ? { id: "queue-1", name: "Queue" } : { id: "1394515000001147001", name: "Pavan" } }] }
         : path === "/Tasks" ? { data: [] }
         : { users: [{ id: "1394515000001147001", full_name: "Pavan", role: { name: "Sales Executive" } }] }),
       zohoList: vi.fn(async (module: string) => module === "Leads"
@@ -259,6 +278,7 @@ describe("Zoho lead actions", () => {
 
   it("does not move a progressed lead backwards during assignment", async () => {
     const writes: Record<string, unknown>[] = [];
+    let leadReads = 0;
     const write = vi.fn(async (method: string, path: string, record: Record<string, unknown>) => {
       writes.push({ method, path, record });
       return "ok";
@@ -266,7 +286,7 @@ describe("Zoho lead actions", () => {
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
       zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-2"
-        ? { data: [{ id: "lead-2", Last_Name: "Lead", Lead_Status: "Contacted", Owner: { id: "1394515000001147001", name: "Pavan" } }] }
+        ? { data: [{ id: "lead-2", Last_Name: "Lead", Lead_Status: "Contacted", Owner: { id: leadReads++ === 0 ? "queue-1" : "1394515000001147001", name: "Pavan" } }] }
         : path === "/Tasks" ? { data: [] }
         : { users: [{ id: "1394515000001147001", full_name: "Pavan", role: { name: "Sales Executive" } }] }),
       zohoList: vi.fn(async (module: string) => module === "Leads"
@@ -533,10 +553,12 @@ describe("Zoho lead owner fallbacks", () => {
       });
       vi.doMock("@/lib/zoho/client", () => ({
         ZohoError: class extends Error {},
-        zoho: vi.fn(async () => ({ users: [
-          { id: "queue-1", full_name: "Queue Owner", role: { name: "Calling Team" } },
-          { id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } },
-        ] })),
+        zoho: vi.fn(async (_method: string, path: string) => path === "/Leads/lead-1"
+          ? { data: [{ id: "lead-1", Last_Name: "Lead", Lead_Status: "Assigned to Sales", Owner: { id: "exec-1", name: "Executive" } }] }
+          : ({ users: [
+            { id: "queue-1", full_name: "Queue Owner", role: { name: "Calling Team" } },
+            { id: "exec-1", full_name: "Executive", role: { name: "Sales Executive" } },
+          ] })),
         zohoList: vi.fn(async () => [{ id: "lead-1", Last_Name: "Lead", Owner: { id: "exec-1", name: "Executive" } }]),
         zohoWrite: write,
       }));
@@ -645,6 +667,67 @@ describe("Zoho lead owner fallbacks", () => {
 });
 
 describe("Zoho write error handling", () => {
+  it("uses a token another instance stored in Redis after an OAuth 429", async () => {
+    configureZoho();
+    process.env.UPSTASH_REDIS_REST_URL = "https://redis.example";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "test-token";
+    let tokenRequests = 0;
+    let accessTokenReads = 0;
+    let anotherInstanceRefreshed = false;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (String(input).includes("/oauth/v2/token")) {
+        tokenRequests += 1;
+        anotherInstanceRefreshed = true;
+        return new Response(JSON.stringify({ error: "too_many_requests" }), { status: 429 });
+      }
+      const command = JSON.parse(String(init?.body)) as string[];
+      if (command[0] === "GET" && command[1]?.endsWith(":access-token")) {
+        accessTokenReads += 1;
+        const value = anotherInstanceRefreshed
+          ? JSON.stringify({ value: "shared-from-peer", exp: Date.now() + 60_000 })
+          : null;
+        return new Response(JSON.stringify({ result: value }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ result: command[0] === "SET" ? "OK" : 1 }), { status: 200 });
+    });
+    try {
+      const { warmZohoToken } = await import("@/lib/zoho/client");
+      await expect(warmZohoToken()).resolves.toBeUndefined();
+      expect(tokenRequests).toBe(1);
+      expect(accessTokenReads).toBeGreaterThanOrEqual(4);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("retries an OAuth 429 once after a short jittered delay", async () => {
+    configureZoho();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-06T00:00:00Z"));
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    let tokenRequests = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (String(input).includes("/oauth/v2/token")) {
+        tokenRequests += 1;
+        return tokenRequests === 1
+          ? new Response(JSON.stringify({ error: "too_many_requests" }), { status: 429 })
+          : new Response(JSON.stringify({ access_token: "retried-access", expires_in: 3600 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+    try {
+      const { warmZohoToken } = await import("@/lib/zoho/client");
+      const warming = warmZohoToken();
+      await vi.waitFor(() => expect(tokenRequests).toBe(1));
+      await vi.advanceTimersByTimeAsync(1_000);
+      await warming;
+      expect(tokenRequests).toBe(2);
+    } finally {
+      fetchMock.mockRestore();
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
       const configureZoho = () => {
         Reflect.deleteProperty(globalThis, "__atplZohoToken");
         Reflect.deleteProperty(globalThis, "__atplZohoRefresh");
@@ -876,7 +959,7 @@ describe("Zoho write error handling", () => {
     it.each([
       {
         error: "Access Denied: You have made too many requests continuously",
-        delay: 5 * 60_000,
+        delay: 30_000,
         code: "TOKEN_REFRESH_RATE_LIMITED",
       },
       {
@@ -907,7 +990,9 @@ describe("Zoho write error handling", () => {
         const { warmZohoToken } = await import("@/lib/zoho/client");
         await expect(warmZohoToken()).rejects.toMatchObject({
           code,
-          message: expect.stringContaining("Zoho token is blocked, retry in"),
+          message: code === "TOKEN_REFRESH_RATE_LIMITED"
+            ? expect.stringContaining("temporarily limiting token refresh")
+            : expect.stringContaining("Zoho token is blocked, retry in"),
           reference: expect.stringMatching(/^[A-F0-9]{12}$/),
         });
         await expect(warmZohoToken()).rejects.toMatchObject({ code });

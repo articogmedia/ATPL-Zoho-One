@@ -3,6 +3,9 @@ import { requireSection } from "@/lib/auth/guard";
 import { nextOfferNo, todayIST, uniqueProducts, visibleFor } from "@/lib/domain";
 import type { Product } from "@/lib/domain";
 import { QuotationsClient } from "./QuotationsClient";
+import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
+import { PageLoadError } from "@/components/PageLoadError";
+import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "Create Quotation" };
 export const dynamic = "force-dynamic";
@@ -10,45 +13,44 @@ export const maxDuration = 30;
 
 export default async function QuotationsPage({ searchParams }: { searchParams: Promise<{ lead?: string }> }) {
   const started = Date.now();
+  const perf = beginPagePerf("quotations");
   const user = await requireSection("quotations");
   const { lead } = await searchParams;
   const repo = crm();
-  const [leads, quotes] = await Promise.all([repo.listLeads(), repo.listQuotes()]);
   const presetLeadId = String(lead ?? "").trim();
   let presetLeadError = "";
-  let presetLead = presetLeadId
-    ? leads.find((item) => String(item.id).trim() === presetLeadId)
-    : undefined;
-  if (presetLeadId && !presetLead) presetLead = await repo.getLead(presetLeadId) ?? undefined;
+  let loadedLead;
+  let quotePage;
+  let products: Product[];
+  try {
+    [loadedLead, quotePage, products] = await withPageTimeout(Promise.all([
+      presetLeadId ? repo.getLead(presetLeadId) : Promise.resolve(null),
+      repo.listQuotesPage(1),
+      repo.listProducts(),
+    ]));
+  } catch (error) {
+    console.error("[page] quotations data load failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    endPagePerf(perf);
+    return <PageLoadError message="Quotation data is temporarily unavailable. Retry without leaving this page." />;
+  }
+  const quotes = quotePage.quotes;
+  const presetLead = loadedLead ?? undefined;
   if (presetLeadId && (!presetLead || visibleFor(user, [presetLead]).length === 0)) {
     presetLeadError = "We couldn't find that customer. Please search for them.";
   }
-  const quotationLeads = visibleFor(user, presetLead ? [...leads, presetLead] : leads)
-    .filter((item, index, list) => list.findIndex((candidate) => String(candidate.id).trim() === String(item.id).trim()) === index);
-  let products: Product[] = [];
-  let productError = "";
-  try {
-    products = uniqueProducts(await repo.listProducts());
-  } catch (error) {
-    console.error("[page] quotations products failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    productError = "Unable to load products. Please try again or contact your administrator.";
-    products = [];
-  }
+  products = uniqueProducts(products);
   console.info(`[page] quotations ${Date.now() - started}ms`);
 
+  endPagePerf(perf);
   return (
     <>
-      {productError && (
-        <div role="alert" className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          {productError}
-        </div>
-      )}
       <QuotationsClient
-        leads={quotationLeads}
+        leads={presetLead && !presetLeadError ? [presetLead] : []}
         products={products}
         quotes={visibleFor(user, quotes)}
+        quotesHasMore={quotePage.hasMore}
         suggestedOfferNo={nextOfferNo(quotes.map((q) => q.offerNo), todayIST())}
         presetLeadId={presetLead && !presetLeadError ? String(presetLead.id).trim() : ""}
         presetLeadError={presetLeadError}

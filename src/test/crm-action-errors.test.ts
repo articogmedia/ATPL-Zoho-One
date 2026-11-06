@@ -23,6 +23,10 @@ describe("friendly Zoho action errors", () => {
       .toBe("Required field missing: Company (Ref: R3)");
     expect(friendlyZohoError(400, "INVALID_DATA", "Invalid lookup", "Lead_Ref", "R7", "POST /Quotes", { expected_data_type: "lookup" }))
       .toBe("Zoho rejected the lead reference in Quotes field Lead_Ref. Zoho expects lookup. Check the field type and lookup target. (Ref: R7)");
+    expect(friendlyZohoError(400, "REQUIRED_FIELD_MISSING", "Required field missing", "Quoted_Items", "R8", "POST /Quotes", {
+      expected_data_type: "subform",
+      json_path: "$.data[0].Quoted_Items",
+    })).toBe("Zoho rejected Quotes line items in Quoted_Items. Expected subform. Path: $.data[0].Quoted_Items. Required field missing (Ref: R8)");
     expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R4"))
       .toBe("Zoho permissions are insufficient. Reconnect with Leads create/read and field metadata read access. (Ref: R4)");
     expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R5", "GET /settings/fields"))

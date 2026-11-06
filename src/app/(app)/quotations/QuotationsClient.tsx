@@ -25,7 +25,7 @@ type WizardState = {
   quotationSent: boolean;
 };
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
-type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+type Props = { leads: Lead[]; products: Product[]; quotes: Quotation[]; quotesHasMore: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
 function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep }: {
   step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; hasSavedQuote: boolean; onStep: (step: 1 | 2 | 3) => void;
@@ -43,10 +43,16 @@ function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep 
   </nav>;
 }
 
-export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+export function QuotationsClient({ leads, products, quotes, quotesHasMore, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
   const [created, setCreated] = useState<Lead[]>([]);
   const myLeads = useMemo(() => [...created.filter((c) => !leads.some((l) => l.id === c.id)), ...leads], [created, leads]);
+  const [searchedLeads, setSearchedLeads] = useState<Lead[]>([]);
   const [q, setQ] = useState("");
+  const [customerSearchPending, setCustomerSearchPending] = useState(false);
+  const [customerSearchError, setCustomerSearchError] = useState("");
+  const [customerSearchPage, setCustomerSearchPage] = useState(1);
+  const [customerSearchHasMore, setCustomerSearchHasMore] = useState(false);
+  const [loadingMoreCustomers, setLoadingMoreCustomers] = useState(false);
   const [wizard, setWizard] = useState<WizardState>(() => {
     const preset = String(presetLeadId).trim();
     return {
@@ -80,6 +86,9 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
   const [customerRetryable, setCustomerRetryable] = useState(false);
   const [quoteSaveError, setQuoteSaveError] = useState("");
   const [savedQuotes, setSavedQuotes] = useState(quotes);
+  const [savedQuotesPage, setSavedQuotesPage] = useState(1);
+  const [savedQuotesHasMore, setSavedQuotesHasMore] = useState(quotesHasMore);
+  const [loadingMoreQuotes, setLoadingMoreQuotes] = useState(false);
   const [savedOpen, setSavedOpen] = useState(false);
   const [savedSearch, setSavedSearch] = useState("");
   const [loadingQuoteId, setLoadingQuoteId] = useState<string | null>(null);
@@ -152,7 +161,72 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     }
   }, [readOnlyQuote]);
 
-  const matches = useMemo(() => quotationCustomers(myLeads, q), [q, myLeads]);
+  useEffect(() => {
+    const query = q.trim();
+    if (query.length < 2) {
+      setSearchedLeads([]);
+      setCustomerSearchPending(false);
+      setCustomerSearchError("");
+      setCustomerSearchPage(1);
+      setCustomerSearchHasMore(false);
+      return;
+    }
+    setSearchedLeads([]);
+    setCustomerSearchPending(true);
+    setCustomerSearchHasMore(false);
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setCustomerSearchPending(true);
+      setCustomerSearchError("");
+      void fetch(`/api/leads/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+        .then(async (response) => {
+          const result = await response.json() as { leads?: Lead[]; hasMore?: boolean; error?: string };
+          if (!response.ok) throw new Error(result.error || "Unable to search customers.");
+          setSearchedLeads(result.leads ?? []);
+          setCustomerSearchPage(1);
+          setCustomerSearchHasMore(result.hasMore === true);
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setCustomerSearchError(error instanceof Error ? error.message : "Unable to search customers.");
+          setSearchedLeads([]);
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setCustomerSearchPending(false);
+        });
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [q]);
+
+  const loadMoreCustomers = async () => {
+    const query = q.trim();
+    if (loadingMoreCustomers || !customerSearchHasMore || query.length < 2) return;
+    setLoadingMoreCustomers(true);
+    try {
+      const page = customerSearchPage + 1;
+      const response = await fetch(`/api/leads/search?q=${encodeURIComponent(query)}&page=${page}`);
+      const result = await response.json() as { leads?: Lead[]; hasMore?: boolean; error?: string };
+      if (!response.ok) throw new Error(result.error || "Unable to load more customers.");
+      if (q.trim() !== query) return;
+      setSearchedLeads((current) => [...current, ...(result.leads ?? []).filter((lead) => !current.some((item) => item.id === lead.id))]);
+      setCustomerSearchPage(page);
+      setCustomerSearchHasMore(result.hasMore === true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load more customers.");
+    } finally {
+      setLoadingMoreCustomers(false);
+    }
+  };
+
+  const matches = useMemo(() => {
+    const combined = [...myLeads, ...searchedLeads].filter((lead, index, list) =>
+      list.findIndex((candidate) => candidate.id === lead.id) === index,
+    );
+    return quotationCustomers(combined, q);
+  }, [q, myLeads, searchedLeads]);
 
   const focusProducts = () => {
     requestAnimationFrame(() => {
@@ -309,6 +383,23 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
     }
   };
 
+  const loadMoreSavedQuotes = async () => {
+    if (loadingMoreQuotes || !savedQuotesHasMore) return;
+    setLoadingMoreQuotes(true);
+    try {
+      const response = await fetch(`/api/quotations?page=${savedQuotesPage + 1}`);
+      const result = await response.json() as { quotes?: Quotation[]; hasMore?: boolean; error?: string };
+      if (!response.ok) throw new Error(result.error || "Unable to load more quotations.");
+      setSavedQuotes((current) => [...current, ...(result.quotes ?? []).filter((quote) => !current.some((item) => item.id === quote.id))]);
+      setSavedQuotesPage((page) => page + 1);
+      setSavedQuotesHasMore(result.hasMore === true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to load more quotations.");
+    } finally {
+      setLoadingMoreQuotes(false);
+    }
+  };
+
   const savedMatches = [...savedQuotes]
     .sort((a, b) => b.date.localeCompare(a.date))
     .filter((quote) => `${quote.offerNo} ${quote.customer}`.toLowerCase().includes(savedSearch.trim().toLowerCase()));
@@ -398,6 +489,9 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
               </div>
               <Button type="button" variant="outline" onClick={() => setAdding(true)}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
             </div>
+            {customerSearchPending && <p role="status" className="text-sm text-muted-foreground">Searching customers…</p>}
+            {customerSearchError && <p role="alert" className="text-sm text-destructive">{customerSearchError}</p>}
+            {q.trim().length === 1 && <p className="text-sm text-muted-foreground">Enter at least 2 characters to search Zoho customers.</p>}
             <ul className="max-h-[min(55vh,32rem)] divide-y overflow-y-auto rounded-lg border">
               {matches.map((l) => (
                 <li key={l.id}>
@@ -407,6 +501,14 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
                   </button>
                 </li>
               ))}
+              {q.trim().length >= 2 && !customerSearchPending && !customerSearchError && matches.length === 0 && (
+                <li className="p-3 text-sm text-muted-foreground">No customers found.</li>
+              )}
+              {customerSearchHasMore && <li className="p-2">
+                <Button type="button" variant="outline" className="w-full" disabled={loadingMoreCustomers} onClick={loadMoreCustomers}>
+                  {loadingMoreCustomers && <LoaderCircle className="h-4 w-4 animate-spin" />}Load more customers
+                </Button>
+              </li>}
               {!matches.length && <li className="p-3 text-sm text-muted-foreground">No matching customer. Add a new one.</li>}
             </ul>
           </>
@@ -522,6 +624,9 @@ export function QuotationsClient({ leads, products, quotes, suggestedOfferNo, pr
                   </div>
                 </article>
               ))}
+            {savedQuotesHasMore && <Button type="button" variant="outline" className="w-full" disabled={loadingMoreQuotes} onClick={loadMoreSavedQuotes}>
+              {loadingMoreQuotes && <LoaderCircle className="h-4 w-4 animate-spin" />}Load more quotations
+            </Button>}
           </div>
         </section>
       </div>}
@@ -833,7 +938,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       </div>
       <article className="print-area offer-document mx-auto max-w-full overflow-hidden rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
-          <Image src="/brand/atpl-logo.png" alt="Air Trendz" width={150} height={60} sizes="150px" className="h-auto max-w-full object-contain" priority />
+          <Image src="/brand/atpl-logo.png" alt="Air Trendz" width={150} height={60} sizes="150px" quality={100} className="h-auto max-w-full object-contain" priority />
           <div className="max-w-full text-right">
             <div className="text-lg font-bold">Air Trendz Pvt. Ltd.</div>
             <div className="mt-1 text-[10px]">{COMPANY.address}</div>

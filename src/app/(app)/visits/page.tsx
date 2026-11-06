@@ -3,6 +3,9 @@ import { env } from "@/lib/env";
 import { requireSection } from "@/lib/auth/guard";
 import { perfStats, todayIST, visibleFor, type PerfRange } from "@/lib/domain";
 import { VisitsClient } from "./VisitsClient";
+import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
+import { PageLoadError } from "@/components/PageLoadError";
+import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "My Work & Site Visits" };
 export const dynamic = "force-dynamic";
@@ -10,6 +13,7 @@ export const maxDuration = 30;
 
 export default async function VisitsPage() {
   const started = Date.now();
+  const perf = beginPagePerf("visits");
   const user = await requireSection("visits");
   const settings = env();
   console.info("[page] visits Zoho environment", {
@@ -19,12 +23,26 @@ export default async function VisitsPage() {
   });
   const repo = crm();
   const executivePerformance = user.role === "Sales Executive";
-  const baseResults = await Promise.allSettled([
-    repo.listVisits(),
-    repo.listAssignableUsers(),
-  ]);
+  const dataDeadline = Date.now() + 12_000;
+  let baseResults: [
+    PromiseSettledResult<Awaited<ReturnType<typeof repo.listVisits>>>,
+    PromiseSettledResult<Awaited<ReturnType<typeof repo.listAssignableUsers>>>,
+  ];
+  try {
+    baseResults = await withPageTimeout(Promise.allSettled([
+      repo.listVisits(),
+      repo.listAssignableUsers(),
+    ]), Math.max(1, dataDeadline - Date.now()));
+  } catch (error) {
+    console.error("[page] visits data load timed out", { message: error instanceof Error ? error.message : String(error) });
+    endPagePerf(perf);
+    return <PageLoadError message="Work items are temporarily unavailable. Retry to load them again." />;
+  }
   const performanceResults = executivePerformance
-    ? await Promise.allSettled([repo.listLeads(), repo.listQuotes(), repo.listCalls()])
+    ? await withPageTimeout(Promise.allSettled([repo.listLeads(), repo.listQuotes(), repo.listCalls()]), Math.max(1, dataDeadline - Date.now())).catch((error) => {
+      console.error("[page] visits performance data timed out", { message: error instanceof Error ? error.message : String(error) });
+      return [];
+    })
     : [];
   const failedIndex = baseResults.findIndex((result) => result.status === "rejected");
   if (failedIndex >= 0) {
@@ -51,6 +69,7 @@ export default async function VisitsPage() {
   const quotes = performanceResults[1]?.status === "fulfilled" ? performanceResults[1].value : [];
   const calls = callsResult?.status === "fulfilled" ? callsResult.value : [];
   console.info(`[page] visits ${Date.now() - started}ms`);
+  endPagePerf(perf);
   const performance = (range: PerfRange) => {
     const stats = perfStats(leads, quotes, visits, range, todayIST(), [{ id: user.id, name: user.name, role: user.role }], user, calls);
     return {

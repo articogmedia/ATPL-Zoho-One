@@ -2,6 +2,9 @@ import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
 import { leadsForTab, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
 import { LeadsClient } from "./LeadsClient";
+import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
+import { PageLoadError } from "@/components/PageLoadError";
+import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "Manage Leads" };
 export const dynamic = "force-dynamic";
@@ -9,12 +12,21 @@ export const maxDuration = 30;
 
 export default async function LeadsPage() {
   const started = Date.now();
+  const perf = beginPagePerf("leads");
   const user = await requireSection("leads");
   const repo = crm();
-  const [all, fixableLeads] = await Promise.all([
-    repo.listLeads(),
-    user.role === "Manager" ? repo.listFixableAssignedLeads(user) : [],
-  ]);
+  let all: Awaited<ReturnType<typeof repo.listLeads>>;
+  let fixableLeads: Awaited<ReturnType<typeof repo.listFixableAssignedLeads>>;
+  try {
+    [all, fixableLeads] = await withPageTimeout(Promise.all([
+      repo.listLeads(),
+      user.role === "Manager" ? repo.listFixableAssignedLeads(user) : [],
+    ]));
+  } catch (error) {
+    console.error("[page] leads data load failed", { message: error instanceof Error ? error.message : String(error) });
+    endPagePerf(perf);
+    return <PageLoadError message="Lead data is temporarily unavailable. Retry without leaving this page." />;
+  }
   let assignableUsers: Awaited<ReturnType<typeof repo.listAssignableUsers>> = [];
   let assignableUsersFailed = false;
   try {
@@ -38,6 +50,7 @@ export default async function LeadsPage() {
   const initialRows = leadsForTab(user, visibleLeads, initialTab).slice(0, 50);
   const todaysFollowUps = leadsForTab(user, visibleLeads, "callback").filter((lead) => lead.followUp === todayIST()).length;
   console.info(`[page] leads ${Date.now() - started}ms (${initialRows.length}/${tabCounts[initialTab]} rows)`);
+  endPagePerf(perf);
   return (
     <LeadsClient
       user={{ id: user.id, name: user.name, role: user.role }}

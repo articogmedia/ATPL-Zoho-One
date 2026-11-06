@@ -21,6 +21,7 @@ export interface CrmRepository {
   findUserByEmail(email: string): Promise<User | null>;
 
   listLeads(): Promise<Lead[]>;
+  searchLeads(query: string, page?: number): Promise<{ leads: Lead[]; hasMore: boolean }>;
   getLead(id: string): Promise<Lead | null>;
   findLeadByPhone(phone: string): Promise<{ lead: Lead; matchedField: "Mobile" | "Phone" } | null>;
   listAssignableUsers(): Promise<User[]>;
@@ -37,6 +38,7 @@ export interface CrmRepository {
 
   listProducts(): Promise<Product[]>;
   listQuotes(): Promise<Quotation[]>;
+  listQuotesPage(page: number): Promise<{ quotes: Quotation[]; hasMore: boolean }>;
   getQuote(id: string): Promise<Quotation | null>;
   createQuote(input: NewQuote, actor: User, executive: string): Promise<Quotation>;
 
