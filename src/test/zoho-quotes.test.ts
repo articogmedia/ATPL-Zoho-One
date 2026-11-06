@@ -21,10 +21,10 @@ const leadRecord = {
 };
 const quoteFields = {
   fields: [
-    { api_name: "Subject" },
-    { api_name: "Product_Details" },
+    { api_name: "Subject", data_type: "text" },
+    { api_name: "Product_Details", data_type: "subform" },
     { api_name: "Offer_No" },
-    { api_name: "Lead_Ref" },
+    { api_name: "Lead_Ref", data_type: "lookup", lookup: { module: { api_name: "Leads" } }, system_mandatory: true },
   ],
 };
 
@@ -90,5 +90,75 @@ describe("Zoho quotation creation", () => {
       message: "history note permission missing",
     }));
     errorLog.mockRestore();
+  });
+
+  it("writes Lead_Ref as text when Quotes metadata declares a text field", async () => {
+    const write = vi.fn(async () => "quote-2");
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") {
+        return { fields: quoteFields.fields.map((field) => field.api_name === "Lead_Ref"
+          ? { api_name: "Lead_Ref", data_type: "text", system_mandatory: true }
+          : field) };
+      }
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Products"
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }]
+      : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.createQuote({
+      offerNo: "240/26-27",
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager");
+
+    expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
+      Lead_Ref: "lead-1",
+    }));
+  });
+
+  it("reports all mandatory Quotes fields omitted by the payload together", async () => {
+    const write = vi.fn(async () => "quote-3");
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") {
+        return { fields: [
+          ...quoteFields.fields,
+          { api_name: "Account_Name", data_type: "lookup", system_mandatory: true },
+          { api_name: "Contact_Name", data_type: "lookup", system_mandatory: true },
+        ] };
+      }
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Products"
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }]
+      : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.createQuote({
+      offerNo: "241/26-27",
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager"))
+      .rejects.toMatchObject({
+        message: "Required fields missing: Account_Name, Contact_Name",
+      });
+    expect(write).not.toHaveBeenCalled();
   });
 });

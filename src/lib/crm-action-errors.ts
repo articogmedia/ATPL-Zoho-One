@@ -19,6 +19,9 @@ export function friendlyZohoError(
       || "Could not refresh the access token. Please retry shortly.";
     return `Zoho connection problem: ${reason}${suffix}`;
   }
+  if (code === "MANDATORY_FIELDS_MISSING" && message?.startsWith("Required fields missing:")) {
+    return `${message}${suffix}`;
+  }
   if (code === "DUPLICATE_DATA" || code === "DUPLICATE_LEAD") {
     return `Customer already exists. Mobile number is already in use.${suffix}`;
   }

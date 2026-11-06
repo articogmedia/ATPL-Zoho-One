@@ -35,6 +35,16 @@ describe("friendly Zoho action errors", () => {
     );
   });
 
+  it("preserves the full list of missing mandatory fields", () => {
+    expect(friendlyZohoError(
+      400,
+      "MANDATORY_FIELDS_MISSING",
+      "Required fields missing: Account_Name, Contact_Name",
+      "Account_Name",
+      "QUOTE1234567",
+    )).toBe("Required fields missing: Account_Name, Contact_Name (Ref: QUOTE1234567)");
+  });
+
   it("shows a clear Zoho connection message for refresh back-off", () => {
     expect(friendlyZohoError(
       400,

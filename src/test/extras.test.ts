@@ -201,7 +201,10 @@ describe("zoho mapping", () => {
       new Map([["L1", lead]]),
     );
     expect(v).toMatchObject({ status: "Assigned", isVisit: true, customer: "Clinic", address: "Plot 45", area: "Kukatpally", time: "11:00", done: false });
+    expect(mapTaskStatus("Not Started")).toBe("Assigned");
+    expect(mapTaskStatus("In Progress")).toBe("In Progress");
     expect(mapTaskStatus("Completed")).toBe("Completed");
+    expect(mapTaskStatus("completed")).toBe("Completed");
   });
   it("uses the quotation subject when offer number and linked customer are unavailable", () => {
     const quote = mapQuote({
@@ -209,6 +212,15 @@ describe("zoho mapping", () => {
       Subject: "Offer 239/26-27 - Example Customer",
     }, new Map());
     expect(quote).toMatchObject({ offerNo: "239/26-27", customer: "Example Customer" });
+  });
+  it("maps a text Lead_Ref value back to its selected lead", () => {
+    const lead = mapLead({ id: "L10", Last_Name: "Ramesh", Company: "Clinic Two" }, execs);
+    const quote = mapQuote({
+      id: "Q10",
+      Subject: "Offer 240/26-27 - Clinic Two",
+      Lead_Ref: "L10",
+    }, new Map([["L10", lead]]));
+    expect(quote).toMatchObject({ leadId: "L10", customer: "Clinic Two" });
   });
   it("maps lead-linked Tasks through What_Id", () => {
     const lead = mapLead({ id: "L9", Last_Name: "Ramesh", Company: "Clinic One", Owner: { id: "u1", name: "Anil Kumar" } }, execs);

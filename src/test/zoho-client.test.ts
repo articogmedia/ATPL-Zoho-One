@@ -87,9 +87,15 @@ describe("Zoho lead actions", () => {
       if (module === "Tasks") throw new MockZohoError("Zoho connection problem: token refresh blocked", 400, "TOKEN_REFRESH_RATE_LIMITED");
       return [];
     });
+    const taskFields = [
+      "Subject", "Status", "Due_Date", "Owner", "What_Id",
+      "Is_Site_Visit", "Visit_Time", "Next_Action", "Follow_Up_Date", "Task_Type",
+    ];
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: MockZohoError,
-      zoho: vi.fn(async () => ({ data: [] })),
+      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields"
+        ? { fields: taskFields.map((api_name) => ({ api_name })) }
+        : { data: [] }),
       zohoList: list,
       zohoWrite: vi.fn(),
     }));
@@ -98,10 +104,32 @@ describe("Zoho lead actions", () => {
     await expect(zohoRepository.listVisits()).rejects.toMatchObject({
       code: "TOKEN_REFRESH_RATE_LIMITED",
     });
-    expect(list.mock.calls.filter(([module]) => module === "Tasks")).toHaveLength(1);
-    expect(list.mock.calls.some(([module, fields]) =>
-      module === "Tasks" && (fields as string[]).join(",") === "Subject,Status,Due_Date,Owner,Who_Id,What_Id,Description",
-    )).toBe(false);
+    const taskCalls = list.mock.calls.filter(([module]) => module === "Tasks");
+    expect(taskCalls).toHaveLength(2);
+    expect(taskCalls.every(([, fields]) => !(fields as string[]).includes("Description") && !(fields as string[]).includes("Who_Id"))).toBe(true);
+  });
+
+  it("does not request Tasks with fallback fields when field metadata fails authentication", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status: number, readonly code: string) {
+        super(message);
+      }
+    }
+    const list = vi.fn(async () => []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      zoho: vi.fn(async (_method: string, path: string) => {
+        if (path === "/settings/fields") throw new MockZohoError("Zoho connection problem: token refresh blocked", 400, "TOKEN_REFRESH_RATE_LIMITED");
+        return { users: [] };
+      }),
+      zohoList: list,
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.listLeads();
+
+    expect(list.mock.calls.some(([module]) => module === "Tasks")).toBe(false);
   });
 
   it("matches +91, spaced, and leading-zero phone formats by phone field", async () => {
@@ -537,6 +565,43 @@ describe("Zoho lead owner fallbacks", () => {
         null,
       )).resolves.toMatchObject({ company: "New lead", assignedTo: null });
       expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.not.objectContaining({ Owner: expect.anything() }), { trigger: ["workflow"] });
+    });
+
+    it("reuses Lead field metadata and returns the created lead without fetching it again", async () => {
+      let nextId = 0;
+      const zoho = vi.fn(async (_method: string, path: string) => {
+        if (path === "/settings/fields") return leadSourceSettings;
+        if (path === "/Leads/search") return { data: [] };
+        return {};
+      });
+      const write = vi.fn(async (_method: string, path: string) => {
+        if (path === "/Leads") return `lead-${++nextId}`;
+        return "note-1";
+      });
+      vi.doMock("@/lib/zoho/client", () => ({
+        ZohoError: class extends Error {},
+        zoho,
+        zohoList: vi.fn(async () => []),
+        zohoWrite: write,
+      }));
+      const { zohoRepository } = await import("@/lib/zoho/repository");
+      const actor = { id: "manager-1", name: "Manager", role: "Manager" as const };
+
+      const first = await zohoRepository.createLead(
+        { name: "First customer", company: "", phone: "9999999991", area: "", source: "Direct Call", remarks: "" },
+        actor,
+        null,
+      );
+      const second = await zohoRepository.createLead(
+        { name: "Second customer", company: "", phone: "9999999992", area: "", source: "Direct Call", remarks: "" },
+        actor,
+        null,
+      );
+
+      expect(first).toMatchObject({ id: "lead-1", name: "First customer", company: "First customer", phone: "9999999991" });
+      expect(second).toMatchObject({ id: "lead-2", name: "Second customer", company: "Second customer", phone: "9999999992" });
+      expect(zoho.mock.calls.filter(([, path]) => path === "/settings/fields")).toHaveLength(1);
+      expect(zoho.mock.calls.some(([, path]) => path === "/Leads/lead-1" || path === "/Leads/lead-2")).toBe(false);
     });
 
     it("falls back to the configured Other source and sends a valid City field and 10-digit mobile", async () => {

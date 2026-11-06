@@ -363,6 +363,17 @@ export async function zohoWrite(
       reference,
     );
   }
+  console.info("[zoho] write confirmed", {
+    method,
+    path,
+    status: 200,
+    recordStatus: first.status,
+    code: first.code,
+    message: first.message,
+    details: first.details,
+    rawResponseBody: redactWritePayload(json),
+    payload: redactWritePayload(payload),
+  });
   return first.details?.id ?? "";
 }
 

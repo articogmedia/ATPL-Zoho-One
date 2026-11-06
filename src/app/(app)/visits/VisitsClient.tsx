@@ -13,6 +13,8 @@ import { updateVisitAction } from "@/app/actions/crm";
 import { workForTab, type User, type Visit, type WorkTab } from "@/lib/domain";
 import type { PerfRange } from "@/lib/domain";
 
+type VisitPatch = Partial<Pick<Visit, "status" | "date" | "time" | "followUp" | "notes">>;
+
 const TABS: { id: WorkTab; label: string }[] = [
   { id: "assigned", label: "Tasks" },
   { id: "progress", label: "In Progress" },
@@ -21,18 +23,27 @@ const TABS: { id: WorkTab; label: string }[] = [
 ];
 
 type Summary = { leads: number; calls: number; visits: number; quotes: number; won: number; conversion: number };
-export function VisitsClient({ user, visits, executives, today, performance, callWarning }: { user: User; visits: Visit[]; executives: string[]; today: string; performance?: { week: Summary; month: Summary }; callWarning?: string }) {
+export function VisitsClient({ user, visits, executives, today, performance, callWarning, visitsWarning }: { user: User; visits: Visit[]; executives: string[]; today: string; performance?: { week: Summary; month: Summary }; callWarning?: string; visitsWarning?: string }) {
   const [tab, setTab] = useState<WorkTab>("assigned");
   const [exec, setExec] = useState("all");
+  const [visitRows, setVisitRows] = useState(visits);
   const router = useRouter();
-  const onStatusChanged = (status: "In Progress" | "Completed") => {
-    setTab(status === "In Progress" ? "progress" : "completed");
-    router.refresh();
+  const applyOptimisticUpdate = (id: string, patch: VisitPatch) => {
+    const previous = visitRows.find((visit) => visit.id === id);
+    if (!previous) return () => {};
+    setVisitRows((current) => current.map((visit) => visit.id === id ? { ...visit, ...patch, done: patch.status === "Completed" || (patch.status === undefined && visit.done) } : visit));
+    const nextTab = patch.status === "In Progress" ? "progress" : patch.status === "Completed" ? "completed" : undefined;
+    const previousTab = tab;
+    if (nextTab) setTab(nextTab);
+    return () => {
+      setVisitRows((current) => current.map((visit) => visit.id === id ? previous : visit));
+      if (nextTab) setTab(previousTab);
+    };
   };
   const isManager = user.role === "Manager";
   const workByTab = useMemo(
-    () => Object.fromEntries(TABS.map(({ id }) => [id, workForTab(user, visits, id, today, exec)])) as Record<WorkTab, Visit[]>,
-    [user, visits, today, exec],
+    () => Object.fromEntries(TABS.map(({ id }) => [id, workForTab(user, visitRows, id, today, exec)])) as Record<WorkTab, Visit[]>,
+    [user, visitRows, today, exec],
   );
   const open = [...workByTab.assigned, ...workByTab.progress];
   const todays = open.filter((v) => v.isVisit && v.date === today);
@@ -46,6 +57,7 @@ export function VisitsClient({ user, visits, executives, today, performance, cal
         <h1 className="min-w-0 text-xl font-bold sm:text-2xl">My Work &amp; Site Visits</h1>
       </div>
       {callWarning && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{callWarning}</div>}
+      {visitsWarning && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Zoho task data warning: {visitsWarning}</div>}
       {performance && summary && <section aria-label="My Performance" className="rounded-xl border bg-card p-3 shadow-sm">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="font-semibold">My Performance</h2>
@@ -70,7 +82,7 @@ export function VisitsClient({ user, visits, executives, today, performance, cal
       <section className="min-w-0 rounded-xl border border-primary/30 bg-accent p-4 shadow-sm">
         <h2 className="mb-3 text-lg font-semibold">Today&apos;s visits ({todays.length})</h2>
         <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} onCallSaved={() => router.refresh()} />)}
+          {todays.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onOptimisticChange={applyOptimisticUpdate} onCallSaved={() => router.refresh()} />)}
           {!todays.length && <p className="text-sm text-muted-foreground">No visits today.</p>}
         </div>
       </section>
@@ -84,14 +96,14 @@ export function VisitsClient({ user, visits, executives, today, performance, cal
       </div>
 
       <div id="work-list" className="grid min-w-0 grid-cols-1 items-stretch gap-6 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onStatusChanged={onStatusChanged} onCallSaved={() => router.refresh()} />)}
+        {list.map((v) => <Item key={v.id} v={v} showExec={isManager} today={today} onOptimisticChange={applyOptimisticUpdate} onCallSaved={() => router.refresh()} />)}
         {!list.length && <p className="text-sm text-muted-foreground">Nothing here.</p>}
       </div>
     </div>
   );
 }
 
-function Item({ v, showExec, today, onStatusChanged, onCallSaved }: { v: Visit; showExec: boolean; today: string; onStatusChanged: (status: "In Progress" | "Completed") => void; onCallSaved: () => void }) {
+function Item({ v, showExec, today, onOptimisticChange, onCallSaved }: { v: Visit; showExec: boolean; today: string; onOptimisticChange: (id: string, patch: VisitPatch) => () => void; onCallSaved: () => void }) {
   const [mode, setMode] = useState<"none" | "complete" | "reschedule">("none");
   const [callOpen, setCallOpen] = useState(false);
   const [notes, setNotes] = useState("");
@@ -100,19 +112,21 @@ function Item({ v, showExec, today, onStatusChanged, onCallSaved }: { v: Visit; 
   const [followUp, setFollowUp] = useState(v.followUp);
   const [savingAction, setSavingAction] = useState<"start" | "complete" | "reschedule" | null>(null);
 
-  const send = async (patch: Record<string, string>, ok: string, action: "start" | "complete" | "reschedule", changedStatus?: "In Progress" | "Completed") => {
+  const send = async (patch: VisitPatch, ok: string, action: "start" | "complete" | "reschedule") => {
     if (savingAction) return;
     setSavingAction(action);
+    const rollback = onOptimisticChange(v.id, patch);
     try {
       const res = await updateVisitAction({ id: v.id, ...patch });
       if (!res.ok) {
+        rollback();
         toast.error(res.error);
         return;
       }
       toast.success(ok);
-      if (changedStatus) onStatusChanged(changedStatus);
       setMode("none");
     } catch (error) {
+      rollback();
       toast.error(error instanceof Error ? error.message : "Could not update this task.");
     } finally {
       setSavingAction(null);
@@ -145,7 +159,7 @@ function Item({ v, showExec, today, onStatusChanged, onCallSaved }: { v: Visit; 
             <textarea aria-label="Completion notes" className={`${fieldClass} min-h-20 py-2`} placeholder="Visit notes (optional)" value={notes} maxLength={1000} onChange={(e) => setNotes(e.target.value)} />
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" className="h-11" disabled={savingAction !== null} onClick={() => setMode("none")}>Cancel</Button>
-              <Button type="button" className="h-11" disabled={savingAction !== null} onClick={() => void send({ status: "Completed", ...(notes.trim() ? { notes: notes.trim() } : {}) }, "Moved to Completed", "complete", "Completed")}>
+              <Button type="button" className="h-11" disabled={savingAction !== null} onClick={() => void send({ status: "Completed", ...(notes.trim() ? { notes: notes.trim() } : {}) }, "Moved to Completed", "complete")}>
                 {savingAction === "complete" && <LoaderCircle className="h-[18px] w-[18px] animate-spin" />}Confirm completed
               </Button>
             </div>
@@ -181,7 +195,7 @@ function Item({ v, showExec, today, onStatusChanged, onCallSaved }: { v: Visit; 
         ? <Button asChild className="h-11 w-full min-w-0 whitespace-normal"><Link href={quote}><FileText className="h-4 w-4" />Quotation</Link></Button>
         : <Button className="h-11 w-full min-w-0 whitespace-normal" disabled title="No customer linked to this task"><FileText className="h-4 w-4" />Quotation</Button>}
       {v.status !== "Completed" && <div className="mt-auto grid w-full min-w-0 grid-cols-3 gap-2">
-        <Button type="button" variant="outline" className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 whitespace-normal rounded-xl border px-2 text-center text-xs font-medium leading-tight transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed" title={v.status === "In Progress" ? "Work is already in progress" : undefined} disabled={savingAction !== null || v.status === "In Progress"} onClick={() => void send({ status: "In Progress" }, "Moved to In Progress", "start", "In Progress")}>
+        <Button type="button" variant="outline" className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 whitespace-normal rounded-xl border px-2 text-center text-xs font-medium leading-tight transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed" title={v.status === "In Progress" ? "Work is already in progress" : undefined} disabled={savingAction !== null || v.status === "In Progress"} onClick={() => void send({ status: "In Progress" }, "Moved to In Progress", "start")}>
             {savingAction === "start" ? <LoaderCircle className="!size-[18px] animate-spin" /> : <Play className="!size-[18px]" />}<span>Start Work</span>
           </Button>
         <Button type="button" variant="outline" className="flex h-16 min-w-0 flex-col items-center justify-center gap-1 whitespace-normal rounded-xl border px-2 text-center text-xs font-medium leading-tight transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed" disabled={savingAction !== null} onClick={() => setMode(mode === "complete" ? "none" : "complete")}><CheckCircle2 className="!size-[18px]" /><span>Mark<br />Completed</span>

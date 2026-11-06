@@ -151,6 +151,7 @@ export const mockRepository: CrmRepository = {
       phone: state.leads.find((lead) => lead.id === visit.leadId)?.phone ?? "",
     }));
   },
+  getVisitsWarning() { return null; },
   async getVisit(id) { return state.visits.find((v) => v.id === id) ?? null; },
   async createVisit(input, actor) {
     const lead = state.leads.find((l) => l.id === input.leadId);

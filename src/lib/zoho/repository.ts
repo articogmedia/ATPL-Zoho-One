@@ -34,20 +34,25 @@ const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", 
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
-const LONG = 600_000;   // users, products
+const LONG = 600_000;   // users, products, and field metadata
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
-function isTaskAuthenticationError(error: unknown): boolean {
-  if (!(error instanceof ZohoError)) return false;
-  const code = error.code?.toLowerCase() ?? "";
-  const message = error.message.toLowerCase();
-  return error.status === 401
-    || code.startsWith("token_refresh_")
-    || code === "invalid_client"
-    || code === "invalid_token"
-    || code === "invalid_oauthtoken"
-    || message.includes("access denied")
-    || message.includes("invalid_client");
+type QuoteFieldMetadata = {
+  api_name?: string;
+  field_label?: string;
+  data_type?: string;
+  lookup?: { api_name?: string; module?: { api_name?: string } };
+  system_mandatory?: boolean;
+  required?: boolean;
+  is_mandatory?: boolean;
+};
+
+function quoteLeadReference(field: QuoteFieldMetadata | undefined, leadId: string): unknown {
+  const isLeadLookup = field?.data_type?.toLowerCase() === "lookup"
+    || field?.lookup?.module?.api_name?.toLowerCase() === "leads"
+    || field?.lookup?.api_name?.toLowerCase() === "leads";
+  return isLeadLookup || !field ? { id: leadId } : leadId;
 }
+
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
 const leadCreateLocks = new Map<string, Promise<unknown>>();
 const leadSchema = async () => cached("zoho:lead-schema", LONG, async () => {
@@ -74,18 +79,14 @@ const leadSchema = async () => cached("zoho:lead-schema", LONG, async () => {
 });
 const quoteSchema = async () => cached("zoho:quote-schema", LONG, async () => {
   const response = await zoho<{
-    fields?: {
-      api_name?: string;
-      field_label?: string;
-      system_mandatory?: boolean;
-      required?: boolean;
-      is_mandatory?: boolean;
-    }[];
+    fields?: QuoteFieldMetadata[];
   }>("GET", "/settings/fields", { query: { module: "Quotes" } });
   const fields = response?.fields ?? [];
   return {
     fields,
     fieldNames: new Set(fields.map((field) => field.api_name).filter((name): name is string => !!name)),
+    fieldsByName: new Map(fields.filter((field): field is typeof field & { api_name: string } => !!field.api_name)
+      .map((field) => [field.api_name, field])),
     mandatoryFields: fields
       .filter((field) => field.system_mandatory === true || field.required === true || field.is_mandatory === true)
       .map((field) => field.api_name)
@@ -115,19 +116,67 @@ const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
   }
   return value;
 };
-const taskRows = cache(() => cached("visits:tasks", SHORT, async () => {
+let taskMetadataWarning: string | null = null;
+
+const taskSchema = () => cached("zoho:task-fields", LONG, async () => {
+  const response = await zoho<{ fields?: { api_name?: string; pick_list_values?: { actual_value?: string; display_value?: string }[] }[] }>(
+    "GET", "/settings/fields", { query: { module: "Tasks" } },
+  );
+  const fields = response?.fields ?? [];
+  const fieldNames = new Set(fields.map((field) => field.api_name).filter((name): name is string => !!name));
+  const missingCustomFields = Object.values(FIELD.task).filter((name) => !fieldNames.has(name));
+  const missingStandardFields = ["Subject", "Status", "Due_Date", "Owner", "What_Id"].filter((name) => !fieldNames.has(name));
+  const statusField = fields.find((field) => field.api_name === "Status");
+  const statusValues = statusField?.pick_list_values?.map((item) => item.actual_value ?? item.display_value ?? "").filter(Boolean) ?? [];
+  const hasStatuses = ["Not Started", "In Progress", "Completed"].every((expected) =>
+    statusValues.some((value) => value.toLowerCase() === expected.toLowerCase()),
+  );
+  const warningParts = [
+    missingStandardFields.length ? `Tasks standard fields unavailable: ${missingStandardFields.join(", ")}` : "",
+    missingCustomFields.length ? `Tasks fields unavailable: ${missingCustomFields.join(", ")}` : "",
+    statusValues.length && !hasStatuses ? `Tasks Status picklist differs from expected values: ${statusValues.join(", ")}` : "",
+  ].filter(Boolean);
+  return {
+    fields: [...STANDARD_TASK_FIELDS.filter((name) => fieldNames.has(name)), ...Object.values(FIELD.task).filter((name) => fieldNames.has(name))],
+    warning: warningParts.length ? warningParts.join(". ") : null,
+  };
+});
+
+async function taskRows(): Promise<ZTask[]> {
+  let fields: string[];
   try {
-    return await zohoList<ZTask>("Tasks", TASK_FIELDS, 1000);
+    const schema = await taskSchema();
+    fields = schema.fields;
+    taskMetadataWarning = schema.warning;
+    if (schema.warning) console.warn("[zoho] Tasks module schema warning", { warning: schema.warning });
   } catch (error) {
-    if (isTaskAuthenticationError(error)) throw error;
-    console.error("[zoho] Tasks custom fields unavailable; retrying with standard fields", {
-      operation: "GET /Tasks",
-      code: error instanceof ZohoError ? error.code : undefined,
+    taskMetadataWarning = "Unable to verify Tasks fields in Zoho; task status and visit details may be incomplete.";
+    console.error("[zoho] Tasks field metadata unavailable", {
       status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      message: error instanceof Error ? error.message : String(error),
     });
-    return zohoList<ZTask>("Tasks", STANDARD_TASK_FIELDS, 1000);
+    if (isZohoAuthenticationError(error)) throw error;
+    fields = STANDARD_TASK_FIELDS;
   }
-}));
+  if (!fields.includes("Status")) {
+    taskMetadataWarning = [taskMetadataWarning, "The Zoho Tasks module has no Status field; task tabs may not reflect workflow state."]
+      .filter(Boolean).join(" ");
+  }
+  if (!fields.length) {
+    taskMetadataWarning = [taskMetadataWarning, "No Tasks fields were returned by Zoho; attempting the standard Tasks fields."]
+      .filter(Boolean).join(" ");
+    fields = STANDARD_TASK_FIELDS;
+  }
+  return zohoList<ZTask>("Tasks", fields, 1000);
+}
+
+function isZohoAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof ZohoError)) return false;
+  const reason = `${error.code ?? ""} ${error.message}`.toLowerCase();
+  return error.status === 401 || error.status === 403
+    || /invalid[_ ]token|authentication_failure|token_refresh|invalid_client|access denied|unauthorized|scope_mismatch|permission/.test(reason);
+}
 
 const users = cache(async function users(): Promise<User[]> {
   const mappedUsers = await cached("users", LONG, async () => {
@@ -280,8 +329,6 @@ export const zohoRepository: CrmRepository = {
   },
 
   async createLead(input, actor, assignTo, forceCreate = false) {
-    const existing = forceCreate ? null : await this.findLeadByPhone(input.phone);
-    if (existing) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
     const phoneKey = input.phone.replace(/\D/g, "").slice(-10);
     const previous = leadCreateLocks.get(phoneKey) ?? Promise.resolve();
     let release!: () => void;
@@ -290,13 +337,14 @@ export const zohoRepository: CrmRepository = {
     leadCreateLocks.set(phoneKey, chain);
     await previous;
     try {
-      if (!forceCreate && await this.findLeadByPhone(input.phone)) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
     const executiveCreatesLead = actor.role === "Sales Executive";
-    const owner = executiveCreatesLead
-      ? await userById(actor.id)
-      : assignTo ? await userById(assignTo) : null;
+    const [existing, metadata, owner] = await Promise.all([
+      forceCreate ? Promise.resolve(null) : this.findLeadByPhone(input.phone),
+      leadSchema(),
+      executiveCreatesLead ? userById(actor.id) : assignTo ? userById(assignTo) : Promise.resolve(null),
+    ]);
+    if (existing) throw new ZohoError("Duplicate lead", 409, "DUPLICATE_LEAD");
     const status = owner ? ASSIGNED_STAGE : "Fresh Lead";
-    const metadata = await leadSchema();
     const requiredFields = ["Last_Name", "Company", "Mobile", "Lead_Source", "Lead_Status"];
     const missingFields = requiredFields.filter((field) => !metadata.fieldNames.has(field));
     if (missingFields.length) {
@@ -335,53 +383,34 @@ export const zohoRepository: CrmRepository = {
       else console.warn("[zoho] Area omitted because Leads has no City or Area field", { requestedField: "City/Area" });
     }
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
-    try {
-      await addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`);
-    } catch (error) {
-      console.error("[zoho] secondary lead-created note failed", {
-        leadId: id, operation: "POST /Notes",
-        status: error instanceof ZohoError ? error.status : undefined,
-        code: error instanceof ZohoError ? error.code : undefined,
-        field: error instanceof ZohoError ? error.field : undefined,
-      });
-    }
+    const secondaryWrites: Promise<unknown>[] = [addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`)];
     if (owner) {
-      try {
-        await addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`);
-        await zohoWrite("POST", "/Tasks", {
+      secondaryWrites.push(
+        addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`),
+        zohoWrite("POST", "/Tasks", {
           Subject: "Call new lead",
           Status: TASK_STATUS_WRITE.Assigned,
           Due_Date: todayIST(),
           Owner: { id: owner.id },
           ...relatedToLead(id),
-        });
-      } catch (error) {
-        console.error("[zoho] secondary lead assignment work failed", {
-          leadId: id, operation: "POST /Notes or POST /Tasks",
+        }),
+      );
+    }
+    const secondaryResults = await Promise.allSettled(secondaryWrites);
+    for (const result of secondaryResults) {
+      if (result.status === "rejected") {
+        const error = result.reason;
+        console.error("[zoho] secondary lead creation write failed", {
+          leadId: id,
           status: error instanceof ZohoError ? error.status : undefined,
           code: error instanceof ZohoError ? error.code : undefined,
           field: error instanceof ZohoError ? error.field : undefined,
+          message: error instanceof Error ? error.message : String(error),
         });
       }
     }
-    invalidate("leads", "users");
-    const assignable = await assignableIds();
-    try {
-      const created = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${id}`, {
-        query: { fields: LEAD_FIELDS.join(",") },
-      });
-      const createdRecord = created?.data?.[0];
-      if (createdRecord) return mapLead(createdRecord, assignable, new Set((await users()).filter((user) => user.role === "Sales Executive").map((user) => String(user.id))));
-    } catch (error) {
-      console.error("[zoho] created lead verification failed; using verified creation input", {
-        leadId: id,
-        operation: `GET /Leads/${id}`,
-        status: error instanceof ZohoError ? error.status : undefined,
-        code: error instanceof ZohoError ? error.code : undefined,
-      });
-    }
     return {
-      id, name: input.name.trim(), company: input.company.trim() || input.name.trim(), phone: input.phone,
+      id, name: input.name.trim(), company: input.company.trim() || input.name.trim(), phone: mobile,
       area: input.area.trim(), source: input.source, status: owner ? ASSIGNED_STAGE : "Fresh Lead",
       assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id,
       remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [actor.name],
@@ -712,6 +741,7 @@ export const zohoRepository: CrmRepository = {
     const quoteRecord: Record<string, unknown> = {
       Subject: `Offer ${input.offerNo} - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
+      [FIELD.quote.lead]: quoteLeadReference(schema.fieldsByName.get(FIELD.quote.lead), lead.id),
       Product_Details: lines.map((line) => ({
         product: { id: line.p.id },
         quantity: line.qty,
@@ -727,23 +757,7 @@ export const zohoRepository: CrmRepository = {
     else console.warn("[zoho] quote offer number custom field is unavailable; retaining it in Subject", {
       requestedField: FIELD.quote.offerNo,
     });
-    if (schema.fieldNames.has(FIELD.quote.lead)) quoteRecord[FIELD.quote.lead] = { id: lead.id };
-    else {
-      console.error("[zoho] quote lead lookup field is unavailable", {
-        requestedField: FIELD.quote.lead,
-        availableFields: [...schema.fieldNames],
-      });
-      throw new ZohoError(
-        `Required CRM field missing: ${FIELD.quote.lead}`,
-        400, "MANDATORY_NOT_FOUND", FIELD.quote.lead, undefined,
-        "GET /settings/fields?module=Quotes", { availableFields: [...schema.fieldNames] },
-      );
-    }
-    const payloadFields = new Set([
-      "Subject", "Owner", "Product_Details", "Sub_Total", "Discount", "Grand_Total",
-      ...(schema.fieldNames.has(FIELD.quote.offerNo) ? [FIELD.quote.offerNo] : []),
-      FIELD.quote.lead,
-    ]);
+    const payloadFields = new Set(Object.keys(quoteRecord));
     const missingMandatory = schema.mandatoryFields.filter((field) => !payloadFields.has(field));
     if (missingMandatory.length) {
       console.error("[zoho] quote payload is missing mandatory module fields", {
@@ -753,8 +767,8 @@ export const zohoRepository: CrmRepository = {
         payloadFields: [...payloadFields],
       });
       throw new ZohoError(
-        `Required CRM field missing: ${missingMandatory.join(", ")}`,
-        400, "MANDATORY_NOT_FOUND", missingMandatory[0], undefined,
+        `Required fields missing: ${missingMandatory.join(", ")}`,
+        400, "MANDATORY_FIELDS_MISSING", missingMandatory[0], undefined,
         "GET /settings/fields?module=Quotes", { missingMandatory, mandatoryFields: schema.mandatoryFields },
       );
     }
@@ -782,25 +796,24 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listVisits() {
-    return cached("visits", SHORT, async () => {
-      const [raw, map] = await Promise.all([taskRows(), leadMap()]);
-      const tasks = raw.map((z) => mapTask(z, map));
-      try {
-        const schema = await getSiteVisitsSchema();
-        if (!schema) return tasks;
-        const siteVisits = await listSiteVisits(schema, map);
-        const keys = new Set(siteVisits.map((visit) => `${visit.leadId}:${visit.date}`));
-        return [...siteVisits, ...tasks.filter((task) => task.isVisit && !keys.has(`${task.leadId}:${task.date}`))];
-      } catch (error) {
-        console.error("[zoho] Site Visits module unavailable; falling back to Tasks", {
-          status: error instanceof ZohoError ? error.status : undefined,
-          code: error instanceof ZohoError ? error.code : undefined,
-          field: error instanceof ZohoError ? error.field : undefined,
-        });
-        return tasks;
-      }
-    });
+    const [raw, map, schema] = await Promise.all([taskRows(), leadMap(), getSiteVisitsSchema()]);
+    const tasks = raw.map((z) => mapTask(z, map));
+    if (!schema) return tasks;
+    try {
+      const siteVisits = await listSiteVisits(schema, map);
+      const keys = new Set(siteVisits.map((visit) => `${visit.leadId}:${visit.date}`));
+      return [...siteVisits, ...tasks.filter((task) => task.isVisit && !keys.has(`${task.leadId}:${task.date}`))];
+    } catch (error) {
+      console.error("[zoho] Site Visits records unavailable; showing Tasks only", {
+        status: error instanceof ZohoError ? error.status : undefined,
+        code: error instanceof ZohoError ? error.code : undefined,
+        field: error instanceof ZohoError ? error.field : undefined,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return tasks;
+    }
   },
+  getVisitsWarning() { return taskMetadataWarning; },
   async getVisit(id) { return (await this.listVisits()).find((v) => v.id === id) ?? null; },
 
   async createVisit(input, actor) {
@@ -837,8 +850,31 @@ export const zohoRepository: CrmRepository = {
     if (current.module) {
       const schema = await getSiteVisitsSchema();
       if (!schema) throw new ZohoError("Site Visits schema unavailable", 404);
-      await zohoWrite("PUT", `/${schema.module}/${id}`, mapSiteVisitUpdate(schema, p));
-      if (p.notes?.trim() && current.leadId) await addNote(current.leadId, "Work update", `Notes: ${p.notes.trim()} (by ${actor.name})`);
+      const payload = mapSiteVisitUpdate(schema, p);
+      const missingFields = [
+        p.status && !schema.status ? "Status" : "",
+        p.date && !schema.date ? "Visit date" : "",
+        p.time && !schema.time ? "Visit time" : "",
+        p.followUp && !schema.followUp ? "Follow-up date" : "",
+        p.notes && !schema.notes ? "Notes" : "",
+      ].filter(Boolean);
+      if (missingFields.length) {
+        throw new ZohoError(`Site Visits fields unavailable: ${missingFields.join(", ")}`, 400, "INVALID_FIELD", undefined, undefined, `PUT /${schema.module}/${id}`);
+      }
+      await zohoWrite("PUT", `/${schema.module}/${id}`, payload);
+      if (p.notes?.trim() && current.leadId) {
+        try {
+          await addNote(current.leadId, "Work update", `Notes: ${p.notes.trim()} (by ${actor.name})`);
+        } catch (error) {
+          console.error("[zoho] visit update succeeded but history note failed", {
+            visitId: id,
+            leadId: current.leadId,
+            status: error instanceof ZohoError ? error.status : undefined,
+            code: error instanceof ZohoError ? error.code : undefined,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       invalidate("visits");
       return;
     }
@@ -856,7 +892,19 @@ export const zohoRepository: CrmRepository = {
       p.followUp ? `Follow-up: ${p.followUp}` : "",
       p.notes?.trim() ? `Notes: ${p.notes.trim()}` : "",
     ].filter(Boolean);
-    if (changes.length) await addNote(current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`);
+    if (changes.length) {
+      try {
+        await addNote(current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`);
+      } catch (error) {
+        console.error("[zoho] task update succeeded but history note failed", {
+          taskId: id,
+          leadId: current.leadId,
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     invalidate("visits");
   },
 };

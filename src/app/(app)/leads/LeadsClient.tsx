@@ -318,15 +318,23 @@ export function LeadsClient({ user, leads, executives, assignees, assigneesUnava
         setJustAdded(lead);
         setPendingAddedId(lead.id);
         const targetTab = user.role === "Manager" ? "all" : isExec ? "mine" : leadBucketForTab(lead);
+        const bucket = leadBucketForTab(lead);
+        setTabCounts((current) => {
+          const next = { ...current };
+          if (bucket === "fresh" || bucket === "assigned") next[bucket] += 1;
+          if (user.role === "Manager") next.all += 1;
+          if (lead.ownerId === user.id || lead.assignedToId === user.id ||
+            (user.role === "Calling Team" && lead.touchedBy.includes(user.name))) next.mine += 1;
+          setTotal(next[targetTab]);
+          return next;
+        });
+        setHasAnyLeads(true);
         setTab(targetTab);
         setAdding(false);
         setHighlightedLeadId(lead.id);
         window.requestAnimationFrame(() => {
           (document.getElementById("leads-list-mobile") ?? document.getElementById("leads-list"))?.scrollIntoView({ behavior: "smooth", block: "start" });
         });
-        void requestPage(1, false, () => true, targetTab).catch((error: unknown) =>
-          toast.error(error instanceof Error ? error.message : "Unable to refresh leads."),
-        );
       }} onCancel={() => setAdding(false)} assignees={teamMembers} assigneesUnavailable={teamMembersUnavailable} retryingAssignees={retryingTeamMembers} onRetryAssignees={() => void reloadTeamMembers()} canAssign={canAssign} canForceDuplicate={user.role === "Manager"} />}
 
       {visible.length === 0 ? (

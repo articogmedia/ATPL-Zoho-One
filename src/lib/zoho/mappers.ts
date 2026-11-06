@@ -158,15 +158,18 @@ export function mapQuote(
   leadsById: ReadonlyMap<string, Lead>,
   productsById?: ReadonlyMap<string, Product>,
 ): Quotation {
-  const ref = z[FIELD.quote.lead] as Ref;
-  const lead = ref ? leadsById.get(ref.id) : undefined;
+  const rawLeadRef = z[FIELD.quote.lead];
+  const ref = rawLeadRef && typeof rawLeadRef === "object" ? rawLeadRef as Ref : undefined;
+  const textLeadId = typeof rawLeadRef === "string" ? rawLeadRef.trim() : "";
+  const leadId = ref?.id ?? textLeadId;
+  const lead = leadId ? leadsById.get(leadId) : undefined;
   const subjectMatch = /^Offer\s+(.+?)\s+-\s+(.+)$/.exec(String(z.Subject ?? "").trim());
   const offerNo = String(z[FIELD.quote.offerNo] ?? "").trim() || subjectMatch?.[1] || "";
   const customer = (lead ? lead.company || lead.name : "") || subjectMatch?.[2] || ref?.name || "";
   return {
     id: String(z.id).trim(),
     offerNo,
-    leadId: ref?.id ?? "",
+    leadId,
     customer,
     executive: z.Owner?.name ?? "",
     ownerId: ownerId(z.Owner?.id),
@@ -192,8 +195,11 @@ export function mapQuote(
 }
 
 export function mapTaskStatus(raw?: string): VisitStatus {
-  const s = (raw ?? "").toLowerCase();
-  return s === "completed" ? "Completed" : s === "in progress" ? "In Progress" : "Assigned";
+  const s = (raw ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  if (["completed", "complete", "done", "closed"].includes(s)) return "Completed";
+  if (["in progress", "started", "work in progress"].includes(s)) return "In Progress";
+  if (["not started", "open", "scheduled", "assigned"].includes(s)) return "Assigned";
+  return "Assigned";
 }
 
 export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {

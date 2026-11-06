@@ -1,4 +1,5 @@
 import { crm } from "@/lib/crm";
+import { env } from "@/lib/env";
 import { requireSection } from "@/lib/auth/guard";
 import { perfStats, todayIST, visibleFor, type PerfRange } from "@/lib/domain";
 import { VisitsClient } from "./VisitsClient";
@@ -9,6 +10,12 @@ export const dynamic = "force-dynamic";
 export default async function VisitsPage() {
   const started = Date.now();
   const user = await requireSection("visits");
+  const settings = env();
+  console.info("[page] visits Zoho environment", {
+    dataSource: settings.DATA_SOURCE,
+    environment: settings.DATA_SOURCE !== "zoho" ? "mock" : settings.ZOHO_SANDBOX === "true" ? "sandbox" : "live",
+    dataCenter: settings.ZOHO_DC,
+  });
   const repo = crm();
   const executivePerformance = user.role === "Sales Executive";
   const baseResults = await Promise.allSettled([
@@ -19,7 +26,7 @@ export default async function VisitsPage() {
     ? await Promise.allSettled([repo.listLeads(), repo.listQuotes(), repo.listCalls()])
     : [];
   const failedIndex = baseResults.findIndex((result) => result.status === "rejected");
-  if (failedIndex >= 0 && (!executivePerformance || failedIndex !== 4)) {
+  if (failedIndex >= 0) {
     const errors = baseResults.map((result, index) => result.status === "rejected" ? `request ${index + 1}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}` : null).filter(Boolean);
     console.error("[page] visits data load failed", errors.join("; "));
   }
@@ -35,6 +42,9 @@ export default async function VisitsPage() {
       : "Call history is temporarily unavailable. Visits are still shown."
     : undefined;
   const visits = baseResults[0].status === "fulfilled" ? baseResults[0].value : [];
+  const visitsWarning = baseResults[0].status === "rejected"
+    ? `Unable to load Zoho work items: ${baseResults[0].reason instanceof Error ? baseResults[0].reason.message : String(baseResults[0].reason)}`
+    : repo.getVisitsWarning?.() ?? undefined;
   const assignableUsers = baseResults[1].status === "fulfilled" ? baseResults[1].value : [];
   const leads = performanceResults[0]?.status === "fulfilled" ? performanceResults[0].value : [];
   const quotes = performanceResults[1]?.status === "fulfilled" ? performanceResults[1].value : [];
@@ -56,6 +66,7 @@ export default async function VisitsPage() {
         today={todayIST()}
         performance={user.role === "Sales Executive" ? { week: performance("week"), month: performance("month") } : undefined}
         callWarning={callWarning}
+        visitsWarning={visitsWarning}
       />
     </>
   );

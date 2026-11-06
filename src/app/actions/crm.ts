@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
 import { invalidate } from "@/lib/cache";
@@ -135,20 +136,13 @@ export async function addLeadAction(input: unknown) {
     const user = await requireActionUser("leads");
     const data = newLeadSchema.parse(input);
     submittedPhone = data.phone;
-    const duplicate = await crm().findLeadByPhone(data.phone);
     const executive = isExecutive(user);
     const forceCreate = !executive && user.role === "Manager" && data.forceCreate;
-    if (duplicate && !forceCreate) {
-      throw new DuplicateLeadError({ id: duplicate.lead.id, name: duplicate.lead.name, owner: duplicate.lead.assignedTo ?? "Unassigned", status: duplicate.lead.status, matchedField: duplicate.matchedField });
-    }
-    // Executives create leads for themselves; everyone else drops them in the fresh queue.
     const assigneeId = executive ? user.id : data.assignedToId ?? null;
+    // Executives create leads for themselves; everyone else drops them in the fresh queue.
     if (assigneeId && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
-    if (assigneeId && !(await crm().listAssignableUsers()).some((member) => String(member.id) === String(assigneeId))) {
-      throw new ForbiddenError("Choose an active team member.");
-    }
     const lead = await crm().createLead(data, user, assigneeId, forceCreate);
-    invalidate("leads", "visits");
+    invalidate("leads", ...(lead.assignedToId ? ["visits"] : []));
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
   }, () => submittedPhone);
 }
@@ -386,6 +380,7 @@ export async function scheduleVisitAction(input: unknown) {
     if (!executive || !(await assignableNames()).includes(executive)) throw new ForbiddenError("Choose a team member.");
     await crm().createVisit({ ...v, executive }, user);
     invalidate("visits");
+    revalidatePath("/visits");
   });
 }
 
@@ -403,5 +398,6 @@ export async function updateVisitAction(input: unknown) {
     if (!visit || visibleFor(user, [visit]).length === 0) throw new ForbiddenError("You can only update your own work.");
     await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user);
     invalidate("visits");
+    revalidatePath("/visits");
   });
 }

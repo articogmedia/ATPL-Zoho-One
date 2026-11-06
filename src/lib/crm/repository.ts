@@ -41,6 +41,7 @@ export interface CrmRepository {
   createQuote(input: NewQuote, actor: User, executive: string): Promise<Quotation>;
 
   listVisits(): Promise<Visit[]>;
+  getVisitsWarning?(): string | null;
   getVisit(id: string): Promise<Visit | null>;
   createVisit(input: NewVisit, actor: User): Promise<void>;
   updateVisit(id: string, patch: VisitPatch, actor: User): Promise<void>;

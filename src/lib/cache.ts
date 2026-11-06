@@ -62,10 +62,9 @@ function refreshInBackground(key: string, entry: CacheEntry) {
 
 export function invalidate(...prefixes: string[]) {
   for (const prefix of prefixes) {
-    for (const [key, entry] of store.values) {
+    for (const key of store.values.keys()) {
       if (key === prefix || key.startsWith(`${prefix}:`)) {
-        entry.expiresAt = 0;
-        refreshInBackground(key, entry);
+        store.values.delete(key);
       }
     }
 
