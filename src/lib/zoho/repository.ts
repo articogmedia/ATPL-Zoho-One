@@ -55,44 +55,55 @@ function quoteLeadReference(field: QuoteFieldMetadata | undefined, leadId: strin
 
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
 const leadCreateLocks = new Map<string, Promise<unknown>>();
-const leadSchema = async () => cached("zoho:lead-schema", LONG, async () => {
-  const response = await zoho<{
-    fields?: {
-      api_name?: string;
-      field_label?: string;
-      pick_list_values?: { actual_value?: string; display_value?: string }[];
-    }[];
-  }>("GET", "/settings/fields", { query: { module: "Leads" } });
-  const fields = response?.fields ?? [];
-  const fieldNames = new Set(fields.map((field) => field.api_name).filter((name): name is string => !!name));
+type ZohoLeadField = {
+  api_name?: string;
+  field_label?: string;
+  pick_list_values?: { actual_value?: string; display_value?: string }[];
+};
+
+const leadSchema = async () => {
+  const schema = await cached("zoho:lead-schema", LONG, async () => {
+    const response = await zoho<{
+      fields?: ZohoLeadField[];
+    }>("GET", "/settings/fields", { query: { module: "Leads" } });
+    const fields = response?.fields ?? [];
+    const fieldNames = fields.map((field) => field.api_name).filter((name): name is string => !!name);
+    return {
+      fields,
+      fieldNames,
+      sourceValues: fields.find((field) => field.api_name === "Lead_Source")?.pick_list_values
+        ?.map((item) => item.actual_value?.trim() || item.display_value?.trim() || "")
+        .filter(Boolean) ?? [],
+      areaField: fields.find((field) => field.api_name === "City")?.api_name
+        ?? fields.find((field) => field.api_name === "Area" || field.field_label?.trim().toLowerCase() === "area")?.api_name
+        ?? null,
+      remarksField: fieldNames.includes("Description") ? "Description" : null,
+    };
+  });
+  return { ...schema, fieldNames: new Set(schema.fieldNames) };
+};
+const quoteSchema = async () => {
+  const schema = await cached("zoho:quote-schema", LONG, async () => {
+    const response = await zoho<{
+      fields?: QuoteFieldMetadata[];
+    }>("GET", "/settings/fields", { query: { module: "Quotes" } });
+    const fields = response?.fields ?? [];
+    return {
+      fields,
+      fieldNames: fields.map((field) => field.api_name).filter((name): name is string => !!name),
+      mandatoryFields: fields
+        .filter((field) => field.system_mandatory === true || field.required === true || field.is_mandatory === true)
+        .map((field) => field.api_name)
+        .filter((name): name is string => !!name),
+    };
+  });
   return {
-    fields,
-    fieldNames,
-    sourceValues: fields.find((field) => field.api_name === "Lead_Source")?.pick_list_values
-      ?.map((item) => item.actual_value?.trim() || item.display_value?.trim() || "")
-      .filter(Boolean) ?? [],
-    areaField: fields.find((field) => field.api_name === "City")?.api_name
-      ?? fields.find((field) => field.api_name === "Area" || field.field_label?.trim().toLowerCase() === "area")?.api_name
-      ?? null,
-    remarksField: fieldNames.has("Description") ? "Description" : null,
-  };
-});
-const quoteSchema = async () => cached("zoho:quote-schema", LONG, async () => {
-  const response = await zoho<{
-    fields?: QuoteFieldMetadata[];
-  }>("GET", "/settings/fields", { query: { module: "Quotes" } });
-  const fields = response?.fields ?? [];
-  return {
-    fields,
-    fieldNames: new Set(fields.map((field) => field.api_name).filter((name): name is string => !!name)),
-    fieldsByName: new Map(fields.filter((field): field is typeof field & { api_name: string } => !!field.api_name)
+    ...schema,
+    fieldNames: new Set(schema.fieldNames),
+    fieldsByName: new Map(schema.fields.filter((field): field is typeof field & { api_name: string } => !!field.api_name)
       .map((field) => [field.api_name, field])),
-    mandatoryFields: fields
-      .filter((field) => field.system_mandatory === true || field.required === true || field.is_mandatory === true)
-      .map((field) => field.api_name)
-      .filter((name): name is string => !!name),
   };
-});
+};
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
   const exactValue = zohoLeadSource(source, sourceValues, false);
   const value = exactValue ?? zohoLeadSource("Other", sourceValues, false);
@@ -729,6 +740,17 @@ export const zohoRepository: CrmRepository = {
     const [lead, products, owner] = await Promise.all([this.getLead(input.leadId), this.listProducts(), userByName(executive)]);
     if (!lead) throw new ZohoError("Lead not found", 404);
     const schema = await quoteSchema();
+    if (!schema.fieldNames.has(FIELD.quote.lead)) {
+      console.error("[zoho] required Quotes lead-reference field is missing from module metadata", {
+        operation: "GET /settings/fields?module=Quotes",
+        requiredField: FIELD.quote.lead,
+      });
+      throw new ZohoError(
+        `Required field missing: ${FIELD.quote.lead}`,
+        400, "MANDATORY_NOT_FOUND", FIELD.quote.lead, undefined,
+        "GET /settings/fields?module=Quotes", { missingFields: [FIELD.quote.lead] },
+      );
+    }
     // Prices come from the Zoho catalogue, never from the browser.
     const lines = input.items.map((i) => {
       const p = products.find((x) => x.id === i.productId);

@@ -133,4 +133,14 @@ test("new quotation customer can be cancelled or created and selected", async ({
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.locator("#quote-step-customer")).toContainText("E2E Quotation Customer");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.locator("#quote-step-products")).toBeVisible();
+  await page.getByRole("button", { name: "Item 1 product" }).click();
+  const productDialog = page.getByRole("dialog", { name: "Choose product" });
+  await expect(productDialog).toBeVisible();
+  await productDialog.getByRole("option").first().click();
+  await page.getByRole("button", { name: "Preview Offer" }).click();
+  await expect(page.locator("#offer-heading")).toBeVisible();
+  await expect(page.locator("article.offer-document").getByText(/^\d+\/\d{2}-\d{2}$/)).toBeVisible();
+  await expect(page.locator("article.offer-document")).toContainText("E2E Quotation Customer");
 });

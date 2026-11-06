@@ -1,14 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const cacheMode = vi.hoisted(() => ({ roundTrip: false }));
+
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
-  unstable_cache: (load: () => unknown) => load,
+  unstable_cache: (load: () => Promise<unknown>) => async () => {
+    const value = await load();
+    return cacheMode.roundTrip ? JSON.parse(JSON.stringify(value)) as unknown : value;
+  },
 }));
 
 beforeEach(async () => {
   process.env.SESSION_SECRET = "test-session-secret-that-is-at-least-32-chars";
   process.env.DATA_SOURCE = "mock";
+  cacheMode.roundTrip = false;
   const { resetMemoryCache } = await import("@/lib/cache");
   resetMemoryCache();
   vi.resetModules();
@@ -160,5 +166,77 @@ describe("Zoho quotation creation", () => {
         message: "Required fields missing: Account_Name, Contact_Name",
       });
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds quote schema collections after cache serialization and saves the quote", async () => {
+    cacheMode.roundTrip = true;
+    const write = vi.fn(async (_method: string, path: string) => path === "/Quotes" ? "quote-serialized" : "note-1");
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") {
+        return { fields: [
+          ...quoteFields.fields,
+          { api_name: "Status" },
+          { api_name: "Due_Date" },
+          { api_name: "Owner" },
+          { api_name: "What_Id" },
+          { api_name: "Who_Id" },
+          { api_name: "Description" },
+          { api_name: "Created_Time" },
+          { api_name: "Modified_Time" },
+          { api_name: "Is_Site_Visit" },
+          { api_name: "Visit_Time" },
+          { api_name: "Next_Action" },
+          { api_name: "Follow_Up_Date" },
+          { api_name: "Task_Type" },
+        ] };
+      }
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => {
+      if (module === "Leads") return [leadRecord];
+      if (module === "Products") {
+        return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }];
+      }
+      return [];
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {
+        constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string) {
+          super(message);
+        }
+      },
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.createQuote({
+      offerNo: "242/26-27",
+      leadId: "lead-1",
+      subject: "Cache round-trip offer",
+      items: [{ productId: "product-1", qty: 1, discount: 2000 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
+      id: "quote-serialized",
+      offerNo: "242/26-27",
+      leadId: "lead-1",
+      customer: "Customer Co",
+    });
+
+    expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
+      Subject: "Offer 242/26-27 - Cache round-trip offer",
+      Offer_No: "242/26-27",
+      Lead_Ref: { id: "lead-1" },
+      Product_Details: [{
+        product: { id: "product-1" },
+        quantity: 1,
+        list_price: 122000,
+        Discount: 2000,
+        total: 122000,
+        total_after_discount: 120000,
+        net_total: 120000,
+      }],
+    }));
   });
 });

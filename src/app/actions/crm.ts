@@ -59,11 +59,20 @@ function reportActionFailure(action: string, error: unknown, fallback: string, e
     zohoDetails: zohoFailure?.details,
     zohoOperation: zohoFailure?.operation,
   });
+  const isProduction = process.env.NODE_ENV === "production";
+  const safeReason = !isProduction && !zohoFailure && error instanceof Error
+    ? ` (${error.name}: ${error.message
+      .replace(/\b(access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password)\b\s*[:=]\s*\S+/gi, "$1=[REDACTED]")
+      .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+      .replace(/\btoken\s+[A-Za-z0-9._-]{16,}/gi, "token [REDACTED]")
+      .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+      .slice(0, 180)})`
+    : "";
   return zohoFailure
     ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference, zohoFailure.operation)
     : error instanceof Error && /timeout|timed out|abort/i.test(`${error.message} ${String(error.cause ?? "")}`)
       ? `Zoho timed out, please try again. (Ref: ${reference})`
-    : `${fallback} The request failed before a CRM response was available. Please contact support. (Ref: ${reference})`;
+      : `${fallback}${safeReason} (Ref: ${reference})`;
 }
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
