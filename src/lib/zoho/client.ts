@@ -50,7 +50,34 @@ const API_VERSION = "v6";
 const g = globalThis as unknown as {
   __atplZohoToken?: { value: string; exp: number };
   __atplZohoRefresh?: Promise<string>;
+  __atplZohoRefreshBlocked?: { until: number; error: ZohoError };
 };
+
+function refreshFailure(error: unknown): { delay: number; message: string; code: string } {
+  const zohoError = error instanceof ZohoError ? error : undefined;
+  const code = zohoError?.code?.toLowerCase() ?? "";
+  const message = error instanceof Error ? error.message : String(error);
+  const reason = `${code} ${message}`.toLowerCase();
+  if (zohoError?.status === 429 || reason.includes("too many requests")) {
+    return {
+      delay: 5 * 60_000,
+      message: "Zoho is temporarily blocking token refresh because of too many requests. Retry in about 5 minutes.",
+      code: "TOKEN_REFRESH_RATE_LIMITED",
+    };
+  }
+  if (code === "invalid_client" || reason.includes("invalid_client")) {
+    return {
+      delay: 60_000,
+      message: "Zoho rejected the OAuth client credentials. Verify the configured client ID and secret, then retry in about 60 seconds.",
+      code: "TOKEN_REFRESH_INVALID_CLIENT",
+    };
+  }
+  return {
+    delay: 60_000,
+    message: `Zoho token refresh failed: ${message}. Retry in about 60 seconds.`,
+    code: "TOKEN_REFRESH_FAILED",
+  };
+}
 
 async function requestAccessToken(): Promise<{ value: string; exp: number }> {
   const started = Date.now();
@@ -93,7 +120,7 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
     });
     throw new ZohoError(message, res.status, json.code ?? json.error, json.field, undefined, "POST /oauth/v2/token", json.details);
   }
-  const lifetimeMs = Math.max(60_000, ((json.expires_in ?? 3600) - 120) * 1000);
+  const lifetimeMs = Math.max(60_000, ((json.expires_in ?? 3600) - 300) * 1000);
   return { value: json.access_token, exp: Date.now() + lifetimeMs };
 }
 
@@ -101,12 +128,46 @@ async function accessToken(force = false): Promise<string> {
   if (force) g.__atplZohoToken = undefined;
   const cached = g.__atplZohoToken;
   if (!force && cached && cached.exp > Date.now()) return cached.value;
-  // De-duplicate concurrent refreshes.
-  g.__atplZohoRefresh ??= (async () => {
-    const fresh = await requestAccessToken();
-    g.__atplZohoToken = fresh;
-    return fresh.value;
-  })().finally(() => { g.__atplZohoRefresh = undefined; });
+  const blocked = g.__atplZohoRefreshBlocked;
+  if (blocked && blocked.until > Date.now()) throw blocked.error;
+  if (blocked) g.__atplZohoRefreshBlocked = undefined;
+  if (!g.__atplZohoRefresh) {
+    const refreshPromise = (async () => {
+      try {
+        const fresh = await requestAccessToken();
+        g.__atplZohoToken = fresh;
+        g.__atplZohoRefreshBlocked = undefined;
+        return fresh.value;
+      } catch (error) {
+        const policy = refreshFailure(error);
+        const original = error instanceof ZohoError ? error : undefined;
+        const reference = original?.reference ?? newErrorReference();
+        const blockedError = new ZohoError(
+          `Zoho connection problem: ${policy.message}`,
+          original?.status, policy.code, original?.field, original?.invalidValue,
+          "POST /oauth/v2/token", original?.details, reference,
+        );
+        g.__atplZohoToken = undefined;
+        g.__atplZohoRefreshBlocked = { until: Date.now() + policy.delay, error: blockedError };
+        console.error("[zoho] token refresh blocked", {
+          reference,
+          code: policy.code,
+          blockedForMs: policy.delay,
+          message: policy.message,
+        });
+        throw blockedError;
+      }
+    })();
+    g.__atplZohoRefresh = refreshPromise;
+    void refreshPromise.then(
+      () => {
+        if (g.__atplZohoRefresh === refreshPromise) g.__atplZohoRefresh = undefined;
+      },
+      () => {
+        if (g.__atplZohoRefresh === refreshPromise) g.__atplZohoRefresh = undefined;
+      },
+    );
+  }
   return g.__atplZohoRefresh;
 }
 

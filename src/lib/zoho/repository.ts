@@ -36,6 +36,18 @@ const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
+function isTaskAuthenticationError(error: unknown): boolean {
+  if (!(error instanceof ZohoError)) return false;
+  const code = error.code?.toLowerCase() ?? "";
+  const message = error.message.toLowerCase();
+  return error.status === 401
+    || code.startsWith("token_refresh_")
+    || code === "invalid_client"
+    || code === "invalid_token"
+    || code === "invalid_oauthtoken"
+    || message.includes("access denied")
+    || message.includes("invalid_client");
+}
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
 const leadCreateLocks = new Map<string, Promise<unknown>>();
 const leadSchema = async () => cached("zoho:lead-schema", LONG, async () => {
@@ -107,6 +119,7 @@ const taskRows = cache(() => cached("visits:tasks", SHORT, async () => {
   try {
     return await zohoList<ZTask>("Tasks", TASK_FIELDS, 1000);
   } catch (error) {
+    if (isTaskAuthenticationError(error)) throw error;
     console.error("[zoho] Tasks custom fields unavailable; retrying with standard fields", {
       operation: "GET /Tasks",
       code: error instanceof ZohoError ? error.code : undefined,

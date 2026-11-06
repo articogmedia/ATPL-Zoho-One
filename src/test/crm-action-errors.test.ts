@@ -34,4 +34,16 @@ describe("friendly Zoho action errors", () => {
       "CRM service is temporarily unavailable. Please try again. (Ref: SERVICE_UNAVAILABLE)",
     );
   });
+
+  it("shows a clear Zoho connection message for refresh back-off", () => {
+    expect(friendlyZohoError(
+      400,
+      "TOKEN_REFRESH_RATE_LIMITED",
+      "Zoho connection problem: Zoho is temporarily blocking token refresh. Retry in about 5 minutes.",
+      undefined,
+      "TOKENREF12345",
+    )).toBe(
+      "Zoho connection problem: Zoho is temporarily blocking token refresh. Retry in about 5 minutes. (Ref: TOKENREF12345)",
+    );
+  });
 });

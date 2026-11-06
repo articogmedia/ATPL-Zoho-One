@@ -77,6 +77,33 @@ describe("Zoho products catalogue", () => {
 });
 
 describe("Zoho lead actions", () => {
+  it("does not retry Tasks with standard fields after an authentication error", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status: number, readonly code: string) {
+        super(message);
+      }
+    }
+    const list = vi.fn(async (module: string) => {
+      if (module === "Tasks") throw new MockZohoError("Zoho connection problem: token refresh blocked", 400, "TOKEN_REFRESH_RATE_LIMITED");
+      return [];
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      zoho: vi.fn(async () => ({ data: [] })),
+      zohoList: list,
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.listVisits()).rejects.toMatchObject({
+      code: "TOKEN_REFRESH_RATE_LIMITED",
+    });
+    expect(list.mock.calls.filter(([module]) => module === "Tasks")).toHaveLength(1);
+    expect(list.mock.calls.some(([module, fields]) =>
+      module === "Tasks" && (fields as string[]).join(",") === "Subject,Status,Due_Date,Owner,Who_Id,What_Id,Description",
+    )).toBe(false);
+  });
+
   it("matches +91, spaced, and leading-zero phone formats by phone field", async () => {
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
@@ -554,6 +581,7 @@ describe("Zoho write error handling", () => {
       const configureZoho = () => {
         Reflect.deleteProperty(globalThis, "__atplZohoToken");
         Reflect.deleteProperty(globalThis, "__atplZohoRefresh");
+        Reflect.deleteProperty(globalThis, "__atplZohoRefreshBlocked");
         Reflect.deleteProperty(globalThis, "__atplZohoForcedRefresh");
         process.env.ZOHO_CLIENT_ID = "test-client";
         process.env.ZOHO_CLIENT_SECRET = "test-secret";
@@ -716,6 +744,115 @@ describe("Zoho write error handling", () => {
       } finally {
         fetchMock.mockRestore();
         log.mockRestore();
+      }
+    });
+
+    it("caches the access token and refreshes five minutes before expiry", async () => {
+      configureZoho();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-06T00:00:00Z"));
+      let tokenRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          return new Response(JSON.stringify({ access_token: `access-${tokenRequests}`, expires_in: 3600 }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+      try {
+        const { zoho } = await import("@/lib/zoho/client");
+        await zoho("GET", "/Leads");
+        await zoho("GET", "/Products");
+        expect(tokenRequests).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(54 * 60_000 + 59_000);
+        await zoho("GET", "/Tasks");
+        expect(tokenRequests).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        await zoho("GET", "/Quotes");
+        expect(tokenRequests).toBe(2);
+      } finally {
+        fetchMock.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it("shares one in-flight refresh across parallel Zoho requests", async () => {
+      configureZoho();
+      let tokenRequests = 0;
+      let releaseToken!: (response: Response) => void;
+      const tokenResponse = new Promise<Response>((resolve) => { releaseToken = resolve; });
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          return tokenResponse;
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+      try {
+        const { zoho } = await import("@/lib/zoho/client");
+        const requests = Promise.all([
+          zoho("GET", "/Leads"),
+          zoho("GET", "/Tasks"),
+          zoho("GET", "/Products"),
+        ]);
+        await vi.waitFor(() => expect(tokenRequests).toBe(1));
+        releaseToken(new Response(JSON.stringify({ access_token: "shared-access", expires_in: 3600 }), { status: 200 }));
+        await requests;
+        expect(tokenRequests).toBe(1);
+      } finally {
+        fetchMock.mockRestore();
+      }
+    });
+
+    it.each([
+      {
+        error: "Access Denied: You have made too many requests continuously",
+        delay: 5 * 60_000,
+        code: "TOKEN_REFRESH_RATE_LIMITED",
+      },
+      {
+        error: "invalid_client",
+        delay: 60_000,
+        code: "TOKEN_REFRESH_INVALID_CLIENT",
+      },
+    ])("backs off after OAuth refresh failure ($code)", async ({ error, delay, code }) => {
+      configureZoho();
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-06T00:00:00Z"));
+      let tokenRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          if (tokenRequests === 1) {
+            const body = error === "invalid_client"
+              ? { error, error_description: "Client authentication failed" }
+              : { error };
+            return new Response(JSON.stringify(body), { status: 400 });
+          }
+          return new Response(JSON.stringify({ access_token: "recovered-access", expires_in: 3600 }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const { warmZohoToken } = await import("@/lib/zoho/client");
+        await expect(warmZohoToken()).rejects.toMatchObject({
+          code,
+          message: expect.stringContaining("Zoho connection problem:"),
+          reference: expect.stringMatching(/^[A-F0-9]{12}$/),
+        });
+        await expect(warmZohoToken()).rejects.toMatchObject({ code });
+        expect(tokenRequests).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(delay);
+        await warmZohoToken();
+        expect(tokenRequests).toBe(2);
+      } finally {
+        fetchMock.mockRestore();
+        log.mockRestore();
+        vi.useRealTimers();
       }
     });
 });

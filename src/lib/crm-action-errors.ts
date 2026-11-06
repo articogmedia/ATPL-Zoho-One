@@ -14,6 +14,11 @@ export function friendlyZohoError(
 ): string {
   const suffix = ` (Ref: ${reference})`;
   const responseMessage = message?.trim().toLowerCase() ?? "";
+  if (code?.startsWith("TOKEN_REFRESH_")) {
+    const reason = message?.replace(/^Zoho connection problem:\s*/i, "").trim()
+      || "Could not refresh the access token. Please retry shortly.";
+    return `Zoho connection problem: ${reason}${suffix}`;
+  }
   if (code === "DUPLICATE_DATA" || code === "DUPLICATE_LEAD") {
     return `Customer already exists. Mobile number is already in use.${suffix}`;
   }
