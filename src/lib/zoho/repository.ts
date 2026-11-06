@@ -4,7 +4,7 @@ import { canAdvanceLeadStatus, isAssignable, normalizePhone, quoteTotals, todayI
 import { cached, invalidate } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
-import { zoho, zohoList, zohoWrite, ZohoError } from "./client";
+import { hosts, zoho, zohoList, zohoWrite, ZohoError } from "./client";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
@@ -40,17 +40,76 @@ type QuoteFieldMetadata = {
   api_name?: string;
   field_label?: string;
   data_type?: string;
-  lookup?: { api_name?: string; module?: { api_name?: string } };
+  json_type?: string;
+  max_length?: number;
+  lookup?: { api_name?: string; module?: { api_name?: string; id?: string } };
   system_mandatory?: boolean;
   required?: boolean;
   is_mandatory?: boolean;
 };
 
-function quoteLeadReference(field: QuoteFieldMetadata | undefined, leadId: string): unknown {
-  const isLeadLookup = field?.data_type?.toLowerCase() === "lookup"
-    || field?.lookup?.module?.api_name?.toLowerCase() === "leads"
-    || field?.lookup?.api_name?.toLowerCase() === "leads";
-  return isLeadLookup || !field ? { id: leadId } : leadId;
+type QuoteLayoutField = {
+  api_name?: string;
+  field_label?: string;
+  required?: boolean;
+  system_mandatory?: boolean;
+};
+
+type QuoteLayout = {
+  name?: string;
+  id?: string;
+  is_default?: boolean;
+  default?: boolean;
+  fields?: QuoteLayoutField[];
+  sections?: { fields?: QuoteLayoutField[] }[];
+};
+
+function quoteLeadReference(field: QuoteFieldMetadata, leadId: string): string | { id: string } {
+  const normalizedLeadId = leadId.trim();
+  if (!normalizedLeadId) throw new ZohoError("The selected lead has no Zoho record ID.", 400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead);
+  const dataType = field.data_type?.trim().toLowerCase();
+  if (dataType === "lookup") {
+    const targetModule = field.lookup?.module?.api_name?.trim();
+    if (targetModule?.toLowerCase() !== "leads") {
+      throw new ZohoError(
+        targetModule
+          ? `Quotes field ${FIELD.quote.lead} targets ${targetModule}, not Leads.`
+          : `Quotes field ${FIELD.quote.lead} has no lookup target in Zoho metadata.`,
+        400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead,
+        targetModule, "GET /settings/fields?module=Quotes",
+        { targetModule: targetModule ?? null, data_type: field.data_type, json_type: field.json_type },
+      );
+    }
+    return { id: normalizedLeadId };
+  }
+  if (["text", "string", "singleline", "single_line"].includes(dataType ?? "")) {
+    if (field.max_length !== undefined && normalizedLeadId.length > field.max_length) {
+      throw new ZohoError(
+        `Lead ID exceeds the maximum length for Quotes field ${FIELD.quote.lead}.`,
+        400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead, undefined,
+        "GET /settings/fields?module=Quotes",
+        { max_length: field.max_length, leadIdLength: normalizedLeadId.length, data_type: field.data_type, json_type: field.json_type },
+      );
+    }
+    return normalizedLeadId;
+  }
+  throw new ZohoError(
+    `Unsupported Zoho data type "${field.data_type ?? "unknown"}" for Quotes field ${FIELD.quote.lead}.`,
+    400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead, undefined,
+    "GET /settings/fields?module=Quotes",
+    { data_type: field.data_type ?? null, json_type: field.json_type ?? null },
+  );
+}
+
+function requiredQuoteLayoutFields(layouts: QuoteLayout[]): { layout: string | null; fields: string[] } {
+  const selectedLayouts = layouts.filter((layout) => layout.is_default === true || layout.default === true);
+  const selected = selectedLayouts.length === 1 ? selectedLayouts[0] : layouts.length === 1 ? layouts[0] : undefined;
+  if (!selected) return { layout: null, fields: [] };
+  const fields = [...(selected.fields ?? []), ...(selected.sections ?? []).flatMap((section) => section.fields ?? [])]
+    .filter((field) => field.required === true || field.system_mandatory === true)
+    .map((field) => field.api_name)
+    .filter((name): name is string => !!name);
+  return { layout: selected.name ?? selected.id ?? null, fields: [...new Set(fields)] };
 }
 
 const relatedToLead = (leadId: string) => ({ What_Id: { id: leadId }, $se_module: "Leads" });
@@ -84,17 +143,36 @@ const leadSchema = async () => {
 };
 const quoteSchema = async () => {
   const schema = await cached("zoho:quote-schema", LONG, async () => {
-    const response = await zoho<{
-      fields?: QuoteFieldMetadata[];
-    }>("GET", "/settings/fields", { query: { module: "Quotes" } });
+    const [response, layoutsResponse] = await Promise.all([
+      zoho<{ fields?: QuoteFieldMetadata[] }>("GET", "/settings/fields", { query: { module: "Quotes" } }),
+      zoho<{ layouts?: QuoteLayout[] }>("GET", "/settings/layouts", { query: { module: "Quotes" } })
+        .catch((error: unknown) => {
+          console.error("[zoho] Quotes layout metadata unavailable", {
+            operation: "GET /settings/layouts?module=Quotes",
+            status: error instanceof ZohoError ? error.status : undefined,
+            code: error instanceof ZohoError ? error.code : undefined,
+            message: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }),
+    ]);
     const fields = response?.fields ?? [];
+    const layouts = layoutsResponse?.layouts ?? [];
+    const layoutRequirements = requiredQuoteLayoutFields(layouts);
+    if (layouts.length > 1 && !layoutRequirements.layout) {
+      console.warn("[zoho] no default Quotes layout could be identified; using field metadata for mandatory validation", {
+        layouts: layouts.map((layout) => ({ id: layout.id, name: layout.name, is_default: layout.is_default, default: layout.default })),
+      });
+    }
     return {
       fields,
       fieldNames: fields.map((field) => field.api_name).filter((name): name is string => !!name),
-      mandatoryFields: fields
+      mandatoryFields: [...new Set([...fields
         .filter((field) => field.system_mandatory === true || field.required === true || field.is_mandatory === true)
         .map((field) => field.api_name)
-        .filter((name): name is string => !!name),
+        .filter((name): name is string => !!name), ...layoutRequirements.fields])],
+      mandatoryLayout: layoutRequirements.layout,
+      layoutRequiredFields: layoutRequirements.fields,
     };
   });
   return {
@@ -737,10 +815,15 @@ export const zohoRepository: CrmRepository = {
   },
 
   async createQuote(input, actor, executive) {
-    const [lead, products, owner] = await Promise.all([this.getLead(input.leadId), this.listProducts(), userByName(executive)]);
+    const requestedLeadId = input.leadId.trim();
+    const [lead, products, owner] = await Promise.all([this.getLead(requestedLeadId), this.listProducts(), userByName(executive)]);
     if (!lead) throw new ZohoError("Lead not found", 404);
+    if (!lead.id.trim() || lead.id.trim() !== requestedLeadId) {
+      throw new ZohoError("The selected lead ID does not match the CRM record.", 400, "INVALID_LEAD_REFERENCE", FIELD.quote.lead);
+    }
     const schema = await quoteSchema();
-    if (!schema.fieldNames.has(FIELD.quote.lead)) {
+    const leadReferenceField = schema.fieldsByName.get(FIELD.quote.lead);
+    if (!leadReferenceField) {
       console.error("[zoho] required Quotes lead-reference field is missing from module metadata", {
         operation: "GET /settings/fields?module=Quotes",
         requiredField: FIELD.quote.lead,
@@ -760,10 +843,11 @@ export const zohoRepository: CrmRepository = {
     });
     const totals = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price, discount: l.discount })));
     const customer = lead.company || lead.name;
+    const leadReference = quoteLeadReference(leadReferenceField, lead.id);
     const quoteRecord: Record<string, unknown> = {
       Subject: `Offer ${input.offerNo} - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
-      [FIELD.quote.lead]: quoteLeadReference(schema.fieldsByName.get(FIELD.quote.lead), lead.id),
+      [FIELD.quote.lead]: leadReference,
       Product_Details: lines.map((line) => ({
         product: { id: line.p.id },
         quantity: line.qty,
@@ -782,18 +866,53 @@ export const zohoRepository: CrmRepository = {
     const payloadFields = new Set(Object.keys(quoteRecord));
     const missingMandatory = schema.mandatoryFields.filter((field) => !payloadFields.has(field));
     if (missingMandatory.length) {
+      const layoutRequiredMissing = missingMandatory.filter((field) => schema.layoutRequiredFields.includes(field));
+      const reason = layoutRequiredMissing.length && schema.mandatoryLayout
+        ? `Required fields missing: ${missingMandatory.join(", ")} (required by Quotes layout "${schema.mandatoryLayout}")`
+        : `Required fields missing: ${missingMandatory.join(", ")}`;
       console.error("[zoho] quote payload is missing mandatory module fields", {
         operation: "POST /Quotes",
         mandatoryFields: schema.mandatoryFields,
         missingMandatory,
+        mandatoryLayout: schema.mandatoryLayout,
+        layoutRequiredMissing,
         payloadFields: [...payloadFields],
       });
       throw new ZohoError(
-        `Required fields missing: ${missingMandatory.join(", ")}`,
+        reason,
         400, "MANDATORY_FIELDS_MISSING", missingMandatory[0], undefined,
-        "GET /settings/fields?module=Quotes", { missingMandatory, mandatoryFields: schema.mandatoryFields },
+        "GET /settings/layouts?module=Quotes", {
+          missingMandatory,
+          mandatoryFields: schema.mandatoryFields,
+          mandatoryLayout: schema.mandatoryLayout,
+          layoutRequiredMissing,
+        },
       );
     }
+    const zohoHosts = hosts();
+    console.info("[zoho] creating quote with Lead_Ref", {
+      operation: "POST /Quotes",
+      environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
+      apiHost: zohoHosts.api,
+      leadId: lead.id.trim(),
+      leadIdMatchesRequest: lead.id.trim() === requestedLeadId,
+      leadRefField: FIELD.quote.lead,
+      leadRefValue: leadReference,
+      leadRefValueType: leadReference === null ? "null" : Array.isArray(leadReference) ? "array" : typeof leadReference,
+      fieldMetadata: {
+        api_name: leadReferenceField.api_name,
+        data_type: leadReferenceField.data_type,
+        json_type: leadReferenceField.json_type,
+        lookup_module_api_name: leadReferenceField.lookup?.module?.api_name ?? null,
+        system_mandatory: leadReferenceField.system_mandatory ?? null,
+        required: leadReferenceField.required ?? null,
+        is_mandatory: leadReferenceField.is_mandatory ?? null,
+        max_length: leadReferenceField.max_length ?? null,
+      },
+      mandatoryLayout: schema.mandatoryLayout,
+      layoutRequiredFields: schema.layoutRequiredFields,
+      payloadKeys: Object.keys(quoteRecord),
+    });
     const id = await zohoWrite("POST", "/Quotes", {
       ...quoteRecord,
     });

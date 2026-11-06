@@ -85,3 +85,37 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(allLeadsRow).toHaveCount(0);
 });
+
+test("mobile lead cards fit narrow viewports and have one WhatsApp action", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/leads");
+
+  const cards = page.getByTestId("mobile-lead-card");
+  await expect(cards.first()).toBeVisible();
+  for (const width of [360, 390, 430]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(cards.first()).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await cards.first().evaluate((card) => card.scrollWidth <= card.clientWidth)).toBe(true);
+
+    const actions = cards.first().getByTestId("mobile-lead-actions");
+    const actionTargets = actions.locator("button, a");
+    await expect(actionTargets).toHaveCount(5);
+    const dimensions = await actionTargets.evaluateAll((elements) =>
+      elements.map((element) => {
+        const { width: targetWidth, height: targetHeight } = element.getBoundingClientRect();
+        return { width: targetWidth, height: targetHeight };
+      }),
+    );
+    expect(dimensions.every(({ width: targetWidth, height: targetHeight }) => targetWidth >= 44 && targetHeight >= 44)).toBe(true);
+    expect(Math.max(...dimensions.map(({ width: targetWidth }) => targetWidth)) - Math.min(...dimensions.map(({ width: targetWidth }) => targetWidth))).toBeLessThanOrEqual(1);
+    expect(await cards.first().getByRole("link", { name: /Message .* on WhatsApp/ }).count()).toBeLessThanOrEqual(1);
+  }
+
+  const firstWithWhatsApp = cards.filter({ has: page.getByRole("link", { name: /Message .* on WhatsApp/ }) }).first();
+  await expect(firstWithWhatsApp.getByRole("link", { name: /Message .* on WhatsApp/ })).toHaveCount(1);
+  await expect(firstWithWhatsApp.getByRole("link", { name: /Call .* at / })).toHaveAttribute("href", /^tel:\+91\d{10}$/);
+});

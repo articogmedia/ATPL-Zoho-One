@@ -37,6 +37,7 @@ const quoteFields = {
 describe("Zoho quotation creation", () => {
   it("writes the CRM Product_Details shape and keeps note failures from masking a saved quote", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const infoLog = vi.spyOn(console, "info").mockImplementation(() => {});
     const write = vi.fn(async (...args: unknown[]) => {
       if (args[1] === "/Notes") throw new Error("history note permission missing");
       return "quote-1";
@@ -55,6 +56,7 @@ describe("Zoho quotation creation", () => {
     });
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
       zohoList: list,
       zohoWrite: write,
@@ -87,6 +89,20 @@ describe("Zoho quotation creation", () => {
       Discount: 4000,
       Grand_Total: 240000,
     }));
+    expect(infoLog).toHaveBeenCalledWith("[zoho] creating quote with Lead_Ref", expect.objectContaining({
+      leadId: "lead-1",
+      leadIdMatchesRequest: true,
+      leadRefField: "Lead_Ref",
+      leadRefValue: { id: "lead-1" },
+      leadRefValueType: "object",
+      fieldMetadata: expect.objectContaining({
+        api_name: "Lead_Ref",
+        data_type: "lookup",
+        lookup_module_api_name: "Leads",
+        system_mandatory: true,
+      }),
+      payloadKeys: expect.arrayContaining(["Lead_Ref", "Product_Details"]),
+    }));
     expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
       Quoted_Items: expect.anything(),
     }));
@@ -96,6 +112,7 @@ describe("Zoho quotation creation", () => {
       message: "history note permission missing",
     }));
     errorLog.mockRestore();
+    infoLog.mockRestore();
   });
 
   it("writes Lead_Ref as text when Quotes metadata declares a text field", async () => {
@@ -103,7 +120,7 @@ describe("Zoho quotation creation", () => {
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") {
         return { fields: quoteFields.fields.map((field) => field.api_name === "Lead_Ref"
-          ? { api_name: "Lead_Ref", data_type: "text", system_mandatory: true }
+          ? { api_name: "Lead_Ref", data_type: "text", json_type: "string", max_length: 20, system_mandatory: true }
           : field) };
       }
       if (path === "/Leads/lead-1") return { data: [leadRecord] };
@@ -115,6 +132,7 @@ describe("Zoho quotation creation", () => {
       : []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
       zohoList: list,
       zohoWrite: write,
@@ -130,6 +148,81 @@ describe("Zoho quotation creation", () => {
     expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
       Lead_Ref: "lead-1",
     }));
+  });
+
+  it("does not send a Leads ID to a lookup targeting another module", async () => {
+    const write = vi.fn(async () => "should-not-save");
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") {
+        return { fields: quoteFields.fields.map((field) => field.api_name === "Lead_Ref"
+          ? { api_name: "Lead_Ref", data_type: "lookup", lookup: { module: { api_name: "Accounts" } } }
+          : field) };
+      }
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Products"
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }]
+      : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {
+        constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string, readonly invalidValue?: unknown, readonly operation?: string, readonly details?: Record<string, unknown>) {
+          super(message);
+        }
+      },
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.createQuote({
+      offerNo: "245/26-27",
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).rejects.toMatchObject({
+      message: "Quotes field Lead_Ref targets Accounts, not Leads.",
+      code: "INVALID_LEAD_REFERENCE",
+      field: "Lead_Ref",
+    });
+    expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.anything());
+  });
+
+  it("fails clearly when Lead_Ref is missing from Quotes metadata without guessing its type", async () => {
+    const write = vi.fn(async () => "quote-absent");
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return { fields: quoteFields.fields.filter((field) => field.api_name !== "Lead_Ref") };
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Products"
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }]
+      : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {
+        constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string, readonly invalidValue?: unknown, readonly operation?: string, readonly details?: Record<string, unknown>) {
+          super(message);
+        }
+      },
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.createQuote({
+      offerNo: "243/26-27",
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).rejects.toMatchObject({
+      message: "Required field missing: Lead_Ref",
+      field: "Lead_Ref",
+    });
+    expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.anything());
   });
 
   it("reports all mandatory Quotes fields omitted by the payload together", async () => {
@@ -151,6 +244,7 @@ describe("Zoho quotation creation", () => {
       : []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
       zohoList: list,
       zohoWrite: write,
@@ -166,6 +260,49 @@ describe("Zoho quotation creation", () => {
         message: "Required fields missing: Account_Name, Contact_Name",
       });
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("includes the selected Quotes layout's required fields in mandatory validation", async () => {
+    const write = vi.fn(async () => "should-not-save");
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return quoteFields;
+      if (path === "/settings/layouts") return {
+        layouts: [{
+          id: "layout-1",
+          name: "Standard",
+          is_default: true,
+          sections: [{ fields: [{ api_name: "Account_Name", required: true }] }],
+        }],
+      };
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Products"
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }]
+      : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {
+        constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string, readonly invalidValue?: unknown, readonly operation?: string, readonly details?: Record<string, unknown>) {
+          super(message);
+        }
+      },
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.createQuote({
+      offerNo: "244/26-27",
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).rejects.toMatchObject({
+      message: 'Required fields missing: Account_Name (required by Quotes layout "Standard")',
+      details: { mandatoryLayout: "Standard", layoutRequiredMissing: ["Account_Name"] },
+    });
+    expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.anything());
   });
 
   it("rebuilds quote schema collections after cache serialization and saves the quote", async () => {
@@ -202,10 +339,11 @@ describe("Zoho quotation creation", () => {
     });
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {
-        constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string) {
+        constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string, readonly invalidValue?: unknown, readonly operation?: string, readonly details?: Record<string, unknown>) {
           super(message);
         }
       },
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
       zohoList: list,
       zohoWrite: write,

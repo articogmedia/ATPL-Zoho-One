@@ -432,11 +432,15 @@ export function LeadsClient({ user, leads, executives, assignees, assigneesUnava
 
 function ActionButtons({ lead, manager, onAction }: { lead: Lead; manager: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   const whatsapp = whatsappUrl(lead.phone);
-  return <div className="flex justify-end gap-2 whitespace-nowrap">
-    {lead.phone && <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={() => onAction("call")}><Phone /></Button>}
-    {whatsapp && <a href={whatsapp} target="_blank" rel="noreferrer" className="grid h-9 w-9 place-items-center rounded-lg hover:bg-secondary" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
-    <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
-    {manager && <><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+  const actionClass = "flex h-14 min-h-11 w-full min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-0 text-[10px] leading-tight focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4";
+  return <div data-testid="mobile-lead-actions" className={`grid ${manager ? "grid-cols-5" : "grid-cols-3"} gap-1.5`} onClick={(event) => event.stopPropagation()}>
+    <Button type="button" variant="default" className={actionClass} disabled={!lead.phone} aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={() => onAction("call")}><Phone /><span>Call</span></Button>
+    {whatsapp
+      ? <a href={whatsapp} target="_blank" rel="noreferrer" className={`${actionClass} text-[#087443] hover:bg-[#25D366]/10`} aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-4 w-4" /><span>WhatsApp</span></a>
+      : <button type="button" disabled className={`${actionClass} cursor-not-allowed text-muted-foreground`} aria-label={`WhatsApp unavailable for ${lead.name}`}><WhatsAppIcon className="h-4 w-4" /><span>WhatsApp</span></button>}
+    <Button type="button" variant="ghost" className={actionClass} aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /><span>Edit</span></Button>
+    {manager && <Button type="button" variant="ghost" className={actionClass} aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /><span>Assign</span></Button>}
+    {manager && <Button type="button" variant="ghost" className={`${actionClass} text-destructive hover:bg-destructive/10 hover:text-destructive`} aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /><span>Delete</span></Button>}
   </div>;
 }
 
@@ -465,16 +469,35 @@ const DesktopRow = memo(function DesktopRow({ lead, manager, highlighted, onOpen
 });
 
 const MobileRow = memo(function MobileRow({ lead, manager, highlighted, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
-  const wa = whatsappUrl(lead.phone);
+  const mobile = lead.phone.replace(/\D/g, "").slice(-10);
+  const company = lead.company.trim();
+  const showCompany = company && company.toLocaleLowerCase() !== lead.name.trim().toLocaleLowerCase();
   return (
-    <div role="button" tabIndex={0} onClick={() => onOpen(lead)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(lead); } }} className={`rounded-xl border border-border bg-card p-4 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${highlighted ? "bg-success/10 ring-1 ring-success" : ""}`}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0"><div className="truncate font-semibold">{lead.name}</div><div className="truncate text-xs text-muted-foreground">{lead.company || "No company"}</div></div>
-        <StatusBadge status={lead.status} />
+    <div data-testid="mobile-lead-card" role="button" tabIndex={0} onClick={() => onOpen(lead)} onKeyDown={(event) => { if ((event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) { event.preventDefault(); onOpen(lead); } }} className={`min-w-0 rounded-xl border border-border bg-card p-3 shadow-sm sm:p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${highlighted ? "bg-success/10 ring-1 ring-success" : ""}`}>
+      <div className="flex min-w-0 items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-semibold text-foreground">{lead.name}</div>
+          {showCompany && <div className="truncate text-xs text-muted-foreground">{company}</div>}
+        </div>
+        <div className="shrink-0"><StatusBadge status={lead.status} /></div>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-y-1 text-xs text-muted-foreground max-[480px]:mt-2"><span className="inline-flex min-h-11 items-center truncate">{lead.phone || "No phone"}</span><span>{lead.source}</span><span>{lead.createdOn || "No date"}</span><span className="truncate">{lead.assignedTo ?? "Unassigned"}</span>{lead.followUp && lead.followUp <= todayIST() && <span className="font-semibold text-destructive">Overdue</span>}</div>
-      {wa && <a className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-[#25D366] px-3 text-sm font-semibold text-[#128C7E] max-[480px]:mt-2" href={wa} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} aria-label={`Message ${lead.name} on WhatsApp`}><WhatsAppIcon className="h-5 w-5" />WhatsApp</a>}
-      <div className="mt-3 max-[480px]:mt-2" onClick={(event) => event.stopPropagation()}><ActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} /></div>
+      {mobile.length === 10 && <a href={`tel:+91${mobile}`} aria-label={`Call ${lead.name} at ${lead.phone}`} className="mt-2 inline-flex max-w-full min-w-0 items-center gap-2 text-sm font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={(event) => event.stopPropagation()}>
+        <Phone aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="truncate">{lead.phone}</span>
+      </a>}
+      <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] leading-5">
+        <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground"><span className="text-muted-foreground">Source</span> · {lead.source}</span>
+        <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground"><span className="text-muted-foreground">Created</span> · {lead.createdOn || "—"}</span>
+        <span className={`max-w-full truncate rounded-full px-2 ${lead.assignedTo ? "bg-secondary text-secondary-foreground" : "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200"}`}><span className={lead.assignedTo ? "text-muted-foreground" : "text-amber-700 dark:text-amber-300"}>Owner</span> · {lead.assignedTo ?? "Unassigned"}</span>
+      </div>
+      {(lead.remarks || lead.followUp) && <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+        {lead.remarks && <p className="break-words"><span className="font-medium text-foreground">Remarks:</span> {lead.remarks}</p>}
+        {lead.followUp && <p className={lead.followUp <= todayIST() ? "font-medium text-destructive" : ""}>
+          <span className="font-medium">Follow-up:</span> {lead.followUp}{lead.followUpTime ? ` · ${lead.followUpTime}` : ""}{lead.followUp <= todayIST() ? " · Overdue" : ""}
+        </p>}
+      </div>}
+      <div className="mt-3 border-t border-border pt-2.5">
+        <ActionButtons lead={lead} manager={manager} onAction={(type) => onAction(type, lead)} />
+      </div>
     </div>
   );
 });
