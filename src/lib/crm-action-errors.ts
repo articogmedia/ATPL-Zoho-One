@@ -14,10 +14,13 @@ export function friendlyZohoError(
 ): string {
   const suffix = ` (Ref: ${reference})`;
   const responseMessage = message?.trim().toLowerCase() ?? "";
+  if (code === "TOKEN_ENVIRONMENT_MISMATCH") {
+    return `${message?.trim() || "Token does not match the sandbox/live setting. Generate the token for the configured Zoho portal."}${suffix}`;
+  }
   if (code?.startsWith("TOKEN_REFRESH_")) {
     const reason = message?.replace(/^Zoho connection problem:\s*/i, "").trim()
-      || "Could not refresh the access token. Please retry shortly.";
-    return `Zoho connection problem: ${reason}${suffix}`;
+      || "Zoho token is blocked, retry in 1 minute.";
+    return `${reason}${suffix}`;
   }
   if (code === "MANDATORY_FIELDS_MISSING" && message?.startsWith("Required fields missing:")) {
     return `${message}${suffix}`;
@@ -40,6 +43,9 @@ export function friendlyZohoError(
   }
   if (code === "INVALID_TOKEN" || code === "INVALID_OAUTHTOKEN") {
     return `CRM authentication failed after retry. Check the Zoho refresh-token permissions.${suffix}`;
+  }
+  if (code === "NETWORK_TIMEOUT" || (code === "TOKEN_REFRESH_NETWORK_ERROR" && /timeout|timed out|abort/i.test(responseMessage))) {
+    return `Zoho timed out, please try again.${suffix}`;
   }
   if (code === "NETWORK_ERROR" || code === "TOKEN_REFRESH_NETWORK_ERROR") {
     return `Could not connect to Zoho CRM. Please retry shortly.${suffix}`;

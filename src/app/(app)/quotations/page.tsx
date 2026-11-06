@@ -6,6 +6,7 @@ import { QuotationsClient } from "./QuotationsClient";
 
 export const metadata = { title: "Create Quotation" };
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 export default async function QuotationsPage({ searchParams }: { searchParams: Promise<{ lead?: string }> }) {
   const started = Date.now();

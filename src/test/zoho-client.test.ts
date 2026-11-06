@@ -905,7 +905,7 @@ describe("Zoho write error handling", () => {
         const { warmZohoToken } = await import("@/lib/zoho/client");
         await expect(warmZohoToken()).rejects.toMatchObject({
           code,
-          message: expect.stringContaining("Zoho connection problem:"),
+          message: expect.stringContaining("Zoho token is blocked, retry in"),
           reference: expect.stringMatching(/^[A-F0-9]{12}$/),
         });
         await expect(warmZohoToken()).rejects.toMatchObject({ code });
@@ -918,6 +918,89 @@ describe("Zoho write error handling", () => {
         fetchMock.mockRestore();
         log.mockRestore();
         vi.useRealTimers();
+      }
+    });
+
+    it("rejects a token issued for live when sandbox is configured, then allows a correct token", async () => {
+      configureZoho();
+      let tokenRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          const api_domain = tokenRequests === 1 ? "https://www.zohoapis.in" : "https://sandbox.zohoapis.in";
+          return new Response(JSON.stringify({ access_token: `access-${tokenRequests}`, expires_in: 3600, api_domain }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const { warmZohoToken } = await import("@/lib/zoho/client");
+        await expect(warmZohoToken()).rejects.toMatchObject({
+          code: "TOKEN_ENVIRONMENT_MISMATCH",
+          message: expect.stringContaining("ZOHO_SANDBOX=true"),
+          reference: expect.stringMatching(/^[A-F0-9]{12}$/),
+        });
+        await warmZohoToken();
+        expect(tokenRequests).toBe(2);
+        expect(Reflect.get(globalThis, "__atplZohoRefreshBlocked")).toBeUndefined();
+        expect(log.mock.calls.some(([label]) => label === "[zoho] token data-centre mismatch")).toBe(true);
+      } finally {
+        fetchMock.mockRestore();
+        log.mockRestore();
+      }
+    });
+
+    it("does not start token-refresh back-off after a timeout", async () => {
+      configureZoho();
+      let tokenRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          if (tokenRequests === 1) throw new Error("fetch failed: timeout");
+          return new Response(JSON.stringify({ access_token: "recovered-access", expires_in: 3600 }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ data: [] }), { status: 200 });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const { warmZohoToken } = await import("@/lib/zoho/client");
+        await expect(warmZohoToken()).rejects.toMatchObject({ code: "TOKEN_REFRESH_NETWORK_ERROR" });
+        expect(Reflect.get(globalThis, "__atplZohoRefreshBlocked")).toBeUndefined();
+        await warmZohoToken();
+        expect(tokenRequests).toBe(2);
+      } finally {
+        fetchMock.mockRestore();
+        log.mockRestore();
+      }
+    });
+
+    it("retries a transient write transport failure once without refreshing the token", async () => {
+      configureZoho();
+      let tokenRequests = 0;
+      let writeRequests = 0;
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        if (String(input).includes("/oauth/v2/token")) {
+          tokenRequests += 1;
+          return new Response(JSON.stringify({ access_token: "write-access", expires_in: 3600 }), { status: 200 });
+        }
+        writeRequests += 1;
+        if (writeRequests === 1) throw new Error("fetch failed: ECONNRESET");
+        return new Response(JSON.stringify({ data: [{ status: "success", code: "SUCCESS", details: { id: "lead-created" } }] }), { status: 200 });
+      });
+      const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const { zohoWrite } = await import("@/lib/zoho/client");
+        await expect(zohoWrite("POST", "/Leads", { Last_Name: "Test", Mobile: "9876543210" })).resolves.toBe("lead-created");
+        expect(writeRequests).toBe(2);
+        expect(tokenRequests).toBe(1);
+        expect(log.mock.calls[0]?.[1]).toMatchObject({
+          environment: "sandbox",
+          apiHost: "https://sandbox.zohoapis.in",
+          retrying: true,
+        });
+      } finally {
+        fetchMock.mockRestore();
+        log.mockRestore();
       }
     });
 });

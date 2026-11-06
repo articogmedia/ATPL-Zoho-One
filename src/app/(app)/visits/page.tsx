@@ -6,6 +6,7 @@ import { VisitsClient } from "./VisitsClient";
 
 export const metadata = { title: "My Work & Site Visits" };
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 export default async function VisitsPage() {
   const started = Date.now();

@@ -53,30 +53,33 @@ const g = globalThis as unknown as {
   __atplZohoRefreshBlocked?: { until: number; error: ZohoError };
 };
 
-function refreshFailure(error: unknown): { delay: number; message: string; code: string } {
+function refreshFailure(error: unknown): { delay: number; message: string; code: string } | null {
   const zohoError = error instanceof ZohoError ? error : undefined;
   const code = zohoError?.code?.toLowerCase() ?? "";
   const message = error instanceof Error ? error.message : String(error);
   const reason = `${code} ${message}`.toLowerCase();
-  if (zohoError?.status === 429 || reason.includes("too many requests")) {
+  if (zohoError && (zohoError.status === 429 || reason.includes("too many requests"))) {
     return {
       delay: 5 * 60_000,
-      message: "Zoho is temporarily blocking token refresh because of too many requests. Retry in about 5 minutes.",
+      message: "Zoho token is blocked, retry in 5 minutes.",
       code: "TOKEN_REFRESH_RATE_LIMITED",
     };
   }
-  if (code === "invalid_client" || reason.includes("invalid_client")) {
+  if (zohoError && (code === "invalid_client" || reason.includes("invalid_client") || reason.includes("access denied"))) {
     return {
       delay: 60_000,
-      message: "Zoho rejected the OAuth client credentials. Verify the configured client ID and secret, then retry in about 60 seconds.",
-      code: "TOKEN_REFRESH_INVALID_CLIENT",
+      message: "Zoho token is blocked, retry in 1 minute.",
+      code: code === "invalid_client" || reason.includes("invalid_client") ? "TOKEN_REFRESH_INVALID_CLIENT" : "TOKEN_REFRESH_ACCESS_DENIED",
     };
   }
-  return {
-    delay: 60_000,
-    message: `Zoho token refresh failed: ${message}. Retry in about 60 seconds.`,
-    code: "TOKEN_REFRESH_FAILED",
-  };
+  if (zohoError && (code === "invalid_token" || code === "invalid_oauthtoken" || reason.includes("invalid token"))) {
+    return {
+      delay: 60_000,
+      message: "Zoho token is blocked, retry in 1 minute.",
+      code: "TOKEN_REFRESH_INVALID_TOKEN",
+    };
+  }
+  return null;
 }
 
 async function requestAccessToken(): Promise<{ value: string; exp: number }> {
@@ -93,14 +96,22 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
     });
   } catch (error) {
     const reference = newErrorReference();
+    const zohoHosts = hosts();
     console.error("[zoho] token refresh transport failed", {
       reference,
       operation: "POST /oauth/v2/token",
+      elapsedMs: Date.now() - started,
+      apiHost: zohoHosts.api,
+      environment: e.ZOHO_SANDBOX === "true" ? "sandbox" : "live",
+      errorName: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
+      cause: error instanceof Error ? error.cause : undefined,
       stack: error instanceof Error ? error.stack : undefined,
     });
     throw new ZohoError(
-      "Could not connect to the Zoho OAuth service.",
+      /timeout|timed out|abort/i.test(error instanceof Error ? error.message : String(error))
+        ? "Zoho timed out, please try again"
+        : "Could not connect to the Zoho OAuth service.",
       undefined, "TOKEN_REFRESH_NETWORK_ERROR", undefined, undefined,
       "POST /oauth/v2/token",
       { cause: error instanceof Error ? error.message : String(error) },
@@ -108,17 +119,51 @@ async function requestAccessToken(): Promise<{ value: string; exp: number }> {
     );
   }
   const json = (await res.json().catch(() => ({}))) as {
-    access_token?: string; expires_in?: number; error?: string; error_description?: string;
+    access_token?: string; expires_in?: number; api_domain?: string; error?: string; error_description?: string;
     code?: string; message?: string; details?: Record<string, unknown>; field?: string;
   };
   console.info(`[zoho] token ${res.status} ${Date.now() - started}ms`);
   if (!res.ok || !json.access_token) {
     const message = json.error_description ?? json.message ?? json.error ?? `Zoho token refresh failed (${res.status})`;
+    const reference = newErrorReference();
+    const zohoHosts = hosts();
     console.error("[zoho] token refresh rejected", {
-      status: res.status, code: json.code ?? json.error,
-      message, details: json.details, field: json.field,
+      reference,
+      status: res.status,
+      code: json.code ?? json.error,
+      errorName: "ZohoOAuthError",
+      message,
+      cause: json.details,
+      elapsedMs: Date.now() - started,
+      apiHost: zohoHosts.api,
+      environment: e.ZOHO_SANDBOX === "true" ? "sandbox" : "live",
+      details: json.details,
+      field: json.field,
     });
-    throw new ZohoError(message, res.status, json.code ?? json.error, json.field, undefined, "POST /oauth/v2/token", json.details);
+    throw new ZohoError(message, res.status, json.code ?? json.error, json.field, undefined, "POST /oauth/v2/token", json.details, reference);
+  }
+  if (json.api_domain) {
+    const sandboxToken = (() => {
+      try {
+        return new URL(json.api_domain).hostname.toLowerCase().startsWith("sandbox.");
+      } catch {
+        return false;
+      }
+    })();
+    const sandboxConfigured = e.ZOHO_SANDBOX === "true";
+    if (sandboxToken !== sandboxConfigured) {
+      const reference = newErrorReference();
+      const message = `Zoho token does not match the sandbox/live setting (ZOHO_SANDBOX=${String(e.ZOHO_SANDBOX ?? "false")}). Generate the token for the correct portal.`;
+      console.error("[zoho] token data-centre mismatch", {
+        reference,
+        environment: sandboxConfigured ? "sandbox" : "live",
+        tokenApiHost: json.api_domain,
+        apiHost: hosts().api,
+        elapsedMs: Date.now() - started,
+        message,
+      });
+      throw new ZohoError(message, res.status, "TOKEN_ENVIRONMENT_MISMATCH", undefined, undefined, "POST /oauth/v2/token", { api_domain: json.api_domain }, reference);
+    }
   }
   const lifetimeMs = Math.max(60_000, ((json.expires_in ?? 3600) - 300) * 1000);
   return { value: json.access_token, exp: Date.now() + lifetimeMs };
@@ -129,7 +174,14 @@ async function accessToken(force = false): Promise<string> {
   const cached = g.__atplZohoToken;
   if (!force && cached && cached.exp > Date.now()) return cached.value;
   const blocked = g.__atplZohoRefreshBlocked;
-  if (blocked && blocked.until > Date.now()) throw blocked.error;
+  if (blocked && blocked.until > Date.now()) {
+    const minutes = Math.max(1, Math.ceil((blocked.until - Date.now()) / 60_000));
+    throw new ZohoError(
+      `Zoho token is blocked, retry in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
+      blocked.error.status, blocked.error.code, blocked.error.field, blocked.error.invalidValue,
+      blocked.error.operation, blocked.error.details, blocked.error.reference,
+    );
+  }
   if (blocked) g.__atplZohoRefreshBlocked = undefined;
   if (!g.__atplZohoRefresh) {
     const refreshPromise = (async () => {
@@ -140,10 +192,11 @@ async function accessToken(force = false): Promise<string> {
         return fresh.value;
       } catch (error) {
         const policy = refreshFailure(error);
+        if (!policy) throw error;
         const original = error instanceof ZohoError ? error : undefined;
         const reference = original?.reference ?? newErrorReference();
         const blockedError = new ZohoError(
-          `Zoho connection problem: ${policy.message}`,
+          policy.message,
           original?.status, policy.code, original?.field, original?.invalidValue,
           "POST /oauth/v2/token", original?.details, reference,
         );
@@ -184,6 +237,7 @@ export async function zoho<T = unknown>(
   retried = false,
   rateLimitAttempt = 0,
   correlationReference?: string,
+  networkRetryAttempt = 0,
 ): Promise<T | null> {
   const started = Date.now();
   const url = new URL(`${hosts().api}/crm/${API_VERSION}${path}`);
@@ -195,7 +249,7 @@ export async function zoho<T = unknown>(
   let res: Response;
   try {
     res = await fetch(url, {
-      method, cache: "no-store", signal: AbortSignal.timeout(20_000),
+      method, cache: "no-store", signal: AbortSignal.timeout(method === "GET" ? 15_000 : 20_000),
       headers: {
         Authorization: `Zoho-oauthtoken ${token}`,
         ...(opts.body ? { "Content-Type": "application/json" } : {}),
@@ -205,14 +259,27 @@ export async function zoho<T = unknown>(
   } catch (error) {
     const reference = correlationReference ?? newErrorReference();
     const message = error instanceof Error ? error.message : String(error);
+    const zohoHosts = hosts();
+    const retryableNetworkError = /ECONNRESET|ETIMEDOUT|timeout|timed out|fetch failed/i.test(message);
+    const canRetryWrite = method !== "GET" && networkRetryAttempt < 1 && retryableNetworkError;
     console.error("[zoho] request transport failed", {
       reference, method, path: requestPath, status: undefined,
-      message, stack: error instanceof Error ? error.stack : undefined,
+      elapsedMs: Date.now() - started,
+      apiHost: zohoHosts.api,
+      environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
+      errorName: error instanceof Error ? error.name : typeof error,
+      message, cause: error instanceof Error ? error.cause : undefined,
+      retrying: canRetryWrite,
+      stack: error instanceof Error ? error.stack : undefined,
       payload: redactWritePayload(opts.body),
     });
+    if (canRetryWrite) {
+      return zoho<T>(method, path, opts, retried, rateLimitAttempt, reference, networkRetryAttempt + 1);
+    }
+    const timedOut = /timeout|timed out|ETIMEDOUT|aborted/i.test(message);
     throw new ZohoError(
-      "Could not connect to the Zoho CRM API.",
-      undefined, "NETWORK_ERROR", undefined, undefined, operation,
+      timedOut ? "Zoho timed out, please try again" : "Could not connect to the Zoho CRM API.",
+      undefined, timedOut ? "NETWORK_TIMEOUT" : "NETWORK_ERROR", undefined, undefined, operation,
       { cause: message }, reference,
     );
   }
@@ -236,7 +303,7 @@ export async function zoho<T = unknown>(
     const retryAfter = Number(res.headers.get("retry-after"));
     const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 4000) : 250 * 2 ** rateLimitAttempt;
     await new Promise((resolve) => setTimeout(resolve, delay));
-    return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1, correlationReference);
+    return zoho<T>(method, path, opts, retried, rateLimitAttempt + 1, correlationReference, networkRetryAttempt);
   }
   const responseCode = json?.data?.[0]?.code ?? json?.code;
   const tokenExpired = responseCode === "INVALID_TOKEN" || responseCode === "INVALID_OAUTHTOKEN";
@@ -257,7 +324,7 @@ export async function zoho<T = unknown>(
       rawResponseBody,
       payload: redactWritePayload(opts.body),
     });
-    return zoho<T>(method, path, opts, true, rateLimitAttempt, reference);
+    return zoho<T>(method, path, opts, true, rateLimitAttempt, reference, networkRetryAttempt);
   }
   if (!res.ok || tokenExpired) {
     const reference = correlationReference ?? newErrorReference();

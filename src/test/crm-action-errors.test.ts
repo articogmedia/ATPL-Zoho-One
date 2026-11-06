@@ -45,15 +45,29 @@ describe("friendly Zoho action errors", () => {
     )).toBe("Required fields missing: Account_Name, Contact_Name (Ref: QUOTE1234567)");
   });
 
-  it("shows a clear Zoho connection message for refresh back-off", () => {
+  it("shows a clear Zoho token blocked message for refresh back-off", () => {
     expect(friendlyZohoError(
       400,
       "TOKEN_REFRESH_RATE_LIMITED",
-      "Zoho connection problem: Zoho is temporarily blocking token refresh. Retry in about 5 minutes.",
+      "Zoho token is blocked, retry in 5 minutes.",
       undefined,
       "TOKENREF12345",
     )).toBe(
-      "Zoho connection problem: Zoho is temporarily blocking token refresh. Retry in about 5 minutes. (Ref: TOKENREF12345)",
+      "Zoho token is blocked, retry in 5 minutes. (Ref: TOKENREF12345)",
     );
+  });
+
+  it("maps timeout and token data-centre mismatch to actionable messages", () => {
+    expect(friendlyZohoError(0, "NETWORK_TIMEOUT", "Zoho timed out, please try again", undefined, "TIMEOUT12345"))
+      .toBe("Zoho timed out, please try again. (Ref: TIMEOUT12345)");
+    expect(friendlyZohoError(0, "NETWORK_ERROR", "Could not connect to the Zoho CRM API", undefined, "NETWORK12345"))
+      .toBe("Could not connect to Zoho CRM. Please retry shortly. (Ref: NETWORK12345)");
+    expect(friendlyZohoError(
+      200,
+      "TOKEN_ENVIRONMENT_MISMATCH",
+      "Zoho token does not match the sandbox/live setting (ZOHO_SANDBOX=true). Generate the token for the correct portal.",
+      undefined,
+      "MISMATCH1234",
+    )).toBe("Zoho token does not match the sandbox/live setting (ZOHO_SANDBOX=true). Generate the token for the correct portal. (Ref: MISMATCH1234)");
   });
 });

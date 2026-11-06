@@ -5,6 +5,7 @@ import { LeadsClient } from "./LeadsClient";
 
 export const metadata = { title: "Manage Leads" };
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
 export default async function LeadsPage() {
   const started = Date.now();

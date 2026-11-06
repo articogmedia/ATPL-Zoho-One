@@ -6,7 +6,7 @@ import { crm } from "@/lib/crm";
 import { invalidate } from "@/lib/cache";
 import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
-import { ZohoError } from "@/lib/zoho/client";
+import { hosts, ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
 import {
@@ -31,15 +31,28 @@ function isZohoFailure(error: unknown): error is ZohoError {
     || (typeof candidate.code === "string" && (typeof candidate.status === "number" || candidate.status === undefined));
 }
 
-function reportActionFailure(action: string, error: unknown, fallback: string): string {
+function reportActionFailure(action: string, error: unknown, fallback: string, elapsedMs?: number): string {
   const zohoFailure = isZohoFailure(error) ? error : null;
   const reference = zohoFailure?.reference
     ? zohoFailure.reference
     : newErrorReference();
+  let hostDetails: { apiHost?: string; environment?: string } = {};
+  try {
+    hostDetails = {
+      apiHost: hosts().api,
+      environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
+    };
+  } catch {
+    hostDetails = { environment: "unconfigured" };
+  }
   console.error(`[action] ${action} failed`, {
     reference,
+    elapsedMs,
+    errorName: error instanceof Error ? error.name : typeof error,
     message: error instanceof Error ? error.message : String(error),
+    cause: error instanceof Error ? error.cause : zohoFailure?.details?.cause,
     stack: error instanceof Error ? error.stack : undefined,
+    ...hostDetails,
     zohoStatus: zohoFailure?.status,
     zohoCode: zohoFailure?.code,
     zohoField: zohoFailure?.field,
@@ -48,6 +61,8 @@ function reportActionFailure(action: string, error: unknown, fallback: string): 
   });
   return zohoFailure
     ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference, zohoFailure.operation)
+    : error instanceof Error && /timeout|timed out|abort/i.test(`${error.message} ${String(error.cause ?? "")}`)
+      ? `Zoho timed out, please try again. (Ref: ${reference})`
     : `${fallback} The request failed before a CRM response was available. Please contact support. (Ref: ${reference})`;
 }
 
@@ -64,7 +79,7 @@ async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Prom
     if (err instanceof ForbiddenError) return { ok: false, error: err.message };
     if (err instanceof z.ZodError) return { ok: false, error: err.issues[0]?.message ?? "Please check the form values." };
     if (isZohoFailure(err)) {
-      const error = reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.");
+      const error = reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.", Date.now() - started);
       if ((err.code === "DUPLICATE_DATA" || err.code === "DUPLICATE_LEAD") && duplicatePhone) {
         const duplicateLookupPhone = duplicatePhone();
         if (duplicateLookupPhone) {
@@ -78,7 +93,7 @@ async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Prom
               };
             }
           } catch (lookupError) {
-            reportActionFailure("duplicate lead lookup", lookupError, "Could not verify the duplicate lead.");
+            reportActionFailure("duplicate lead lookup", lookupError, "Could not verify the duplicate lead.", Date.now() - started);
           }
         }
       }
@@ -86,7 +101,7 @@ async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Prom
     }
     return {
       ok: false,
-      error: reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support."),
+      error: reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.", Date.now() - started),
     };
   }
 }
