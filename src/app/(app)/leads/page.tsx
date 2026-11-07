@@ -1,6 +1,6 @@
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
-import { leadsForTab, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
+import { leadsForTab, todayIST, type LeadTab } from "@/lib/domain";
 import { LeadsClient } from "./LeadsClient";
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { PageLoadError } from "@/components/PageLoadError";
@@ -8,6 +8,7 @@ import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "Manage Leads" };
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 export const maxDuration = 30;
 
 export default async function LeadsPage() {
@@ -15,7 +16,7 @@ export default async function LeadsPage() {
   const perf = beginPagePerf("leads");
   const user = await requireSection("leads");
   const repo = crm();
-  let all: Awaited<ReturnType<typeof repo.listLeads>>;
+  let initialPage: { leads: Awaited<ReturnType<typeof repo.listLeads>>; total: number; hasMore: boolean };
   let fixableLeads: Awaited<ReturnType<typeof repo.listFixableAssignedLeads>> = [];
   let assignableUsers: Awaited<ReturnType<typeof repo.listAssignableUsers>> = [];
   let leadSources: Awaited<ReturnType<typeof repo.listLeadSources>> = [];
@@ -30,7 +31,9 @@ export default async function LeadsPage() {
     return null;
   });
   try {
-    all = await withPageTimeout(repo.listLeads());
+    initialPage = await withPageTimeout(repo.listLeadsPage
+      ? repo.listLeadsPage(1, 50, user.role === "Sales Executive" ? user.id : undefined)
+      : repo.listLeads().then((rows) => ({ leads: rows.slice(0, 50), total: rows.length, hasMore: rows.length > 50 })));
   } catch (error) {
     console.error("[page] leads data load failed", { message: error instanceof Error ? error.message : String(error) });
     endPagePerf(perf);
@@ -57,18 +60,19 @@ export default async function LeadsPage() {
   }
   assignableUsersFailed ||= assignableUsers.length === 0;
   leadSourcesUnavailable ||= leadSources.length === 0;
-  const visibleLeads = visibleFor(user, all);
+  const visibleLeads = initialPage.leads;
   const tabs: LeadTab[] = ["fresh", "assigned", "callback", "mine", "all"];
   const tabCounts = Object.fromEntries(tabs.map((tab) => [tab, leadsForTab(user, visibleLeads, tab).length])) as Record<LeadTab, number>;
   const initialTab: LeadTab = user.role === "Manager" && tabCounts.fresh === 0 ? "all" : user.role === "Sales Executive" ? "mine" : "fresh";
-  const initialRows = leadsForTab(user, visibleLeads, initialTab).slice(0, 50);
+  const initialRows = leadsForTab(user, visibleLeads, initialTab);
   const todaysFollowUps = leadsForTab(user, visibleLeads, "callback").filter((lead) => lead.followUp === todayIST()).length;
-  console.info(`[page] leads ${Date.now() - started}ms (${initialRows.length}/${tabCounts[initialTab]} rows)`);
+  console.info(`[page] leads ${Date.now() - started}ms (${initialRows.length}/${initialPage.total} rows)`);
   endPagePerf(perf);
   return (
     <LeadsClient
       user={{ id: user.id, name: user.name, role: user.role }}
       leads={initialRows}
+      initialHasMore={initialPage.hasMore}
       initialTab={initialTab}
       initialCount={tabCounts[initialTab]}
       tabCounts={tabCounts}

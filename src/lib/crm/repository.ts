@@ -21,6 +21,7 @@ export interface CrmRepository {
   findUserByEmail(email: string): Promise<User | null>;
 
   listLeads(): Promise<Lead[]>;
+  listLeadsPage?(page: number, pageSize?: number, ownerId?: string): Promise<{ leads: Lead[]; total: number; hasMore: boolean }>;
   listLeadSources(): Promise<LeadSource[]>;
   searchLeads(query: string, page?: number): Promise<{ leads: Lead[]; hasMore: boolean }>;
   getLead(id: string): Promise<Lead | null>;
@@ -34,7 +35,7 @@ export interface CrmRepository {
   deleteLead(id: string): Promise<void>;
   getLeadHistory(id: string): Promise<LeadUpdate[]>;
   getLeadTimeline(id: string): Promise<LeadTimelineItem[]>;
-  logCall(input: LogCallInput, actor: User): Promise<{ historyWarning?: string }>;
+  logCall(input: LogCallInput, actor: User): Promise<{ historyWarning?: string; partialWarning?: string }>;
   listCalls(): Promise<CallActivity[]>;
 
   listProducts(): Promise<Product[]>;
@@ -46,6 +47,6 @@ export interface CrmRepository {
   listVisits(): Promise<Visit[]>;
   getVisitsWarning?(): string | null;
   getVisit(id: string): Promise<Visit | null>;
-  createVisit(input: NewVisit, actor: User): Promise<void>;
+  createVisit(input: NewVisit, actor: User): Promise<Visit>;
   updateVisit(id: string, patch: VisitPatch, actor: User, current?: Visit): Promise<void>;
 }

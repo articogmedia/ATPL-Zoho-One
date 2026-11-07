@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, LoaderCircle, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
@@ -27,7 +28,7 @@ type WizardState = {
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
 type QuotationCustomer = Pick<Lead, "id" | "name" | "company" | "phone" | "area" | "source" | "status" | "assignedTo">
   & Partial<Pick<Lead, "assignedToId" | "ownerId" | "remarks" | "createdOn" | "address" | "touchedBy" | "followUp" | "followUpTime">>;
-type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; quotes: Quotation[]; quotesHasMore: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
 function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep }: {
   step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; hasSavedQuote: boolean; onStep: (step: 1 | 2 | 3) => void;
@@ -45,7 +46,12 @@ function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep 
   </nav>;
 }
 
-export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products, quotes, quotesHasMore, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+  const router = useRouter();
+  const refreshSilently = () => {
+    startTransition(() => router.refresh());
+    window.setTimeout(() => startTransition(() => router.refresh()), 1_500);
+  };
   const [leadSources, setLeadSources] = useState(initialLeadSources);
   const [leadSourcesUnavailable, setLeadSourcesUnavailable] = useState(initialLeadSourcesUnavailable);
   const [retryingLeadSources, setRetryingLeadSources] = useState(false);
@@ -123,16 +129,24 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
       setNl((current) => ({ ...current, source: firstSource }));
     }
   }, [leadSources, nl.source]);
+  useEffect(() => {
+    setLeadSources(initialLeadSources);
+    setLeadSourcesUnavailable(initialLeadSourcesUnavailable);
+  }, [initialLeadSources, initialLeadSourcesUnavailable]);
+  useEffect(() => {
+    setCustomerListHasMore(initialCustomersHasMore);
+  }, [initialCustomersHasMore]);
   const [adding, setAdding] = useState(false);
   const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
   const [pending, start] = useTransition();
   const [customerRetryable, setCustomerRetryable] = useState(false);
   const [quoteSaveError, setQuoteSaveError] = useState("");
-  const [savedQuotes, setSavedQuotes] = useState(quotes);
+  const [savedQuotes, setSavedQuotes] = useState<Quotation[]>([]);
   const [savedQuotesPage, setSavedQuotesPage] = useState(1);
-  const [savedQuotesHasMore, setSavedQuotesHasMore] = useState(quotesHasMore);
+  const [savedQuotesHasMore, setSavedQuotesHasMore] = useState(false);
   const [loadingMoreQuotes, setLoadingMoreQuotes] = useState(false);
   const [savedOpen, setSavedOpen] = useState(false);
+  const savedQuotesLoaded = useRef(false);
   const [savedSearch, setSavedSearch] = useState("");
   const [loadingQuoteId, setLoadingQuoteId] = useState<string | null>(null);
   const [readOnlyQuote, setReadOnlyQuote] = useState<Quotation | null>(null);
@@ -347,6 +361,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
       setDuplicateCustomer(null);
       setNl({ name: "", company: "", phone: "", area: "", source: "Direct Call" });
       toast.success("Customer added and selected");
+      refreshSilently();
       focusProducts();
     } else if (!res.ok && res.duplicate) {
       setDuplicateCustomer(res.duplicate);
@@ -412,6 +427,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     setSavedQuotes((current) => [saved, ...current.filter((quote) => quote.id !== saved.id)]);
     setWizard((current) => ({ ...current, offerNo: saved.offerNo, subject, step: 3, savedQuotation: saved, quotationSent: false }));
     toast.success("Quotation saved as Draft");
+    refreshSilently();
   });
 
   const markQuotationSent = async () => {
@@ -420,6 +436,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     if (!result.ok) throw new Error(result.error);
     setWizard((current) => ({ ...current, quotationSent: true }));
     toast.success("Lead stage updated to Quotation Sent");
+    refreshSilently();
   };
 
   const viewSavedQuote = async (quoteId: string) => {
@@ -438,6 +455,23 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     } finally {
       setLoadingQuoteId(null);
     }
+  };
+
+  const openSavedQuotes = () => {
+    setSavedOpen(true);
+    if (savedQuotesLoaded.current || loadingMoreQuotes) return;
+    setLoadingMoreQuotes(true);
+    void fetch("/api/quotations?page=1")
+      .then(async (response) => {
+        const result = await response.json() as { quotes?: Quotation[]; hasMore?: boolean; error?: string };
+        if (!response.ok) throw new Error(result.error || "Unable to load quotations.");
+        setSavedQuotes(result.quotes ?? []);
+        setSavedQuotesPage(1);
+        setSavedQuotesHasMore(result.hasMore === true);
+        savedQuotesLoaded.current = true;
+      })
+      .catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Unable to load quotations."))
+      .finally(() => setLoadingMoreQuotes(false));
   };
 
   const loadMoreSavedQuotes = async () => {
@@ -461,6 +495,65 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     .sort((a, b) => b.date.localeCompare(a.date))
     .filter((quote) => `${quote.offerNo} ${quote.customer}`.toLowerCase().includes(savedSearch.trim().toLowerCase()));
 
+  const savedDialog = savedOpen && <div className="fixed inset-0 z-50 bg-black/40" onMouseDown={(event) => {
+    if (event.target === event.currentTarget) setSavedOpen(false);
+  }}>
+    <section
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="saved-quotes-title"
+      tabIndex={-1}
+      className="fixed inset-x-0 bottom-0 flex h-[92dvh] max-h-[92dvh] flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:inset-y-0 sm:right-0 sm:left-auto sm:h-full sm:max-h-full sm:w-full sm:max-w-lg sm:rounded-none"
+    >
+      <header className="flex min-h-16 shrink-0 items-center justify-between border-b border-border px-4">
+        <h2 id="saved-quotes-title" className="text-lg font-semibold">Saved quotations</h2>
+        <Button type="button" variant="ghost" size="icon" aria-label="Close saved quotations" onClick={() => setSavedOpen(false)}><X /></Button>
+      </header>
+      <div className="shrink-0 p-4">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
+          <input
+            ref={savedSearchRef}
+            className={`${fieldClass} pl-10`}
+            type="search"
+            placeholder="Search offer number or customer"
+            value={savedSearch}
+            onChange={(event) => setSavedSearch(event.target.value)}
+            aria-label="Search saved quotations"
+          />
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pt-0">
+        {loadingMoreQuotes && !savedQuotes.length ? <p className="text-sm text-muted-foreground">Loading quotations…</p>
+          : !savedQuotes.length ? <p className="text-sm text-muted-foreground">No quotations yet.</p>
+          : !savedMatches.length ? <p className="text-sm text-muted-foreground">No matches</p>
+          : savedMatches.map((quote) => (
+            <article key={quote.id} className="rounded-lg border border-border bg-card p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold">{quote.customer}</div>
+                  <div className="mt-1 text-sm text-muted-foreground">Offer {quote.offerNo} · {quote.date}</div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-semibold">{formatINR(quote.total)}</div>
+                  <StatusBadge status={quote.status ?? "Draft"} />
+                </div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null} onClick={() => void viewSavedQuote(quote.id)}>
+                  {loadingQuoteId === quote.id ? "Loading…" : "View"}
+                </Button>
+              </div>
+            </article>
+          ))}
+        {savedQuotesHasMore && <Button type="button" variant="outline" className="w-full" disabled={loadingMoreQuotes} onClick={loadMoreSavedQuotes}>
+          {loadingMoreQuotes && <LoaderCircle className="h-4 w-4 animate-spin" />}Load more quotations
+        </Button>}
+      </div>
+    </section>
+  </div>;
+
   if (readOnlyQuote) {
     const savedLead = myLeads.find((item) => item.id === readOnlyQuote.leadId) ?? {
       id: readOnlyQuote.leadId,
@@ -477,27 +570,42 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
       createdOn: readOnlyQuote.date,
       touchedBy: [],
     };
-    return <Offer
-      lead={savedLead}
-      offerNo={readOnlyQuote.offerNo}
-      setOfferNo={() => undefined}
-      items={readOnlyQuote.items ?? []}
-      subject={offerSubject((readOnlyQuote.items ?? []).map((item) => item.model))}
-      setSubject={() => undefined}
-      onBack={() => setReadOnlyQuote(null)}
-      onMarkSent={async () => undefined}
-      readOnly
-      editableOfferNo={false}
-      customer={readOnlyQuote.customer}
-      offerDate={readOnlyQuote.date}
-      status={readOnlyQuote.status ?? "Draft"}
-    />;
+    return <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <h1 className="text-2xl font-bold">Create Quotation</h1>
+        <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
+          <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
+        </Button>
+      </div>
+      <Offer
+        lead={savedLead}
+        offerNo={readOnlyQuote.offerNo}
+        setOfferNo={() => undefined}
+        items={readOnlyQuote.items ?? []}
+        subject={offerSubject((readOnlyQuote.items ?? []).map((item) => item.model))}
+        setSubject={() => undefined}
+        onBack={() => setReadOnlyQuote(null)}
+        onMarkSent={async () => undefined}
+        readOnly
+        editableOfferNo={false}
+        customer={readOnlyQuote.customer}
+        offerDate={readOnlyQuote.date}
+        status={readOnlyQuote.status ?? "Draft"}
+      />
+      {savedDialog}
+    </div>;
   }
 
   if (step === 3 && wizard.savedQuotation && lead) return <div className="space-y-6">
-    <h1 className="text-2xl font-bold">Create Quotation</h1>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <h1 className="text-2xl font-bold">Create Quotation</h1>
+      <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
+        <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
+      </Button>
+    </div>
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
     <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} />
+    {savedDialog}
   </div>;
 
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
@@ -506,9 +614,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     <div className={`space-y-6 ${lead && productsValid ? "pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Create Quotation</h1>
-        {step !== 1 && <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={() => setSavedOpen(true)}>
+        <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
           <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
-        </Button>}
+        </Button>
       </div>
       <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
       {step === 1 && <section id="quote-step-customer" className="scroll-mt-20 space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
@@ -638,63 +746,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
         </div>
       </section>}
 
-      {savedOpen && <div className="fixed inset-0 z-50 bg-black/40" onMouseDown={(event) => {
-        if (event.target === event.currentTarget) setSavedOpen(false);
-      }}>
-        <section
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="saved-quotes-title"
-          tabIndex={-1}
-          className="fixed inset-x-0 bottom-0 flex h-[92dvh] max-h-[92dvh] flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:inset-y-0 sm:right-0 sm:left-auto sm:h-full sm:max-h-full sm:w-full sm:max-w-lg sm:rounded-none"
-        >
-          <header className="flex min-h-16 shrink-0 items-center justify-between border-b border-border px-4">
-            <h2 id="saved-quotes-title" className="text-lg font-semibold">Saved quotations</h2>
-            <Button type="button" variant="ghost" size="icon" aria-label="Close saved quotations" onClick={() => setSavedOpen(false)}><X /></Button>
-          </header>
-          <div className="shrink-0 p-4">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
-              <input
-                ref={savedSearchRef}
-                className={`${fieldClass} pl-10`}
-                type="search"
-                placeholder="Search offer number or customer"
-                value={savedSearch}
-                onChange={(event) => setSavedSearch(event.target.value)}
-                aria-label="Search saved quotations"
-              />
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pt-0">
-            {!savedQuotes.length ? <p className="text-sm text-muted-foreground">No quotations yet.</p>
-              : !savedMatches.length ? <p className="text-sm text-muted-foreground">No matches</p>
-              : savedMatches.map((quote) => (
-                <article key={quote.id} className="rounded-lg border border-border bg-card p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate font-semibold">{quote.customer}</div>
-                      <div className="mt-1 text-sm text-muted-foreground">Offer {quote.offerNo} · {quote.date}</div>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div className="font-semibold">{formatINR(quote.total)}</div>
-                      <StatusBadge status={quote.status ?? "Draft"} />
-                    </div>
-                  </div>
-                  <div className="mt-3 flex justify-end">
-                    <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null} onClick={() => void viewSavedQuote(quote.id)}>
-                      {loadingQuoteId === quote.id ? "Loading…" : "View"}
-                    </Button>
-                  </div>
-                </article>
-              ))}
-            {savedQuotesHasMore && <Button type="button" variant="outline" className="w-full" disabled={loadingMoreQuotes} onClick={loadMoreSavedQuotes}>
-              {loadingMoreQuotes && <LoaderCircle className="h-4 w-4 animate-spin" />}Load more quotations
-            </Button>}
-          </div>
-        </section>
-      </div>}
+      {savedDialog}
     </div>
   );
 }
@@ -958,10 +1010,12 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       const publicUrl = await prepareShareUrl();
       const message = `${shortMessage}\nPDF: ${publicUrl}`;
       if (navigator.share && navigator.canShare) {
-        const pdfResponse = await fetch(publicUrl);
-        if (!pdfResponse.ok) throw new Error(`Could not download the prepared PDF (HTTP ${pdfResponse.status}).`);
-        const file = new File([await pdfResponse.blob()], `offer-${offerNo.replace("/", "-")}.pdf`, { type: "application/pdf" });
-        if (navigator.canShare?.({ files: [file] })) {
+        const fileName = `offer-${offerNo.replace("/", "-")}.pdf`;
+        const fileSupportProbe = new File([], fileName, { type: "application/pdf" });
+        if (navigator.canShare({ files: [fileSupportProbe] })) {
+          const pdfResponse = await fetch(publicUrl);
+          if (!pdfResponse.ok) throw new Error(`Could not download the prepared PDF (HTTP ${pdfResponse.status}).`);
+          const file = new File([await pdfResponse.blob()], fileName, { type: "application/pdf" });
           try {
             await navigator.share({ files: [file], title: file.name, text: shortMessage });
             whatsappWindow?.close();

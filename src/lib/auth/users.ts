@@ -27,28 +27,31 @@ export function staticUserAsPortalUser(user: StaticUser, zohoUserId = user.zohoU
 }
 
 export function matchPortalUserToZohoUser(portalUser: StaticUser, zohoUsers: readonly User[]): User | null {
+  const activeUsers = zohoUsers.filter((user) => user.id.trim().length > 0);
   const configuredId = portalUser.zohoUserId?.trim();
   if (configuredId) {
-    const byId = zohoUsers.find((user) => user.id.trim() === configuredId);
+    const byId = activeUsers.find((user) => user.id.trim() === configuredId);
     if (byId) return byId;
   }
 
   const email = portalUser.email?.trim().toLowerCase();
   if (email) {
-    const byEmail = zohoUsers.find((user) => user.email?.trim().toLowerCase() === email);
+    const byEmail = activeUsers.find((user) => user.email?.trim().toLowerCase() === email);
     if (byEmail) return byEmail;
   }
 
   const expectedName = portalUser.name.trim().toLowerCase();
-  const byExactName = zohoUsers.find((user) => user.name.trim().toLowerCase() === expectedName);
+  const byExactName = activeUsers.find((user) => user.name.trim().toLowerCase() === expectedName);
   if (byExactName) return byExactName;
 
   const firstName = expectedName.split(/\s+/)[0];
-  return zohoUsers.find((user) => user.name.trim().toLowerCase().startsWith(`${firstName} `)) ?? null;
+  const matches = activeUsers.filter((user) => user.name.trim().toLowerCase().startsWith(`${firstName} `));
+  return matches.length === 1 ? matches[0] ?? null : null;
 }
 
 export function resolvePortalUserZohoId(portalUser: StaticUser, zohoUsers: readonly User[]): string {
-  return matchPortalUserToZohoUser(portalUser, zohoUsers)?.id.trim() ?? portalUser.zohoUserId?.trim() ?? "";
+  const matchedId = matchPortalUserToZohoUser(portalUser, zohoUsers)?.id.trim();
+  return matchedId || portalUser.zohoUserId?.trim() || "";
 }
 
 export function missingPortalUsers(portalUsers: readonly StaticUser[], zohoUsers: readonly User[]): StaticUser[] {

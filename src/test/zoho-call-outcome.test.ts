@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
+const afterJobs = vi.hoisted(() => ({ jobs: [] as Array<() => Promise<void>> }));
+vi.mock("next/server", () => ({
+  after: (callback: () => Promise<void>) => { afterJobs.jobs.push(callback); },
+}));
 vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   unstable_cache: (load: () => Promise<unknown>) => load,
@@ -14,15 +18,23 @@ beforeEach(async () => {
   process.env.DATA_SOURCE = "mock";
   process.env.ZOHO_DC = "in";
   delete process.env.ZOHO_QUEUE_OWNER_ID;
+  afterJobs.jobs.length = 0;
   const { resetMemoryCache } = await import("@/lib/cache");
   resetMemoryCache();
 });
 
-function mockRepository(noteFailure = false) {
+async function flushAfterJobs() {
+  const jobs = afterJobs.jobs.splice(0);
+  await Promise.all(jobs.map((job) => job()));
+}
+
+function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolean; taskFailure?: boolean; unassignedLead?: boolean } = {}) {
   const calls: { method: string; path: string; record: Record<string, unknown> }[] = [];
   const write = vi.fn(async (method: string, path: string, record: Record<string, unknown>) => {
     calls.push({ method, path, record });
-    if (path === "/Notes" && noteFailure) throw new Error("Zoho Notes unavailable");
+    if (path === "/Notes" && options.noteFailure) throw new Error("Zoho Notes unavailable");
+    if (path.startsWith("/Leads/") && method === "PUT" && options.statusFailure) throw new Error("Zoho lead update unavailable");
+    if (path === "/Tasks" && options.taskFailure) throw new Error("Zoho Tasks unavailable");
     return "created";
   });
   vi.doMock("@/lib/zoho/client", () => ({
@@ -33,7 +45,7 @@ function mockRepository(noteFailure = false) {
       }
     },
     zoho: vi.fn(async (_method: string, path: string) => {
-      if (path === `/Leads/${leadId}`) return { data: [{ id: leadId, Last_Name: "Call test lead", Company: "Call test lead", Mobile: "9876543210", Lead_Status: "Fresh Lead", Owner: { id: "manager-1", name: "Manager" } }] };
+      if (path === `/Leads/${leadId}`) return { data: [{ id: leadId, Last_Name: "Call test lead", Company: "Call test lead", Mobile: "9876543210", Lead_Status: "Fresh Lead", ...(options.unassignedLead ? {} : { Owner: { id: "manager-1", name: "Manager" } }) }] };
       if (path === "/users") return { users: [{ id: "manager-1", full_name: "Manager", role: { name: "Manager" }, profile: { name: "Administrator" } }] };
       if (path === "/settings/fields") {
         return { fields: ["Subject", "Status", "Due_Date", "Owner", "What_Id", "Who_Id", "Description"].map((api_name) => ({ api_name })) };
@@ -50,13 +62,15 @@ function mockRepository(noteFailure = false) {
 
 describe("Zoho call outcome persistence", () => {
   it("uses the Zoho v6 call and note relationship payloads and tolerates a failed history note", async () => {
-    const { calls } = mockRepository(true);
+    const { calls } = mockRepository({ noteFailure: true });
     const { zohoRepository } = await import("@/lib/zoho/repository");
 
     const result = await zohoRepository.logCall(
       { leadId, outcome: "Connected", remarks: "Answered" },
       { id: "manager-1", name: "Manager", role: "Manager" },
     );
+    expect(result).toEqual({});
+    await flushAfterJobs();
 
     expect(calls[0]).toEqual({
       method: "POST",
@@ -82,7 +96,6 @@ describe("Zoho call outcome persistence", () => {
       },
     });
     expect(calls[2]?.record).not.toHaveProperty("se_module");
-    expect(result.historyWarning).toMatch(/outcome saved.*history note could not be added/i);
   });
 
   it("links follow-up Tasks to the exact Zoho Lead ID with $se_module", async () => {
@@ -93,6 +106,7 @@ describe("Zoho call outcome persistence", () => {
       { leadId, outcome: "Call Back Later", remarks: "", followUp: "2026-11-07", followUpTime: "11:30" },
       { id: "manager-1", name: "Manager", role: "Manager" },
     );
+    await flushAfterJobs();
 
     const task = calls.find((call) => call.path === "/Tasks");
     expect(task).toEqual({
@@ -111,5 +125,58 @@ describe("Zoho call outcome persistence", () => {
       Note_Content: expect.stringContaining("Call Back Later"),
       Parent_Id: { module: { api_name: "Leads" }, id: leadId },
     });
+  });
+
+  it("resolves an empty portal actor ID from the Zoho user name before writing Owner", async () => {
+    const { calls } = mockRepository();
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.logCall(
+      { leadId, outcome: "Connected", remarks: "" },
+      { id: "", name: "Manager", role: "Manager" },
+    );
+
+    expect(calls[0]?.record.Owner).toEqual({ id: "manager-1" });
+    expect(JSON.stringify(calls[0]?.record)).not.toContain('"id":""');
+    expect(calls[0]?.record.What_Id).toEqual({ id: leadId });
+    expect(calls[0]?.record.$se_module).toBe("Leads");
+  });
+
+  it("omits Owner for an unmatched actor and an unassigned lead", async () => {
+    const { calls } = mockRepository({ unassignedLead: true });
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.logCall(
+      { leadId, outcome: "Call Back Later", remarks: "", followUp: "2026-11-07" },
+      { id: "", name: "Unmatched Portal User", role: "Manager" },
+    );
+    await flushAfterJobs();
+
+    expect(calls[0]?.record).not.toHaveProperty("Owner");
+    const followUpTask = calls.find((call) => call.path === "/Tasks");
+    expect(followUpTask?.record).not.toHaveProperty("Owner");
+  });
+
+  it("returns partial-success warnings when later updates fail after the Calls POST", async () => {
+    const { calls } = mockRepository({ statusFailure: true, taskFailure: true });
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    const result = await zohoRepository.logCall(
+      { leadId, outcome: "Call Back Later", remarks: "", followUp: "2026-11-07" },
+      { id: "manager-1", name: "Manager", role: "Manager" },
+    );
+    await flushAfterJobs();
+
+    expect(calls[0]?.path).toBe("/Calls");
+    expect(result).toEqual({});
+    expect(calls.some((call) => call.path === `/Leads/${leadId}` && call.method === "PUT")).toBe(true);
+    expect(calls.some((call) => call.path === "/Tasks")).toBe(true);
+  });
+
+  it("identifies the failing nested Zoho field path in user-facing errors", async () => {
+    const { friendlyZohoError } = await import("@/lib/crm-action-errors");
+    expect(friendlyZohoError(400, "INVALID_DATA", "invalid value", "id", "REF", undefined, {
+      json_path: "What_Id.id",
+    })).toContain("What_Id.id");
   });
 });

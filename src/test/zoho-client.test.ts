@@ -313,6 +313,10 @@ describe("Zoho lead actions", () => {
     const note = writes.find((entry) => entry.path === "/Notes");
     expect(note).toMatchObject({ method: "POST", record: { Note_Title: "Lead assigned" } });
     expect(note?.record.Note_Content).toMatch(/Assigned to Pavan by Reshma on \d{4}-\d{2}-\d{2}/);
+    const { cached } = await import("@/lib/cache");
+    await expect(cached("visits", 60_000, async () => [])).resolves.toEqual([
+      expect.objectContaining({ id: "created", leadId: "lead-1", executiveId: "1394515000001147001" }),
+    ]);
   });
 
   it("does not move a progressed lead backwards during assignment", async () => {
@@ -548,6 +552,7 @@ describe("Zoho lead owner fallbacks", () => {
         { id: "actor-1", name: "Manager", role: "Manager" },
         "exec-1",
       );
+      await Promise.all(assignmentAfterTasks.splice(0).map((task) => Promise.resolve(task())));
 
       expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.anything(), { trigger: ["workflow"] });
       expect(write).toHaveBeenCalledWith("POST", "/Notes", expect.objectContaining({ Note_Title: "Lead assigned" }));

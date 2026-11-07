@@ -6,6 +6,7 @@ import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { visibleFor } from "@/lib/domain";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 
 const customerFields = (lead: Awaited<ReturnType<ReturnType<typeof crm>["listLeads"]>>[number]) => ({
   id: lead.id,
@@ -28,12 +29,22 @@ export async function GET(request: NextRequest) {
   if (query.length === 0) {
     if (!Number.isInteger(page) || page < 1 || page > 100) return NextResponse.json({ error: "Invalid customer page." }, { status: 400 });
     try {
-      const visibleLeads = visibleFor(user, await crm().listLeads());
       const pageSize = 100;
-      const offset = (page - 1) * pageSize;
+      const repository = crm();
+      const result = repository.listLeadsPage
+        ? await repository.listLeadsPage(page, pageSize, user.role === "Sales Executive" ? user.id : undefined)
+        : await repository.listLeads().then((rows) => {
+          const visible = visibleFor(user, rows);
+          const offset = (page - 1) * pageSize;
+          return {
+            leads: visible.slice(offset, offset + pageSize),
+            total: visible.length,
+            hasMore: visible.length > offset + pageSize,
+          };
+        });
       return NextResponse.json({
-        leads: visibleLeads.slice(offset, offset + pageSize).map(customerFields),
-        hasMore: visibleLeads.length > offset + pageSize,
+        leads: visibleFor(user, result.leads).map(customerFields),
+        hasMore: result.hasMore,
       }, { headers: { "Cache-Control": "private, no-store" } });
     } catch (error) {
       const reference = newErrorReference();

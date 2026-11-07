@@ -53,19 +53,32 @@ describe("shared cache stale-while-revalidate", () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it("does not serve an in-memory stale entry after invalidation", async () => {
+    let value = "old";
+    const load = vi.fn(async () => value);
+    const { cached, invalidate } = await import("@/lib/cache");
+    await expect(cached("leads", 1_000, load, { keepStale: true })).resolves.toBe("old");
+    value = "new";
+    vi.advanceTimersByTime(1_001);
+    await expect(cached("leads", 1_000, load, { keepStale: true })).resolves.toBe("old");
+    await invalidate("leads");
+    await afterTasks.shift()?.();
+    await expect(cached("leads", 1_000, load, { keepStale: true })).resolves.toBe("new");
+  });
+
   it("deletes fresh and stale Redis entries before invalidation resolves", async () => {
     process.env.UPSTASH_REDIS_REST_URL = "https://redis.example";
     process.env.UPSTASH_REDIS_REST_TOKEN = "test-token";
-    const calls: string[][][] = [];
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+    const calls: { url: string; commands: string[][] }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as string[] | string[][];
       if (Array.isArray(body[0])) {
         const pipeline = body as string[][];
-        calls.push(pipeline);
+        calls.push({ url, commands: pipeline });
         return { ok: true, json: async () => pipeline.map(() => ({ result: 1 })) };
       }
       const command = body as string[];
-      calls.push([command]);
+      calls.push({ url, commands: [command] });
       return { ok: true, json: async () => ({ result: ["leads", "leads:page"] }) };
     }));
     const { invalidate } = await import("@/lib/cache");
@@ -73,7 +86,8 @@ describe("shared cache stale-while-revalidate", () => {
     await invalidate("leads");
 
     expect(calls).toHaveLength(2);
-    const [deleteCommand, removeIndexCommand] = calls[1]!;
+    expect(calls[1]?.url).toBe("https://redis.example/pipeline");
+    const [deleteCommand, removeIndexCommand] = calls[1]!.commands;
     expect(deleteCommand?.[0]).toBe("DEL");
     expect(deleteCommand?.slice(1)).toHaveLength(4);
     expect(deleteCommand?.some((key) => key.includes(":fresh:"))).toBe(true);

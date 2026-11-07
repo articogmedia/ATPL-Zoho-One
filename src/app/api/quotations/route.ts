@@ -6,6 +6,7 @@ import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { visibleFor } from "@/lib/domain";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 
 export async function GET(request: NextRequest) {
   const user = await currentUser();

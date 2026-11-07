@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canAdvanceLeadStatus, canUpdateWorkItem, financialYear, isAssignable, leadsForTab, nextOfferNo, normalizePhone, quotationCustomers, quoteTotals, reassignLeadOptimistically, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
+import { applyLeadOverrides, canAdvanceLeadStatus, canUpdateWorkItem, financialYear, isAssignable, leadAssigneeOptions, leadsForTab, nextOfferNo, normalizePhone, quotationCustomers, quoteTotals, reassignLeadOptimistically, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
 import { CALL_STATUS_BY_OUTCOME, zohoLeadSource } from "@/lib/zoho/fields";
 import { mapLead, mapQuote, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
@@ -14,6 +14,35 @@ describe("demo login safety", () => {
 });
 
 describe("optimistic lead reassignment", () => {
+  it("includes the current owner in assignable options and labels them", () => {
+    const options = leadAssigneeOptions([
+      { id: "reshma", name: "Reshma" },
+      { id: "sai", name: "Sai Kiran" },
+      { id: "pavan", name: "Pavan Pavan Kumar" },
+    ], "sai");
+    expect(options).toEqual([
+      { id: "reshma", name: "Reshma", label: "Reshma", isCurrent: false },
+      { id: "sai", name: "Sai Kiran", label: "Sai Kiran (current)", isCurrent: true },
+      { id: "pavan", name: "Pavan Pavan Kumar", label: "Pavan Pavan Kumar", isCurrent: false },
+    ]);
+  });
+
+  it("keeps an owner override across stale pages until the server confirms the owner", () => {
+    const lead = {
+      id: "L1", name: "Customer", company: "", phone: "9876543210", area: "", source: "Direct Call" as const,
+      status: "Assigned to Sales" as const, assignedTo: "Reshma", assignedToId: "reshma", ownerId: "reshma",
+      remarks: "", createdOn: "2026-11-06", address: "", touchedBy: [],
+    };
+    const overrides = new Map([[lead.id, { assignedTo: "Sai Kiran", assignedToId: "sai", ownerId: "sai" }]]);
+    const stalePage = applyLeadOverrides([{ ...lead }], overrides);
+    expect(stalePage[0]).toMatchObject({ assignedTo: "Sai Kiran", ownerId: "sai" });
+    expect(overrides.has(lead.id)).toBe(true);
+
+    const confirmedPage = applyLeadOverrides([{ ...lead, assignedTo: "Sai Kiran", assignedToId: "sai", ownerId: "sai" }], overrides);
+    expect(confirmedPage[0]?.ownerId).toBe("sai");
+    expect(overrides.has(lead.id)).toBe(false);
+  });
+
   it("removes a reassigned lead from My Leads and updates tab counts", () => {
     const reshma = { id: "reshma", name: "Reshma", role: "Manager" as const };
     const lead = {

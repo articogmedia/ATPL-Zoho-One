@@ -2,7 +2,8 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { CalendarClock, CalendarDays, CheckCircle2, ClipboardList, FileText, LoaderCircle, MapPin, Phone, Play, UserRound } from "lucide-react";
 import { toast } from "sonner";
@@ -11,7 +12,7 @@ import { SelectField } from "@/components/ui/select-field";
 import { fieldClass } from "@/components/ui-bits";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { getAssignableUsersAction, updateVisitAction } from "@/app/actions/crm";
-import { normalizePhone, workForTab, type User, type Visit, type WorkTab } from "@/lib/domain";
+import { applyVisitOverrides, normalizePhone, workForTab, workTabsFor, type User, type Visit, type WorkTab } from "@/lib/domain";
 import type { PerfRange } from "@/lib/domain";
 
 const CallLeadModal = dynamic(
@@ -52,12 +53,14 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
   callWarning?: string;
   visitsWarning?: string;
 }) {
+  const router = useRouter();
   const [tab, setTab] = useState<WorkTab>("assigned");
   const [exec, setExec] = useState("all");
   const [executiveNames, setExecutiveNames] = useState(executives);
   const [executivesUnavailable, setExecutivesUnavailable] = useState(initiallyUnavailable);
   const [loadingExecutives, setLoadingExecutives] = useState(false);
   const [visitRows, setVisitRows] = useState(visits);
+  const visitOverrides = useRef(new Map<string, Partial<Visit>>());
   const visitRowsRef = useRef(visitRows);
   const tabRef = useRef(tab);
   visitRowsRef.current = visitRows;
@@ -65,6 +68,18 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
   const [range, setRange] = useState<PerfRange>("week");
   const isManager = user.role === "Manager";
   const summary = performance?.[range === "week" ? "week" : "month"];
+  const refreshSilently = useCallback(() => {
+    startTransition(() => router.refresh());
+    window.setTimeout(() => startTransition(() => router.refresh()), 1_500);
+  }, [router]);
+
+  useEffect(() => {
+    setVisitRows(applyVisitOverrides(visits, visitOverrides.current));
+  }, [visits]);
+  useEffect(() => {
+    setExecutiveNames(executives);
+    setExecutivesUnavailable(initiallyUnavailable);
+  }, [executives, initiallyUnavailable]);
 
   const reloadExecutives = async () => {
     if (loadingExecutives) return;
@@ -86,27 +101,30 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
   const applyOptimisticUpdate = useCallback((id: string, patch: VisitPatch) => {
     const previous = visitRowsRef.current.find((visit) => visit.id === id);
     if (!previous) return () => {};
+    const updated = { ...previous, ...patch, done: patch.status === "Completed" || (patch.status === undefined && previous.done) };
+    visitOverrides.current.set(id, { ...visitOverrides.current.get(id), ...patch });
     setVisitRows((current) => current.map((visit) => visit.id === id
       ? { ...visit, ...patch, done: patch.status === "Completed" || (patch.status === undefined && visit.done) }
       : visit));
     let nextTab: WorkTab | undefined;
-    if (patch.status === "In Progress") nextTab = "progress";
+    if (workForTab(user, [updated], "upcoming", today, exec).length) nextTab = "upcoming";
+    else if (patch.status === "In Progress" || updated.status === "In Progress") nextTab = "progress";
     else if (patch.status === "Completed") nextTab = "completed";
-    else if (patch.date && previous.isVisit && previous.status !== "Completed" && patch.date >= today) nextTab = "upcoming";
+    else if (updated.status === "Assigned") nextTab = "assigned";
     const previousTab = tabRef.current;
     if (nextTab) setTab(nextTab);
     return () => {
+      visitOverrides.current.delete(id);
       setVisitRows((current) => current.map((visit) => visit.id === id ? previous : visit));
       if (nextTab) setTab(previousTab);
     };
-  }, [today]);
+  }, [exec, today, user]);
 
   const workByTab = useMemo(
-    () => Object.fromEntries(TABS.map(({ id }) => [id, workForTab(user, visitRows, id, today, exec)])) as Record<WorkTab, Visit[]>,
+    () => workTabsFor(user, visitRows, today, exec),
     [user, visitRows, today, exec],
   );
-  const open = useMemo(() => [...workByTab.assigned, ...workByTab.progress], [workByTab]);
-  const todays = useMemo(() => open.filter((visit) => visit.isVisit && visit.date === today), [open, today]);
+  const todays = useMemo(() => workByTab.upcoming.filter((visit) => visit.date === today), [workByTab, today]);
   const list = workByTab[tab];
   const activeTab = TABS.find((item) => item.id === tab)!;
 
@@ -144,7 +162,7 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
       <section className="min-w-0 rounded-xl border border-primary/30 bg-accent p-3 shadow-sm sm:p-4">
         <h2 className="mb-3 text-lg font-semibold">Today&apos;s visits ({todays.length})</h2>
         <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {todays.map((visit) => <Item key={`today-${visit.id}`} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} />)}
+          {todays.map((visit) => <Item key={`today-${visit.id}`} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} onMutationSuccess={refreshSilently} />)}
           {!todays.length && <p className="text-sm text-muted-foreground">No visits today.</p>}
         </div>
       </section>
@@ -158,17 +176,18 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
       </div>
 
       <div id="work-list" className="grid min-w-0 grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((visit) => <Item key={visit.id} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} />)}
+        {list.map((visit) => <Item key={visit.id} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} onMutationSuccess={refreshSilently} />)}
         {!list.length && <p className="col-span-full rounded-xl border border-dashed bg-card px-4 py-8 text-center text-sm text-muted-foreground">{activeTab.empty}</p>}
       </div>
     </div>
   );
 }
 
-const Item = memo(function Item({ v, today, onOptimisticChange }: {
+const Item = memo(function Item({ v, today, onOptimisticChange, onMutationSuccess }: {
   v: Visit;
   today: string;
   onOptimisticChange: (id: string, patch: VisitPatch) => () => void;
+  onMutationSuccess: () => void;
 }) {
   const [mode, setMode] = useState<"none" | "complete" | "reschedule">("none");
   const [callOpen, setCallOpen] = useState(false);
@@ -197,6 +216,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange }: {
         toast.error(result.error);
         return;
       }
+      onMutationSuccess();
       toast.success(ok);
       setMode("none");
     } catch (error) {
@@ -339,7 +359,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange }: {
         </div>
       )}
 
-      {callOpen && <CallLeadModal lead={{ id: v.leadId, name: v.customer, phone: v.phone ?? "" }} onClose={() => setCallOpen(false)} onSaved={() => setCallOpen(false)} />}
+      {callOpen && <CallLeadModal lead={{ id: v.leadId, name: v.customer, phone: v.phone ?? "" }} onClose={() => setCallOpen(false)} onSaved={() => { setCallOpen(false); onMutationSuccess(); }} />}
     </article>
   );
 });

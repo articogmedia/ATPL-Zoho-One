@@ -85,7 +85,8 @@ export function CallLeadModal({
           return;
         }
         setRetryableError(false);
-        if (result.data?.historyWarning) toast.warning(result.data.historyWarning);
+        if (result.data?.partialWarning) toast.warning(result.data.partialWarning);
+        else if (result.data?.historyWarning) toast.warning(result.data.historyWarning);
         else toast.success("Call outcome saved");
         onSaved(selected.status, selected.value === "Call Back Later" ? followUp : undefined);
       } catch (error) {

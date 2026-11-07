@@ -4,9 +4,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { currentUser } from "@/lib/auth/guard";
 import { env } from "@/lib/env";
 import { newErrorReference } from "@/lib/crm-action-errors";
-import { bodySchema } from "../pdf/route";
+import { quotationRequestSchema } from "@/lib/quotation-request";
 
 export const runtime = "nodejs";
+export const preferredRegion = "bom1";
 export const maxDuration = 30;
 
 function redactPayload(value: unknown): unknown {
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Invalid quotation share request. (Ref: ${reference})` }, { status: 400 });
   }
 
-  const parsed = bodySchema.safeParse(payload);
+  const parsed = quotationRequestSchema.safeParse(payload);
   if (!parsed.success) {
     const reference = newErrorReference();
     console.error("[api] quotation share validation failed", {

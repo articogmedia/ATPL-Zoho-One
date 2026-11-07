@@ -47,14 +47,19 @@ export function friendlyZohoError(
     return `Lead source is not valid in CRM.${suffix}`;
   }
   if (code === "INVALID_DATA") {
+    const errorPath = typeof details?.json_path === "string"
+      ? details.json_path
+      : typeof details?.api_name === "string"
+        ? details.api_name
+        : field;
     if (field === "Lead_Ref") {
       const expected = typeof details?.expected_data_type === "string" ? ` Zoho expects ${details.expected_data_type}.` : "";
       return `Zoho rejected the lead reference in Quotes field Lead_Ref.${expected} Check the field type and lookup target.${suffix}`;
     }
     if (field === "Mobile" || field === "Phone") return `Enter a valid 10-digit mobile number.${suffix}`;
     if (field === "Company") return `Required field missing: Company${suffix}`;
-    return field
-      ? `Zoho rejected the value for field ${field}. Check its configured value.${suffix}`
+    return errorPath
+      ? `Zoho rejected the value for field/path ${errorPath}. Check its configured value.${suffix}`
       : `Some details are missing or invalid. Please check the form.${suffix}`;
   }
   if (code === "INVALID_TOKEN" || code === "INVALID_OAUTHTOKEN") {

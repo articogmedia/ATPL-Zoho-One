@@ -5,6 +5,7 @@ import { env } from "@/lib/env";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 export const maxDuration = 20;
 
 export async function GET() {

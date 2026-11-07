@@ -5,6 +5,7 @@ import { createSession } from "@/lib/auth/session";
 import { hosts, ZohoError } from "@/lib/zoho/client";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 
 /**
  * Step 2: verify state, exchange the code, read the person's Zoho email, and only let them in

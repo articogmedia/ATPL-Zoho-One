@@ -32,6 +32,13 @@ export const mockRepository: CrmRepository = {
   async findUserByEmail(email) { return MOCK_USERS.find((u) => u.email?.toLowerCase() === email.toLowerCase()) ?? null; },
 
   async listLeads() { return [...state.leads].sort((a, b) => b.createdOn.localeCompare(a.createdOn)); },
+  async listLeadsPage(page, pageSize = 50, ownerId) {
+    const leads = [...state.leads]
+      .filter((lead) => !ownerId || String(lead.ownerId ?? lead.assignedToId ?? "") === ownerId)
+      .sort((a, b) => b.createdOn.localeCompare(a.createdOn));
+    const start = (Math.max(1, Math.floor(page)) - 1) * pageSize;
+    return { leads: leads.slice(start, start + pageSize), total: leads.length, hasMore: leads.length > start + pageSize };
+  },
   async listLeadSources() { return ["Meta Ads", "Google Ads", "Direct Call", "Walk-in", "Referral", "Website", "Other"]; },
   async searchLeads(query, page = 1) {
     const normalized = query.trim().toLowerCase();
@@ -174,14 +181,17 @@ export const mockRepository: CrmRepository = {
   async createVisit(input, actor) {
     const lead = state.leads.find((l) => l.id === input.leadId);
     if (!lead) throw new Error("Lead not found");
-    state.visits.push({
+    const visit = {
       id: `V${state.visits.length + 1}`, leadId: lead.id, customer: lead.company || lead.name,
+      phone: lead.phone,
       address: lead.address, area: lead.area, executive: input.executive, type: input.type,
       isVisit: input.isVisit, date: input.date, time: input.time, status: "Assigned",
       nextAction: input.nextAction, followUp: "", notes: "", done: false,
-    });
+    } as Visit;
+    state.visits.push(visit);
     note(lead.id, actor.name, `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date}`);
     if (input.isVisit) advanceMockLeadStatus(lead, "Site Visit Scheduled");
+    return visit;
   },
   async updateVisit(id, p) {
     const v = state.visits.find((x) => x.id === id);

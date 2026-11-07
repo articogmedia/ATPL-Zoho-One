@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { currentUser } from "@/lib/auth/guard";
 import { crm } from "@/lib/crm";
 import { ZohoError } from "@/lib/zoho/client";
@@ -10,20 +10,11 @@ import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT } from "@/lib/company";
 import { formatINR, quoteTotals, todayIST, visibleFor } from "@/lib/domain";
 import { quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
+import { quotationRequestSchema } from "@/lib/quotation-request";
 
 export const runtime = "nodejs";
+export const preferredRegion = "bom1";
 export const maxDuration = 30;
-
-export const bodySchema = z.object({
-  leadId: z.string().trim().min(1, "Customer is missing."),
-  offerNo: z.string().trim().min(1, "Offer reference is missing.").regex(/^\d{1,4}\/\d{2}-\d{2}$/, "Offer reference must use the format NNN/YY-YY."),
-  subject: z.string().trim().min(1, "Quotation subject is missing.").max(300, "Quotation subject is too long."),
-  items: z.array(z.object({
-    productId: z.string().trim().min(1, "A product is missing."),
-    qty: z.number().int("Quantity must be a whole number.").positive("Quantity must be at least one.").max(10000, "Quantity is too large."),
-    discount: z.number().nonnegative().max(100000000).optional(),
-  }).strict()).min(1, "Add at least one product.").max(100, "A quotation cannot contain more than 100 products."),
-}).strict();
 
 function redactPayload(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactPayload);
@@ -59,12 +50,12 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
 
   let rawPayload: unknown;
-  let parsed: z.infer<typeof bodySchema>;
+  let parsed: z.infer<typeof quotationRequestSchema>;
   try {
     rawPayload = await request.json();
-    parsed = bodySchema.parse(rawPayload);
+    parsed = quotationRequestSchema.parse(rawPayload);
   } catch (error) {
-    const message = error instanceof z.ZodError
+    const message = error instanceof ZodError
       ? error.issues[0]?.message ?? "Please check the quotation details."
       : "Please provide valid quotation details.";
     const reference = newErrorReference();

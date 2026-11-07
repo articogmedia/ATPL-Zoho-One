@@ -10,11 +10,17 @@ import { PageLoadError } from "@/components/PageLoadError";
 
 export const metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 
 async function HomeCount({ section, user }: { section: Section; user: User }) {
   const repo = crm();
   try {
-    if (section === "leads") return <Count>{visibleFor(user, await withPageTimeout(repo.listLeads())).length}</Count>;
+    if (section === "leads") {
+      const count = repo.listLeadsPage
+        ? (await withPageTimeout(repo.listLeadsPage(1, 1, user.role === "Sales Executive" ? user.id : undefined))).total
+        : visibleFor(user, await withPageTimeout(repo.listLeads())).length;
+      return <Count>{count}</Count>;
+    }
     if (section === "quotations") return <Count>{visibleFor(user, await withPageTimeout(repo.listQuotes())).length}</Count>;
     if (section === "visits") return <Count>{visibleFor(user, await withPageTimeout(repo.listVisits())).filter((visit) => !visit.done).length}</Count>;
     return null;

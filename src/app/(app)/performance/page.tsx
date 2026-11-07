@@ -9,6 +9,7 @@ import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "Performance" };
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 
 const RANGES: { id: PerfRange; label: string }[] = [
   { id: "week", label: "This Week" },

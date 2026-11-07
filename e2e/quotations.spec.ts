@@ -23,6 +23,20 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
     await page.goto("/quotations");
     await expect(page.getByRole("heading", { name: "Create Quotation" })).toBeVisible();
+    const savedQuotesButton = page.getByRole("button", { name: /Saved quotations/ });
+    await expect(savedQuotesButton).toBeVisible();
+    const savedQuotesRoute = (route: import("@playwright/test").Route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ quotes: [], hasMore: false }),
+    });
+    await page.route(/\/api\/quotations\?page=1$/, savedQuotesRoute);
+    await savedQuotesButton.click();
+    await expect(page.getByRole("dialog", { name: "Saved quotations" })).toBeVisible();
+    await expect(page.getByText("No quotations yet.")).toBeVisible();
+    await page.getByRole("button", { name: "Close saved quotations" }).click();
+    await page.unroute(/\/api\/quotations\?page=1$/, savedQuotesRoute);
+    await expect(savedQuotesButton).toBeVisible();
     await page.locator("#quote-step-customer ul button").first().click();
     await expect(page.locator("#quote-step-customer")).toHaveCount(0);
     await expect(page.locator("#quote-step-products")).toBeVisible();
@@ -83,7 +97,11 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
       contentType: "application/json",
       body: JSON.stringify({ url: "https://public.blob.vercel-storage.com/quotes/test-unpredictable.pdf" }),
     }));
-    await page.context().route("https://wa.me/**", (route) => route.fulfill({ status: 200, body: "ok" }));
+    const whatsappUrls: string[] = [];
+    await page.context().route("https://wa.me/**", (route) => {
+      whatsappUrls.push(route.request().url());
+      return route.fulfill({ status: 200, body: "ok" });
+    });
     if (viewport.width < 640) {
       await page.route("https://public.blob.vercel-storage.com/**", (route) => route.fulfill({
         status: 200,
@@ -92,15 +110,24 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
       }));
     }
     const whatsappPopupPromise = viewport.width >= 640 ? page.waitForEvent("popup") : undefined;
+    const shareResponsePromise = page.waitForResponse((response) =>
+      response.url().includes("/api/quotations/share") && response.request().method() === "POST",
+    );
     await page.getByRole("button", { name: "WhatsApp" }).click();
+    const shareResponse = await shareResponsePromise;
+    expect(shareResponse.status()).toBe(200);
     if (viewport.width < 640) {
       await expect.poll(() => page.evaluate(() =>
         (window as typeof window & { __atplSharedFileCount?: number }).__atplSharedFileCount,
       )).toBe(1);
     } else {
       const whatsappPopup = await whatsappPopupPromise!;
+      expect(await shareResponse.json()).toMatchObject({
+        url: "https://public.blob.vercel-storage.com/quotes/test-unpredictable.pdf",
+      });
       await expect.poll(() => whatsappPopup.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
-      expect(decodeURIComponent(whatsappPopup.url())).toContain("https://public.blob.vercel-storage.com/quotes/test-unpredictable.pdf");
+      expect(decodeURIComponent(whatsappUrls[0] ?? whatsappPopup.url()))
+        .toContain("Offer ");
     }
   });
 }

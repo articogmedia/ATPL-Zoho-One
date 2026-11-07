@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
-import { getCachedValue, invalidate } from "@/lib/cache";
+import { getCachedValue, invalidate, setCachedValue } from "@/lib/cache";
 import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { hosts, ZohoError } from "@/lib/zoho/client";
@@ -11,7 +11,7 @@ import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
 import {
   LEAD_SOURCES, LEAD_STATUSES, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, nextOfferNo, todayIST, visibleFor,
-  normalizePhone, type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type User, type VisitStatus,
+  normalizePhone, type CallOutcome, type Lead, type LeadSource, type LeadStatus, type LeadUpdate, type User, type Visit, type VisitStatus,
 } from "@/lib/domain";
 
 export type DuplicateLeadResult = { id: string; name: string; owner: string; status: string; matchedField: "Mobile" | "Phone" };
@@ -30,6 +30,14 @@ function isZohoFailure(error: unknown): error is ZohoError {
   return candidate.name === "ZohoError"
     || (typeof candidate.code === "string" && (typeof candidate.status === "number" || candidate.status === undefined));
 }
+
+function revalidateCrmPaths(...paths: string[]) {
+  for (const path of new Set(paths)) revalidatePath(path);
+}
+
+const LEAD_MUTATION_PATHS = ["/leads", "/visits", "/home", "/performance"];
+const WORK_MUTATION_PATHS = ["/visits", "/leads", "/home", "/performance"];
+const QUOTE_MUTATION_PATHS = ["/quotations", "/leads", "/home", "/performance"];
 
 function reportActionFailure(action: string, error: unknown, fallback: string, elapsedMs?: number): string {
   const zohoFailure = isZohoFailure(error) ? error : null;
@@ -166,7 +174,8 @@ export async function addLeadAction(input: unknown) {
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
     if (assigneeId && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     const lead = await crm().createLead(data, user, assigneeId, forceCreate);
-    await invalidate("leads", ...(lead.assignedToId ? ["visits"] : []));
+    await invalidate("leads", "visits");
+    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
   }, () => submittedPhone);
 }
@@ -217,7 +226,8 @@ export async function updateLeadAction(input: unknown) {
       status: p.status, remarks: p.remarks, followUp: p.followUp,
     };
     await crm().updateLead(p.id, patch, user);
-    await invalidate("leads");
+    await invalidate("leads", "visits");
+    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
     return { zohoUrl: zohoLeadUrl(p.id) };
   }, () => submittedPhone);
 }
@@ -230,12 +240,24 @@ export async function reassignLeadAction(input: unknown) {
     if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can reassign leads.");
     const p = reassignLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
+    const cachedLeads = await getCachedValue<Lead[]>("leads");
     const assignee = (await crm().listAssignableUsers()).find((member) => String(member.id) === String(p.assignedToId));
     if (!assignee) throw new ForbiddenError("Choose an active team member.");
     const assignment = await crm().assignLead(p.id, p.assignedToId, user);
     await invalidate("leads", "visits");
-    revalidatePath("/leads");
-    revalidatePath("/visits");
+    if (cachedLeads) {
+      const updatedLeads = cachedLeads.map((lead) => lead.id === p.id
+        ? {
+            ...lead,
+            assignedTo: assignment.owner,
+            assignedToId: assignment.ownerId,
+            ownerId: assignment.ownerId,
+            status: assignment.status as LeadStatus,
+          }
+        : lead);
+      await setCachedValue("leads", 60_000, updatedLeads);
+    }
+    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
     return { ...assignment, zohoUrl: zohoLeadUrl(p.id) };
   });
 }
@@ -258,7 +280,8 @@ export async function deleteLeadAction(input: unknown) {
     const p = deleteLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
     await crm().deleteLead(p.id);
-    await invalidate("leads");
+    await invalidate("leads", "visits");
+    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
   });
 }
 
@@ -272,7 +295,8 @@ export async function saveLeadUpdateAction(input: unknown) {
       if (p.assignedTo && !(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     }
     await crm().updateLead(p.id, { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo }, user);
-    await invalidate("leads");
+    await invalidate("leads", "visits");
+    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
     return { zohoUrl: zohoLeadUrl(p.id) };
   });
 }
@@ -303,7 +327,8 @@ export async function logCallAction(input: unknown) {
       throw new ForbiddenError("Call Back Later requires a follow-up date.");
     }
     const result = await crm().logCall(data, user);
-    await invalidate("leads", "visits");
+    await invalidate("leads", "visits", "performance");
+    revalidateCrmPaths(...WORK_MUTATION_PATHS);
     return result;
   });
 }
@@ -313,7 +338,8 @@ export async function fixAssignedLeadsAction() {
     const user = await requireActionUser("leads");
     if (user.role !== "Manager") throw new ForbiddenError("Only managers can fix assigned leads.");
     const changed = await crm().fixAssignedLeads(user);
-    await invalidate("leads");
+    await invalidate("leads", "visits");
+    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
     return { changed };
   });
 }
@@ -356,7 +382,8 @@ export async function createQuoteAction(input: unknown) {
     const existingQuotes = await repository.listQuotes();
     const offerNo = nextOfferNo(existingQuotes.map((quote) => quote.offerNo), todayIST());
     const quote = await repository.createQuote({ ...q, offerNo }, user, executive);
-    await invalidate("quotes", "leads");
+    await invalidate("quotes", "leads", "performance");
+    revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
     return quote;
   });
 }
@@ -373,7 +400,8 @@ export async function markQuotationSentAction(input: unknown) {
         throw new ForbiddenError("A closed lead cannot be marked as quotation sent.");
       }
       await crm().updateLead(lead.id, { status: "Quotation Sent" }, user);
-      await invalidate("leads", "quotes");
+      await invalidate("leads", "quotes", "performance");
+      revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
     }
     return { status: "Quotation Sent" as const };
   });
@@ -421,9 +449,14 @@ export async function scheduleVisitAction(input: unknown) {
     await ownLeadOrThrow(user, v.leadId);
     const executive = isExecutive(user) ? user.name : v.executive;
     if (!executive || !(await assignableNames()).includes(executive)) throw new ForbiddenError("Choose a team member.");
-    await crm().createVisit({ ...v, executive }, user);
-    await invalidate("visits");
-    revalidatePath("/visits");
+    const cachedVisits = await getCachedValue<Visit[]>("visits");
+    const createdVisit = await crm().createVisit({ ...v, executive }, user);
+    await invalidate("visits", "leads");
+    if (cachedVisits) {
+      await setCachedValue("visits", 60_000, [createdVisit, ...cachedVisits.filter((visit) => visit.id !== createdVisit.id)]);
+    }
+    revalidateCrmPaths(...WORK_MUTATION_PATHS);
+    return createdVisit;
   });
 }
 
@@ -443,8 +476,19 @@ export async function updateVisitAction(input: unknown) {
     if (!canUpdateWorkItem(user, visit)) {
       throw new ForbiddenError("You can only update your own work.");
     }
+    const cachedVisits = await getCachedValue<Visit[]>("visits");
     await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user, visit);
-    await invalidate("visits");
-    revalidatePath("/visits");
+    await invalidate("visits", "leads");
+    if (cachedVisits) {
+      const patch = {
+        ...(p.status ? { status: p.status as VisitStatus, done: p.status === "Completed" } : {}),
+        ...(p.notes !== undefined ? { notes: p.notes } : {}),
+        ...(p.date ? { date: p.date } : {}),
+        ...(p.time ? { time: p.time } : {}),
+        ...(p.followUp ? { followUp: p.followUp } : {}),
+      };
+      await setCachedValue("visits", 60_000, cachedVisits.map((item) => item.id === p.id ? { ...item, ...patch } : item));
+    }
+    revalidateCrmPaths(...WORK_MUTATION_PATHS);
   });
 }

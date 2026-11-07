@@ -12,6 +12,7 @@ import { STATIC_USERS } from "@/lib/auth/users";
 import { siteVisitSchema } from "@/lib/zoho/site-visits";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 
 type CheckResult<T> = T | { error: string };
 type ZohoField = { api_name?: string; pick_list_values?: { actual_value?: string; display_value?: string }[] };

@@ -9,6 +9,7 @@ import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "My Work & Site Visits" };
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 export const maxDuration = 30;
 
 export default async function VisitsPage() {

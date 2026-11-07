@@ -7,6 +7,7 @@ import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { LEAD_SOURCES, LEAD_STATUSES, leadsForTab, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 const tabs = ["fresh", "assigned", "callback", "mine", "all"] as const;
 const querySchema = z.object({
   tab: z.enum(tabs),
@@ -39,20 +40,39 @@ export async function GET(request: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "Invalid lead query." }, { status: 400 });
 
   try {
-    const allLeads = await crm().listLeads();
-    const visibleLeads = visibleFor(user, allLeads);
+    const repository = crm();
+    const usesServerPaging = parsed.data.search.trim().length >= 2 && !!repository.searchLeads ||
+      !!repository.listLeadsPage;
+    const pageData = parsed.data.search.trim().length >= 2 && repository.searchLeads
+      ? await repository.searchLeads(parsed.data.search, parsed.data.page).then((result) => ({
+          ...result,
+          total: (parsed.data.page - 1) * PAGE_SIZE + result.leads.length + (result.hasMore ? 1 : 0),
+        }))
+      : repository.listLeadsPage
+        ? await repository.listLeadsPage(parsed.data.page, PAGE_SIZE, user.role === "Sales Executive" ? user.id : undefined)
+        : await repository.listLeads().then((rows) => {
+          const offset = (parsed.data.page - 1) * PAGE_SIZE;
+          return {
+            leads: rows,
+            total: rows.length,
+            hasMore: rows.length > offset + PAGE_SIZE,
+          };
+        });
+    const visibleLeads = visibleFor(user, pageData.leads);
     const filters = { owner: parsed.data.owner, stage: parsed.data.stage, from: parsed.data.from, to: parsed.data.to };
     const source = parsed.data.source;
-    const allForTab = (tab: LeadTab) => leadsForTab(user, allLeads, tab, parsed.data.search, source, filters);
-    const filtered = allForTab(parsed.data.tab);
+    const allForTab = (tab: LeadTab) => leadsForTab(user, visibleLeads, tab, parsed.data.search, source, filters);
+    const matching = allForTab(parsed.data.tab);
     const tabCounts = Object.fromEntries(TABS.map((tab) => [tab, allForTab(tab).length])) as Record<LeadTab, number>;
     const offset = (parsed.data.page - 1) * PAGE_SIZE;
+    const filtered = usesServerPaging ? matching : matching.slice(offset, offset + PAGE_SIZE);
     return NextResponse.json({
-      leads: filtered.slice(offset, offset + PAGE_SIZE).map(listFields),
-      total: filtered.length,
+      leads: filtered.map(listFields),
+      total: usesServerPaging ? pageData.total : matching.length,
+      hasMore: usesServerPaging ? pageData.hasMore : matching.length > offset + PAGE_SIZE,
       tabCounts,
       todaysFollowUps: allForTab("callback").filter((lead) => lead.followUp === todayIST()).length,
-      hasAnyLeads: visibleLeads.length > 0,
+      hasAnyLeads: pageData.total > 0,
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const reference = newErrorReference();

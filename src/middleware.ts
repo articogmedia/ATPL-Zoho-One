@@ -6,6 +6,10 @@ import { jwtVerify, SignJWT } from "jose";
  * (Pages and server actions re-check the user and role; this is not the only gate.)
  */
 export async function middleware(req: NextRequest) {
+  const isPrefetch = req.headers.has("next-router-prefetch") ||
+    req.headers.get("purpose") === "prefetch" ||
+    req.headers.get("sec-purpose")?.includes("prefetch");
+  if (isPrefetch) return NextResponse.next();
   const token = req.cookies.get("atpl_session")?.value;
   const secret = process.env.SESSION_SECRET;
   if (token && secret) {
@@ -22,17 +26,20 @@ export async function middleware(req: NextRequest) {
       }
       const response = NextResponse.next();
       response.headers.set("Cache-Control", "private, no-store, max-age=0");
-      const refreshed = await new SignJWT({
-        username: payload.username, name: payload.name, role: payload.role,
-        zohoUserId: payload.zohoUserId ?? payload.sub, lastActivity: Date.now(),
-      }).setProtectedHeader({ alg: "HS256" })
-        .setSubject(String(payload.sub))
-        .setIssuedAt()
-        .setExpirationTime("8h")
-        .sign(new TextEncoder().encode(secret));
-      response.cookies.set("atpl_session", refreshed, {
-        httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/",
-      });
+      const issuedAt = Number(payload.iat ?? 0) * 1000;
+      if (Date.now() - issuedAt >= 3 * 60_000) {
+        const refreshed = await new SignJWT({
+          username: payload.username, name: payload.name, role: payload.role,
+          zohoUserId: payload.zohoUserId ?? payload.sub, lastActivity: Date.now(),
+        }).setProtectedHeader({ alg: "HS256" })
+          .setSubject(String(payload.sub))
+          .setIssuedAt()
+          .setExpirationTime("8h")
+          .sign(new TextEncoder().encode(secret));
+        response.cookies.set("atpl_session", refreshed, {
+          httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/",
+        });
+      }
       return response;
     } catch {
       /* Fall through to the appropriate unauthenticated response below. */

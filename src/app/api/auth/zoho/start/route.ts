@@ -4,6 +4,7 @@ import { env } from "@/lib/env";
 import { hosts } from "@/lib/zoho/client";
 
 export const dynamic = "force-dynamic";
+export const preferredRegion = "bom1";
 
 /** Step 1 of "Sign in with Zoho": send the browser to Zoho with an anti-CSRF state value. */
 export async function GET() {

@@ -77,7 +77,7 @@ async function redisPipeline(commands: string[][]): Promise<void> {
   const config = redisConfig();
   if (!config || (g.__atplCacheRedisUnavailableUntil ?? 0) > Date.now() || !commands.length) return;
   try {
-    const response = await fetch(config.url, {
+    const response = await fetch(`${config.url}/pipeline`, {
       method: "POST",
       headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
       body: JSON.stringify(commands),
@@ -186,6 +186,10 @@ export async function cached<T>(
   const task: Promise<unknown> = (async () => {
     const generation = generationFor(key);
     const [remoteFresh, remoteStale] = await readRedisValues(key);
+    if (generationFor(key) !== generation) {
+      const value = await load();
+      return value;
+    }
     if (remoteFresh !== undefined) {
       stats.hits += 1;
       store.values.set(key, { value: remoteFresh, expiresAt: Date.now() + ttlMs, staleUntil: keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS, ttlMs, keepStale, load });
@@ -209,6 +213,15 @@ export async function cached<T>(
     };
     store.values.set(key, entry);
     await writeRedisValue(key, value, ttlMs, keepStale);
+    if (generationFor(key) !== generation) {
+      if (store.values.get(key) === entry) {
+        store.values.delete(key);
+        await invalidateRedisPrefix(key);
+      } else {
+        const current = store.values.get(key);
+        if (current) await writeRedisValue(key, current.value, current.ttlMs, current.keepStale);
+      }
+    }
     return value;
   })().finally(() => {
     if (store.inflight.get(key) === task) store.inflight.delete(key);
@@ -218,6 +231,8 @@ export async function cached<T>(
 }
 
 export async function setCachedValue<T>(key: string, ttlMs: number, value: T): Promise<void> {
+  store.generations.set(key, (store.generations.get(key) ?? 0) + 1);
+  store.inflight.delete(key);
   const entry: CacheEntry = {
     value,
     expiresAt: Date.now() + ttlMs,
@@ -231,19 +246,28 @@ export async function setCachedValue<T>(key: string, ttlMs: number, value: T): P
 }
 
 export async function getCachedValue<T>(key: string): Promise<T | undefined> {
-  const [fresh] = await readRedisValues(key);
+  const local = store.values.get(key);
+  if (local && local.expiresAt > Date.now()) return local.value as T;
+  const [fresh, stale] = await readRedisValues(key);
   if (fresh !== undefined) return fresh as T;
-  return store.values.get(key)?.value as T | undefined;
+  if (stale !== undefined) return stale as T;
+  return local?.value as T | undefined;
 }
 
 function refreshInBackground(key: string, entry: CacheEntry) {
   if (entry.refresh) return;
+  const generation = generationFor(key);
   let releaseRefresh: () => void = () => undefined;
   entry.refresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
   scheduleAfter(async () => {
     try {
       const value = await entry.load();
+      if (generationFor(key) !== generation) return;
       await writeRedisValue(key, value, entry.ttlMs, entry.keepStale);
+      if (generationFor(key) !== generation) {
+        await invalidateRedisPrefix(key);
+        return;
+      }
       entry.value = value;
       entry.expiresAt = Date.now() + entry.ttlMs;
       entry.staleUntil = entry.keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS;

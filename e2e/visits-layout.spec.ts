@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 for (const viewport of [
   { width: 360, height: 800 },
@@ -86,12 +87,9 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
   await callDialog.getByRole("button", { name: "Save outcome" }).click();
   await expect(callDialog).toHaveCount(0);
 
-  await task.getByRole("button", { name: /Start Work/ }).click();
-  await expect(page.getByRole("button", { name: /^In Progress \(/ })).toHaveClass(/bg-primary/);
-  const progressTask = page.locator("#work-list article").first();
-  await expect(progressTask.getByRole("button", { name: /Mark Completed/ })).toBeVisible();
-
-  await progressTask.getByRole("button", { name: /Reschedule/ }).click();
+  const taskCountBefore = Number((await page.getByRole("button", { name: /^Tasks \(/ }).innerText()).match(/\((\d+)\)/)?.[1]);
+  const upcomingCountBefore = Number((await page.getByRole("button", { name: /^Upcoming Visits \(/ }).innerText()).match(/\((\d+)\)/)?.[1]);
+  await task.getByRole("button", { name: /Reschedule/ }).click();
   const reschedule = page.getByRole("dialog", { name: "Reschedule task" });
   await expect(reschedule).toBeVisible();
   const minDate = await reschedule.getByLabel("New date").getAttribute("min");
@@ -109,11 +107,30 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
   await reschedule.getByRole("button", { name: "Save new date" }).click();
   await expect(reschedule).toHaveCount(0);
   await expect(page.getByText(/Rescheduled to .* \d{2}:\d{2}/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Upcoming Visits \(/ })).toHaveClass(/bg-primary/);
+  await expect(page.getByRole("button", { name: new RegExp(`^Tasks \\(${taskCountBefore - 1}\\)$`) })).toBeVisible();
+  await expect(page.getByRole("button", { name: new RegExp(`^Upcoming Visits \\(${upcomingCountBefore + 1}\\)$`) })).toBeVisible();
 
-  await page.locator("#work-list article").first().getByRole("button", { name: /Mark Completed/ }).click();
+  const upcomingTask = page.locator("#work-list article").first();
+  await expect(upcomingTask.getByRole("button", { name: /Start Work/ })).toBeVisible();
+  await upcomingTask.getByRole("button", { name: /Start Work/ }).click();
+  await expect(upcomingTask.getByRole("button", { name: /Mark Completed/ })).toBeVisible();
+  await upcomingTask.getByRole("button", { name: /Mark Completed/ }).click();
   const confirmation = page.getByRole("dialog", { name: /Mark this task completed/ });
   await expect(confirmation).toBeVisible();
   await confirmation.getByRole("button", { name: "Confirm completed" }).click();
   await expect(confirmation).toHaveCount(0);
   await expect(page.locator("#work-list article").first().getByText("Completed", { exact: true })).toBeVisible();
+});
+
+test("visits page has no critical or serious accessibility violations", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/visits");
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(results.violations.filter(({ impact }) => impact === "critical" || impact === "serious")).toEqual([]);
 });

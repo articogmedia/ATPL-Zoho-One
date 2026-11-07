@@ -1,8 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { canAccess, formatINR, isAssignable, leadsForTab, visibleFor, ACCESS } from "@/lib/domain";
+import { applyVisitOverrides, canAccess, formatINR, isAssignable, leadsForTab, visibleFor, workForTab, workTabsFor, ACCESS, type Visit } from "@/lib/domain";
 import { MOCK_LEADS as SAMPLE_LEADS, MOCK_USERS as USERS, MOCK_QUOTES as SAMPLE_QUOTES, MOCK_VISITS as SAMPLE_VISITS } from "@/lib/crm/mock-data";
 
 const u = (id: string) => USERS.find((x) => x.id === id)!;
+
+describe("work tab membership", () => {
+  const manager = { id: "manager", name: "Manager", role: "Manager" as const };
+  const scheduledTask: Visit = {
+    ...SAMPLE_VISITS[0]!,
+    id: "rescheduled",
+    status: "Assigned",
+    isVisit: true,
+    date: "2026-11-10",
+  };
+
+  it("places a rescheduled assigned visit only in Upcoming Visits", () => {
+    expect(workForTab(manager, [scheduledTask], "upcoming", "2026-11-07")).toEqual([scheduledTask]);
+    expect(workForTab(manager, [scheduledTask], "assigned", "2026-11-07")).toEqual([]);
+    expect(workForTab(manager, [scheduledTask], "progress", "2026-11-07")).toEqual([]);
+    expect(workForTab(manager, [scheduledTask], "completed", "2026-11-07")).toEqual([]);
+  });
+
+  it("uses each tab's displayed list as the source for its count", () => {
+    const visit = { ...scheduledTask, id: "visit-today", date: "2026-11-07" };
+    const task = { ...scheduledTask, id: "old-task", isVisit: false, date: "2026-11-06" };
+    const progress = { ...scheduledTask, id: "progress", status: "In Progress" as const, date: "2026-11-10" };
+    const tabs = workTabsFor(manager, [visit, task, progress], "2026-11-07");
+    const counts = Object.fromEntries(Object.entries(tabs).map(([key, rows]) => [key, rows.length]));
+    expect(counts).toEqual({ assigned: 1, progress: 0, upcoming: 2, completed: 0 });
+    expect(counts.progress).toBe(tabs.progress.length);
+  });
+
+  it("keeps a visit override over stale props until every changed field is confirmed", () => {
+    const overrides = new Map<string, Partial<Visit>>([
+      [scheduledTask.id, { date: "2026-11-10", time: "15:30", followUp: "2026-11-12" }],
+    ]);
+    const stale = { ...scheduledTask, date: "2026-11-06", time: "10:00", followUp: "" };
+    expect(applyVisitOverrides([stale], overrides)[0]).toMatchObject({
+      date: "2026-11-10", time: "15:30", followUp: "2026-11-12",
+    });
+    expect(overrides.has(scheduledTask.id)).toBe(true);
+
+    const confirmed = { ...stale, date: "2026-11-10", time: "15:30", followUp: "2026-11-12" };
+    expect(applyVisitOverrides([confirmed], overrides)[0]).toBe(confirmed);
+    expect(overrides.has(scheduledTask.id)).toBe(false);
+  });
+});
 
 describe("access rules", () => {
   it("formats Indian numbers", () => expect(formatINR(467500)).toBe("Rs. 4,67,500"));
@@ -114,7 +157,7 @@ describe("manage leads", () => {
   });
 });
 
-import { perfStats, rangeDates, type Lead, type PerfExecutive, type Quotation, type User, type Visit } from "@/lib/domain";
+import { perfStats, rangeDates, type Lead, type PerfExecutive, type Quotation, type User } from "@/lib/domain";
 const EXECS = ["Anil", "Ravi"];
 describe("performance dashboard", () => {
   it("computes calendar boundaries", () => {

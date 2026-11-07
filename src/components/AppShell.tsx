@@ -2,7 +2,7 @@
 
 import Link, { useLinkStatus } from "next/link";
 import Image from "next/image";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, RotateCw } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
@@ -18,10 +18,12 @@ const NAV = [
 
 export function AppShell({ user, inactivityMinutes = 30, children }: { user: { name: string; role: Role }; inactivityMinutes?: number; children: ReactNode }) {
   const path = usePathname();
+  const searchParams = useSearchParams();
+  const routeKey = `${path}?${searchParams.toString()}`;
   const router = useRouter();
   const [newVersionAvailable, setNewVersionAvailable] = useState(false);
   const [stalledNavigation, setStalledNavigation] = useState<{ href: string } | null>(null);
-  const pendingNavigation = useRef<{ pathname: string; href: string; timer: number; fallback?: number } | null>(null);
+  const pendingNavigation = useRef<{ routeKey: string; href: string; timer: number } | null>(null);
   const lastWarmAt = useRef(0);
   const currentPath = useRef(path);
   currentPath.current = path;
@@ -32,7 +34,6 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       const current = pendingNavigation.current;
       if (!current) return;
       window.clearTimeout(current.timer);
-      if (current.fallback !== undefined) window.clearTimeout(current.fallback);
       pendingNavigation.current = null;
       setStalledNavigation(null);
     };
@@ -42,12 +43,16 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       const anchor = clicked?.closest<HTMLAnchorElement>("a[href]");
       if (!anchor || anchor.target === "_blank") return;
       const target = new URL(anchor.href, window.location.href);
-      if (target.origin !== window.location.origin || target.pathname === window.location.pathname) return;
+      if (target.origin !== window.location.origin || `${target.pathname}?${target.searchParams.toString()}` === `${window.location.pathname}?${new URLSearchParams(window.location.search).toString()}`) return;
       clearNavigation();
-      const state: NonNullable<typeof pendingNavigation.current> = { pathname: target.pathname, href: target.href, timer: 0 };
+      const state: NonNullable<typeof pendingNavigation.current> = {
+        routeKey: `${target.pathname}?${target.searchParams.toString()}`,
+        href: target.href,
+        timer: 0,
+      };
       state.timer = window.setTimeout(() => {
-        setStalledNavigation({ href: state.href });
-      }, 8_000);
+        if (pendingNavigation.current === state) setStalledNavigation({ href: state.href });
+      }, 15_000);
       pendingNavigation.current = state;
     };
     const versionMismatch = (message: string) => {
@@ -71,15 +76,14 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       window.removeEventListener("unhandledrejection", onUnhandledRejection);
       window.removeEventListener("error", onError);
     };
-  }, [router]);
+  }, []);
 
   useEffect(() => {
-    if (pendingNavigation.current?.pathname !== path) return;
-    window.clearTimeout(pendingNavigation.current.timer);
-    if (pendingNavigation.current.fallback !== undefined) window.clearTimeout(pendingNavigation.current.fallback);
+    const current = pendingNavigation.current;
+    if (current) window.clearTimeout(current.timer);
     pendingNavigation.current = null;
     setStalledNavigation(null);
-  }, [path]);
+  }, [routeKey]);
 
   useEffect(() => {
     const warm = () => {
@@ -120,7 +124,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       <aside className="hidden w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:h-dvh lg:overflow-y-auto">
         <Link href="/home" prefetch className="flex items-center gap-2 px-6 py-6">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
-            <Image src="/brand/atpl-mark-512.png" width={40} height={40} sizes="40px" quality={100} alt="ATPL mark" priority />
+            <Image src="/brand/atpl-mark-96.webp" width={40} height={40} sizes="40px" quality={75} alt="ATPL mark" priority />
           </span>
           <div>
             <div className="whitespace-nowrap text-lg font-bold leading-tight">ATPL Sales Portal</div>
@@ -144,7 +148,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
           <Link href="/home" prefetch className="flex min-w-0 items-center gap-2 lg:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
-                <Image src="/brand/atpl-mark-512.png" width={40} height={40} sizes="40px" quality={100} alt="ATPL mark" priority />
+                <Image src="/brand/atpl-mark-96.webp" width={40} height={40} sizes="40px" quality={75} alt="ATPL mark" />
               </span>
             <span className="max-[379px]:hidden truncate text-sm font-semibold">ATPL Sales Portal</span>
           </Link>
@@ -166,7 +170,12 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           {stalledNavigation && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
             <span>Taking longer than usual, retry.</span>
             <div className="flex gap-2">
-              <Button type="button" variant="outline" className="h-10" onClick={() => router.refresh()}>Retry</Button>
+              <Button type="button" variant="outline" className="h-10" onClick={() => {
+                if (pendingNavigation.current) window.clearTimeout(pendingNavigation.current.timer);
+                pendingNavigation.current = null;
+                setStalledNavigation(null);
+                router.refresh();
+              }}>Retry</Button>
               <Button type="button" className="h-10" onClick={() => window.location.assign(stalledNavigation.href)}>Open page</Button>
             </div>
           </div>}

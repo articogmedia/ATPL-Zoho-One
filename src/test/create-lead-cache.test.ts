@@ -30,6 +30,7 @@ describe("Zoho create-lead flow", () => {
     const write = vi.fn(async (_method: string, path: string) => path === "/Leads" ? "serialized-lead" : "");
     vi.doMock("next/cache", () => ({
       revalidateTag: vi.fn(),
+      revalidatePath: vi.fn(),
       unstable_cache: (load: () => Promise<unknown>) => async () =>
         JSON.parse(JSON.stringify(await load())) as unknown,
     }));
@@ -83,6 +84,7 @@ describe("Zoho create-lead flow", () => {
     }));
     vi.doMock("next/cache", () => ({
       revalidateTag: vi.fn(),
+      revalidatePath: vi.fn(),
       unstable_cache: (load: () => unknown) => load,
     }));
     vi.doMock("@/lib/auth/guard", () => ({
@@ -114,6 +116,7 @@ describe("Zoho create-lead flow", () => {
   it("shows a safe non-production reason for plain server errors", async () => {
     vi.doMock("next/cache", () => ({
       revalidateTag: vi.fn(),
+      revalidatePath: vi.fn(),
       unstable_cache: (load: () => unknown) => load,
     }));
     vi.doMock("@/lib/auth/guard", () => ({

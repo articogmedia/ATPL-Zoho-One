@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User } from "@/lib/domain";
+import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User, type Visit } from "@/lib/domain";
 import { cached, invalidate, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
@@ -428,6 +428,25 @@ async function addNote(leadId: string, title: string, content: string) {
   });
 }
 
+async function loadVisits(): Promise<Visit[]> {
+  const [raw, map, schema] = await Promise.all([taskRows(), leadMap(), getSiteVisitsSchema()]);
+  const tasks = raw.map((task) => mapTask(task, map));
+  if (!schema) return tasks;
+  try {
+    const siteVisits = await listSiteVisits(schema, map);
+    const keys = new Set(siteVisits.map((visit) => `${visit.leadId}:${visit.date}`));
+    return [...siteVisits, ...tasks.filter((task) => task.isVisit && !keys.has(`${task.leadId}:${task.date}`))];
+  } catch (error) {
+    console.error("[zoho] Site Visits records unavailable; showing Tasks only", {
+      status: error instanceof ZohoError ? error.status : undefined,
+      code: error instanceof ZohoError ? error.code : undefined,
+      field: error instanceof ZohoError ? error.field : undefined,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return tasks;
+  }
+}
+
 async function addHistoryNoteBestEffort(leadId: string, title: string, content: string, context: Record<string, unknown>) {
   try {
     await addNote(leadId, title, content);
@@ -440,10 +459,45 @@ async function addHistoryNoteBestEffort(leadId: string, title: string, content: 
       status: error instanceof ZohoError ? error.status : undefined,
       code: error instanceof ZohoError ? error.code : undefined,
       field: error instanceof ZohoError ? error.field : undefined,
+      details: error instanceof ZohoError ? error.details : undefined,
+      api_name: error instanceof ZohoError ? error.details?.api_name : undefined,
+      json_path: error instanceof ZohoError ? error.details?.json_path : undefined,
       reference: error instanceof ZohoError ? error.reference : undefined,
       message: error instanceof Error ? error.message : String(error),
     });
     return "The change was saved, but its history note could not be added.";
+  }
+}
+
+function scheduleSideEffects(
+  operation: string,
+  effects: [name: string, task: () => Promise<unknown>][],
+  onComplete?: () => Promise<void>,
+) {
+  const run = async () => {
+    await Promise.all(effects.map(async ([name, task]) => {
+      try {
+        await task();
+      } catch (error) {
+        console.error(`[zoho] deferred ${operation} side effect failed`, {
+          sideEffect: name,
+          message: error instanceof Error ? error.message : String(error),
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+          field: error instanceof ZohoError ? error.field : undefined,
+          details: error instanceof ZohoError ? error.details : undefined,
+        });
+      }
+    }));
+    await onComplete?.();
+  };
+  try {
+    after(run);
+  } catch (error) {
+    console.error(`[zoho] could not schedule ${operation} side effects; running them asynchronously`, {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    void run();
   }
 }
 
@@ -491,6 +545,32 @@ export const zohoRepository: CrmRepository = {
   },
 
   listLeads: leads,
+  async listLeadsPage(page, pageSize = 50, ownerId) {
+    const safePage = Math.max(1, Math.floor(page));
+    const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
+    const ownerFilter = ownerId?.trim() ?? "";
+    return cached(`leads:page:${ownerFilter || "all"}:${safePage}:${safePageSize}`, SHORT, async () => {
+      const ownerCriteria = ownerFilter ? `(Owner.id:equals:${ownerFilter})` : undefined;
+      const response = await zoho<{ data?: ZLead[]; info?: { count?: number; more_records?: boolean } }>(
+        "GET", ownerCriteria ? "/Leads/search" : "/Leads", {
+        query: {
+          fields: LEAD_FIELDS.join(","),
+          page: safePage,
+          per_page: safePageSize,
+          sort_by: "Created_Time",
+          sort_order: "desc",
+          ...(ownerCriteria ? { criteria: ownerCriteria } : {}),
+        },
+      });
+      const [assignable, allUsers] = await Promise.all([assignableIds(), users()]);
+      const salesExecutives = new Set(allUsers
+        .filter((user) => user.role === "Sales Executive")
+        .map((user) => String(user.id).trim()));
+      const mapped = (response?.data ?? []).map((record) => mapLead(record, assignable, salesExecutives));
+      const total = response?.info?.count ?? ((safePage - 1) * safePageSize + mapped.length);
+      return { leads: mapped, total, hasMore: response?.info?.more_records === true };
+    }, { keepStale: true });
+  },
   async listLeadSources(): Promise<LeadSource[]> {
     const values = (await leadSchema()).sourceValues;
     return LEAD_SOURCES.filter((source) => zohoLeadSource(source, values, false) !== null);
@@ -502,7 +582,7 @@ export const zohoRepository: CrmRepository = {
     const criteria = `(${["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City"]
       .map((field) => `(${field}:contains:${criteriaValue})`).join("or")})`;
     const response = await zoho<{ data?: ZLead[]; info?: { more_records?: boolean } }>("GET", "/Leads/search", {
-      query: { fields: LEAD_FIELDS.join(","), criteria, per_page: 200, page: Math.max(1, Math.floor(page)) },
+      query: { fields: LEAD_FIELDS.join(","), criteria, per_page: 50, page: Math.max(1, Math.floor(page)) },
     });
     const [assignable, allUsers] = await Promise.all([assignableIds(), users()]);
     const salesExecutives = new Set(allUsers.filter((user) => user.role === "Sales Executive").map((user) => String(user.id).trim()));
@@ -631,32 +711,22 @@ export const zohoRepository: CrmRepository = {
       else console.warn("[zoho] Area omitted because Leads has no City or Area field", { requestedField: "City/Area" });
     }
     const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
-    const secondaryWrites: Promise<unknown>[] = [addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`)];
+    const secondaryWrites: [string, () => Promise<unknown>][] = [
+      ["history note", () => addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`)],
+    ];
     if (owner) {
       secondaryWrites.push(
-        addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`),
-        zohoWrite("POST", "/Tasks", {
+        ["assignment history", () => addNote(id, "Lead assigned", `Assigned to ${owner.name} by ${actor.name} on ${new Date().toISOString()}`)],
+        ["initial follow-up task", () => zohoWrite("POST", "/Tasks", {
           Subject: "Call new lead",
           Status: TASK_STATUS_WRITE.Assigned,
           Due_Date: todayIST(),
           Owner: { id: owner.id },
           ...relatedToLead(id),
-        }),
+        })],
       );
     }
-    const secondaryResults = await Promise.allSettled(secondaryWrites);
-    for (const result of secondaryResults) {
-      if (result.status === "rejected") {
-        const error = result.reason;
-        console.error("[zoho] secondary lead creation write failed", {
-          leadId: id,
-          status: error instanceof ZohoError ? error.status : undefined,
-          code: error instanceof ZohoError ? error.code : undefined,
-          field: error instanceof ZohoError ? error.field : undefined,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    scheduleSideEffects("lead creation", secondaryWrites, () => invalidate("leads", "users", "visits"));
     return {
       id, name: input.name.trim(), company: input.company.trim() || input.name.trim(), phone: mobile,
       area: input.area.trim(), source: input.source, status: owner ? ASSIGNED_STAGE : "Fresh Lead",
@@ -712,13 +782,32 @@ export const zohoRepository: CrmRepository = {
           String(task.What_Id?.id ?? task.Who_Id?.id ?? "") === String(id),
         );
         if (hasAssignmentTask) return undefined;
-        await zohoWrite("POST", "/Tasks", {
+        const taskId = await zohoWrite("POST", "/Tasks", {
           Subject: "Call new lead",
           Status: TASK_STATUS_WRITE.Assigned,
           Due_Date: todayIST(),
           Owner: { id: owner.id },
           ...relatedToLead(id),
         });
+        return {
+          id: taskId,
+          leadId: id,
+          customer: current.company || current.name,
+          phone: current.phone,
+          address: current.address,
+          area: current.area,
+          executive: owner.name,
+          executiveId: String(owner.id),
+          type: "Call new lead",
+          isVisit: false,
+          date: todayIST(),
+          time: "",
+          status: "Assigned" as const,
+          nextAction: "",
+          followUp: "",
+          notes: "",
+          done: false,
+        };
       } catch (error) {
         console.error("[zoho] reassignment follow-up task failed", {
           leadId: id, ownerId: owner.id, operation: error instanceof ZohoError ? error.operation ?? "POST /Tasks" : "POST /Tasks",
@@ -738,12 +827,27 @@ export const zohoRepository: CrmRepository = {
     };
     const warningCheckId = randomUUID();
     const completeAssignmentActivities = async () => {
-      const [taskWarning, historyWarning] = await Promise.all([createAssignmentTask(), writeAssignmentHistory()]);
+      const [createdTask, historyWarning] = await Promise.all([createAssignmentTask(), writeAssignmentHistory()]);
+      const taskWarning = typeof createdTask === "string" ? createdTask : undefined;
+      if (createdTask && typeof createdTask !== "string") {
+        try {
+          const currentVisits = await loadVisits();
+          await setCachedValue("visits", SHORT, [
+            createdTask,
+            ...currentVisits.filter((visit) => visit.id !== createdTask.id),
+          ]);
+        } catch (error) {
+          console.error("[zoho] could not update visits cache after reassignment", {
+            leadId: id,
+            taskId: createdTask.id,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
       await setCachedValue(`assignment-warnings:${warningCheckId}`, 60_000, {
         taskWarning,
         historyWarning: historyWarning || undefined,
       });
-      await invalidate("visits");
     };
     try {
       after(completeAssignmentActivities);
@@ -833,17 +937,23 @@ export const zohoRepository: CrmRepository = {
     if (!parts.length) return;
 
     if (Object.keys(record).length) await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
-    await addHistoryNoteBestEffort(id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`, { action: "update lead" });
+    const sideEffects: [string, () => Promise<unknown>][] = [
+      ["history note", () => addHistoryNoteBestEffort(
+        id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`, { action: "update lead" },
+      )],
+    ];
     if (p.followUp && p.followUp !== current.followUp) {
-      const owner = current.assignedTo ? await userByName(current.assignedTo) : actor;
-      await zohoWrite("POST", "/Tasks", {
-        Subject: `Follow-up call - ${current.name}`, Status: TASK_STATUS_WRITE.Assigned,
-        Due_Date: p.followUp, Owner: { id: owner.id }, ...relatedToLead(id),
-        [FIELD.task.isSiteVisit]: false, [FIELD.task.nextAction]: "Follow up call",
-        [FIELD.task.followUp]: p.followUp,
-      });
+      sideEffects.push(["follow-up task", async () => {
+        const owner = current.assignedTo ? await userByName(current.assignedTo) : actor;
+        return zohoWrite("POST", "/Tasks", {
+          Subject: `Follow-up call - ${current.name}`, Status: TASK_STATUS_WRITE.Assigned,
+          Due_Date: p.followUp, Owner: { id: owner.id }, ...relatedToLead(id),
+          [FIELD.task.isSiteVisit]: false, [FIELD.task.nextAction]: "Follow up call",
+          [FIELD.task.followUp]: p.followUp,
+        });
+      }]);
     }
-    await invalidate("leads", "users");
+    scheduleSideEffects("lead update", sideEffects, () => invalidate("leads", "users", "visits"));
   },
 
   async deleteLead(id) {
@@ -882,46 +992,71 @@ export const zohoRepository: CrmRepository = {
   },
 
   async logCall(input, actor) {
-    const lead = await this.getLead(input.leadId);
-    if (!lead) throw new ZohoError("Lead not found", 404);
-    if (!lead.id.trim() || lead.id.trim() !== input.leadId.trim()) {
-      throw new ZohoError("The selected lead ID does not match the CRM record.", 400, "INVALID_LEAD_REFERENCE", "What_Id");
+    const requestedLeadId = input.leadId.trim();
+    if (!/^\d+$/.test(requestedLeadId)) {
+      throw new ZohoError("The selected lead ID is not a valid Zoho CRM record ID.", 400, "INVALID_LEAD_REFERENCE", "What_Id.id");
     }
-    const status = CALL_STATUS_BY_OUTCOME[input.outcome];
-    await zohoWrite("POST", "/Calls", {
-      Subject: `${input.outcome} - ${lead.name}`,
-      What_Id: { id: lead.id }, $se_module: "Leads", Call_Type: "Outbound",
-      [FIELD.call.result]: input.outcome,
-      [FIELD.call.startTime]: new Date().toISOString(),
-      Description: input.remarks || undefined, Owner: { id: actor.id },
-    });
-    await zohoWrite("PUT", `/Leads/${lead.id}`, { Lead_Status: WRITE_LEAD_STATUS[status] }, { trigger: ["workflow"] });
-    let historyWarning: string | undefined;
+    const lead = await this.getLead(requestedLeadId);
+    if (!lead) throw new ZohoError("Lead not found", 404);
+    const leadId = lead.id.trim();
+    if (!/^\d+$/.test(leadId) || leadId !== requestedLeadId) {
+      throw new ZohoError("The selected lead ID does not match a valid Zoho CRM record.", 400, "INVALID_LEAD_REFERENCE", "What_Id.id");
+    }
+    let liveUsers: User[] = [];
     try {
-      await addNote(lead.id, "Call logged", `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name} at ${new Date().toISOString()})`);
+      liveUsers = await users();
     } catch (error) {
-      historyWarning = "Call outcome saved, but its history note could not be added.";
-      console.error("[zoho] call outcome saved but lead-history note failed", {
-        leadId: lead.id,
-        operation: "POST /Notes",
-        status: error instanceof ZohoError ? error.status : undefined,
-        code: error instanceof ZohoError ? error.code : undefined,
-        field: error instanceof ZohoError ? error.field : undefined,
-        reference: error instanceof ZohoError ? error.reference : undefined,
+      console.error("[zoho] could not resolve call owner; creating call as API user", {
+        operation: "GET /users",
         message: error instanceof Error ? error.message : String(error),
       });
     }
+    const actorEmail = actor.email?.trim().toLowerCase();
+    const actorName = actor.name.trim().toLowerCase().replace(/\s+/g, " ");
+    const emailMatch = actorEmail
+      ? liveUsers.find((user) => user.id.trim() && user.email?.trim().toLowerCase() === actorEmail)
+      : undefined;
+    const exactNameMatch = liveUsers.find((user) =>
+      user.id.trim() && user.name.trim().toLowerCase().replace(/\s+/g, " ") === actorName,
+    );
+    const firstNameMatches = liveUsers.filter((user) =>
+      user.id.trim() && user.name.trim().toLowerCase().replace(/\s+/g, " ").startsWith(`${actorName.split(" ")[0]} `),
+    );
+    const callOwner = emailMatch ?? exactNameMatch ?? (firstNameMatches.length === 1 ? firstNameMatches[0] : undefined);
+    const status = CALL_STATUS_BY_OUTCOME[input.outcome];
+    await zohoWrite("POST", "/Calls", {
+      Subject: `${input.outcome} - ${lead.name}`,
+      ...relatedToLead(leadId), Call_Type: "Outbound",
+      [FIELD.call.result]: input.outcome,
+      [FIELD.call.startTime]: new Date().toISOString(),
+      Description: input.remarks || undefined,
+      ...(callOwner?.id.trim() ? { Owner: { id: callOwner.id.trim() } } : {}),
+    });
+    const sideEffects: [string, () => Promise<unknown>][] = [
+      ["lead status", () => zohoWrite("PUT", `/Leads/${leadId}`, { Lead_Status: WRITE_LEAD_STATUS[status] }, { trigger: ["workflow"] })],
+      ["history note", () => addHistoryNoteBestEffort(
+        leadId,
+        "Call logged",
+        `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name} at ${new Date().toISOString()})`,
+        { operation: "call outcome" },
+      )],
+    ];
     if (input.followUp) {
-      const owner = lead.assignedTo ? await userByName(lead.assignedTo) : actor;
-      await zohoWrite("POST", "/Tasks", {
-        Subject: `Follow-up call - ${lead.name}`, Status: TASK_STATUS_WRITE.Assigned,
-        Due_Date: input.followUp, Owner: { id: owner.id }, ...relatedToLead(lead.id),
-        [FIELD.task.isSiteVisit]: false, [FIELD.task.visitTime]: input.followUpTime || undefined,
-        [FIELD.task.nextAction]: "Follow up call", [FIELD.task.followUp]: input.followUp,
-      });
+      sideEffects.push(["follow-up task", async () => {
+        const owner = lead.assignedTo ? await userByName(lead.assignedTo) : callOwner;
+        return zohoWrite("POST", "/Tasks", {
+          Subject: `Follow-up call - ${lead.name}`, Status: TASK_STATUS_WRITE.Assigned,
+          Due_Date: input.followUp,
+          ...(owner?.id.trim() ? { Owner: { id: owner.id.trim() } } : {}),
+          ...relatedToLead(leadId),
+          [FIELD.task.isSiteVisit]: false, [FIELD.task.visitTime]: input.followUpTime || undefined,
+          [FIELD.task.nextAction]: "Follow up call", [FIELD.task.followUp]: input.followUp,
+        });
+      }]);
     }
+    scheduleSideEffects("call outcome", sideEffects, () => invalidate("leads", "users", "visits"));
     await invalidate("leads", "users", "visits");
-    return { historyWarning };
+    return {};
   },
 
   async listCalls(): Promise<CallActivity[]> {
@@ -1137,31 +1272,16 @@ export const zohoRepository: CrmRepository = {
     const id = await zohoWrite("POST", "/Quotes", {
       ...quoteRecord,
     });
-    await addHistoryNoteBestEffort(
+    scheduleSideEffects("create quotation", [["history note", () => addHistoryNoteBestEffort(
       lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`,
       { action: "create quote", quoteId: id },
-    );
+    )]]);
     await invalidate("quotes", "leads");
     return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total: totals.total, status: "Draft", date: new Date().toISOString().slice(0, 10) };
   },
 
   async listVisits() {
-    const [raw, map, schema] = await Promise.all([taskRows(), leadMap(), getSiteVisitsSchema()]);
-    const tasks = raw.map((z) => mapTask(z, map));
-    if (!schema) return tasks;
-    try {
-      const siteVisits = await listSiteVisits(schema, map);
-      const keys = new Set(siteVisits.map((visit) => `${visit.leadId}:${visit.date}`));
-      return [...siteVisits, ...tasks.filter((task) => task.isVisit && !keys.has(`${task.leadId}:${task.date}`))];
-    } catch (error) {
-      console.error("[zoho] Site Visits records unavailable; showing Tasks only", {
-        status: error instanceof ZohoError ? error.status : undefined,
-        code: error instanceof ZohoError ? error.code : undefined,
-        field: error instanceof ZohoError ? error.field : undefined,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return tasks;
-    }
+    return cached("visits", SHORT, loadVisits);
   },
   getVisitsWarning() { return taskMetadataWarning; },
   async getVisit(id) {
@@ -1195,7 +1315,7 @@ export const zohoRepository: CrmRepository = {
     const [owner, lead] = await Promise.all([userByName(input.executive), this.getLead(input.leadId)]);
     if (!lead) throw new ZohoError("Lead not found", 404);
     const address = input.address?.trim() || [lead.address, lead.area].filter(Boolean).join(", ");
-    await zohoWrite("POST", "/Tasks", {
+    const taskId = await zohoWrite("POST", "/Tasks", {
       Subject: `${input.type} - ${lead.company || lead.name}`,
       Status: TASK_STATUS_WRITE.Assigned, Due_Date: input.date, Owner: { id: owner.id },
       ...relatedToLead(lead.id),
@@ -1203,23 +1323,46 @@ export const zohoRepository: CrmRepository = {
       [FIELD.task.visitTime]: input.time, [FIELD.task.nextAction]: input.nextAction,
       [FIELD.task.followUp]: input.followUp || undefined,
     });
-    if (input.isVisit) {
+    const createdVisit: Visit = {
+      id: taskId,
+      leadId: lead.id,
+      customer: lead.company || lead.name,
+      phone: lead.phone,
+      address,
+      area: lead.area,
+      executive: owner.name,
+      executiveId: String(owner.id),
+      type: input.type,
+      isVisit: input.isVisit,
+      date: input.date,
+      time: input.time,
+      status: "Assigned",
+      nextAction: input.nextAction,
+      followUp: input.followUp ?? "",
+      notes: "",
+      done: false,
+    };
+    const sideEffects: [string, () => Promise<unknown>][] = [
+      ["history note", () => addHistoryNoteBestEffort(
+        lead.id, "Work scheduled", `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date} (by ${actor.name})`,
+        { action: "schedule work" },
+      )],
+      ...(input.isVisit ? [["lead status", () => advanceLead(lead.id, lead.status, "Site Visit Scheduled")] as [string, () => Promise<unknown>]] : []),
+    ];
+    if (input.isVisit) sideEffects.push(["calendar event", async () => {
       const start = `${input.date}T${input.time}:00+05:30`;
       const endMinutes = Number(input.time.slice(0, 2)) * 60 + Number(input.time.slice(3)) + 60;
       const end = `${input.date}T${String(Math.floor(endMinutes / 60) % 24).padStart(2, "0")}:${String(endMinutes % 60).padStart(2, "0")}:00+05:30`;
-      await zohoWrite("POST", "/Events", {
+      return zohoWrite("POST", "/Events", {
         Event_Title: `${input.type} - ${lead.company || lead.name}`,
         Start_DateTime: start, End_DateTime: end, Location: address || undefined,
         ...relatedToLead(lead.id), Owner: { id: owner.id },
         Description: input.nextAction || undefined,
       });
-    }
-    await addHistoryNoteBestEffort(
-      lead.id, "Work scheduled", `${input.isVisit ? "Site visit" : "Work"} scheduled: ${input.type} on ${input.date} (by ${actor.name})`,
-      { action: "schedule work" },
-    );
-    if (input.isVisit) await advanceLead(lead.id, lead.status, "Site Visit Scheduled");
+    }]);
+    scheduleSideEffects("schedule work", sideEffects, () => invalidate("leads", "visits"));
     await invalidate("visits");
+    return createdVisit;
   },
 
   async updateVisit(id, p, actor, existingVisit) {
@@ -1248,10 +1391,10 @@ export const zohoRepository: CrmRepository = {
         p.notes?.trim() ? `Notes: ${p.notes.trim()}` : "",
       ].filter(Boolean);
       if (changes.length && current.leadId) {
-        await addHistoryNoteBestEffort(current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`, {
+        scheduleSideEffects("update site visit", [["history note", () => addHistoryNoteBestEffort(current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`, {
           action: "update site visit",
           visitId: id,
-        });
+        })]]);
       }
       await invalidate("visits");
       return;
@@ -1271,17 +1414,10 @@ export const zohoRepository: CrmRepository = {
       p.notes?.trim() ? `Notes: ${p.notes.trim()}` : "",
     ].filter(Boolean);
     if (changes.length) {
-      try {
-        await addNote(current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`);
-      } catch (error) {
-        console.error("[zoho] task update succeeded but history note failed", {
-          taskId: id,
-          leadId: current.leadId,
-          status: error instanceof ZohoError ? error.status : undefined,
-          code: error instanceof ZohoError ? error.code : undefined,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
+      scheduleSideEffects("update task", [["history note", () => addHistoryNoteBestEffort(
+        current.leadId, "Work update", `${changes.join(" · ")} (by ${actor.name})`,
+        { taskId: id, operation: "update task" },
+      )]]);
     }
     await invalidate("visits");
   },

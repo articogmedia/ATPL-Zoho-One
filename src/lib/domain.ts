@@ -46,6 +46,61 @@ export type Lead = {
   followUpTime?: string;
 };
 
+export type LeadAssigneeOption = { id: string; name: string; label: string; isCurrent: boolean };
+
+export function leadAssigneeOptions(
+  members: readonly Pick<User, "id" | "name">[],
+  currentOwnerId?: string | null,
+): LeadAssigneeOption[] {
+  return members.map((member) => {
+    const isCurrent = !!currentOwnerId && String(member.id) === String(currentOwnerId);
+    return {
+      id: String(member.id),
+      name: member.name,
+      label: `${member.name}${isCurrent ? " (current)" : ""}`,
+      isCurrent,
+    };
+  });
+}
+
+export function applyVisitOverrides(
+  rows: Visit[],
+  overrides: Map<string, Partial<Visit>>,
+): Visit[] {
+  return rows.map((visit) => {
+    const override = overrides.get(visit.id);
+    if (!override) return visit;
+    const confirmed = Object.entries(override).every(([key, value]) =>
+      value === undefined || Object.is(visit[key as keyof Visit], value),
+    );
+    if (confirmed) {
+      overrides.delete(visit.id);
+      return visit;
+    }
+    return { ...visit, ...override };
+  });
+}
+
+export function applyLeadOverrides(
+  rows: Lead[],
+  overrides: Map<string, Partial<Lead> | null>,
+): Lead[] {
+  return rows.flatMap((lead) => {
+    if (!overrides.has(lead.id)) return [lead];
+    const override = overrides.get(lead.id);
+    if (override === null) return [];
+    if (!override) return [lead];
+    const confirmed = Object.entries(override).every(([key, value]) =>
+      value === undefined || Object.is(lead[key as keyof Lead], value),
+    );
+    if (confirmed) {
+      overrides.delete(lead.id);
+      return [lead];
+    }
+    return [{ ...lead, ...override }];
+  });
+}
+
 export function quotationCustomers(leads: Lead[], query: string): Lead[] {
   const search = query.trim().toLowerCase();
   return leads.filter((lead) =>
@@ -114,14 +169,23 @@ export type Visit = {
 };
 export type WorkTab = "assigned" | "progress" | "upcoming" | "completed";
 
+export function workTabsFor(user: User, visits: Visit[], today: string, executive = "all"): Record<WorkTab, Visit[]> {
+  return {
+    assigned: workForTab(user, visits, "assigned", today, executive),
+    progress: workForTab(user, visits, "progress", today, executive),
+    upcoming: workForTab(user, visits, "upcoming", today, executive),
+    completed: workForTab(user, visits, "completed", today, executive),
+  };
+}
+
 /** Items for a My Work tab. Executives only ever get their own; managers filter by executive ("all" = everyone). */
 export function workForTab(user: User, visits: Visit[], tab: WorkTab, today: string, executive = "all"): Visit[] {
   const pool = user.role === "Sales Executive"
     ? visits.filter((v) => normalizeOwnerId(v.executiveId) === normalizeOwnerId(user.id) || (!v.executiveId && v.executive === user.name))
     : visits.filter((v) => executive === "all" || v.executive === executive);
   return pool.filter((v) =>
-    tab === "assigned" ? v.status === "Assigned"
-    : tab === "progress" ? v.status === "In Progress"
+    tab === "assigned" ? v.status === "Assigned" && !(v.isVisit && v.date >= today)
+    : tab === "progress" ? v.status === "In Progress" && !(v.isVisit && v.date >= today)
     : tab === "upcoming" ? v.isVisit && v.status !== "Completed" && v.date >= today
     : v.status === "Completed",
   ).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));

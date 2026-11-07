@@ -532,6 +532,8 @@ export async function zoho<T = unknown>(
     console.error("[zoho] request rejected", {
       reference, method, path: requestPath, status: res.status,
       code, message, details: responseDetails, field,
+      api_name: detail?.api_name,
+      json_path: detail?.json_path,
       param_name: detail?.param_name,
       expected_data_type: detail?.expected_data_type,
       rawResponseBody,
@@ -609,6 +611,7 @@ export async function zohoWrite(
       reference, method, path, status: 200, recordStatus: first?.status,
       code: first?.code, message, details: first?.details,
       api_name: apiName, param_name: first?.details?.param_name,
+      json_path: first?.details?.json_path,
       expected_data_type: first?.details?.expected_data_type,
       rawResponseBody: redactWritePayload(json),
       response: redactWritePayload(json),

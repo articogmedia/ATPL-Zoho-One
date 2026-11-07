@@ -1,4 +1,4 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -10,6 +10,11 @@ export default defineConfig({
     browserName: "chromium",
     headless: true,
   },
+  projects: [
+    { name: "desktop-chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "Pixel 7", use: { ...devices["Pixel 7"] } },
+    { name: "iPhone 14", use: { ...devices["iPhone 14"] } },
+  ],
   webServer: {
     command: "npm run dev -- --hostname 127.0.0.1",
     url: "http://127.0.0.1:3000",
