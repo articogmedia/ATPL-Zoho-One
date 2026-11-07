@@ -9,6 +9,7 @@ vi.mock("next/server", () => ({
 }));
 
 beforeEach(async () => {
+  vi.unstubAllGlobals();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-11-06T12:00:00Z"));
   afterTasks.length = 0;
@@ -50,5 +51,61 @@ describe("shared cache stale-while-revalidate", () => {
     await afterTasks.shift()?.();
     await expect(cached("products", 1_000, load, { keepStale: true })).resolves.toBe("cached catalogue");
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("deletes fresh and stale Redis entries before invalidation resolves", async () => {
+    process.env.UPSTASH_REDIS_REST_URL = "https://redis.example";
+    process.env.UPSTASH_REDIS_REST_TOKEN = "test-token";
+    const calls: string[][][] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as string[] | string[][];
+      if (Array.isArray(body[0])) {
+        const pipeline = body as string[][];
+        calls.push(pipeline);
+        return { ok: true, json: async () => pipeline.map(() => ({ result: 1 })) };
+      }
+      const command = body as string[];
+      calls.push([command]);
+      return { ok: true, json: async () => ({ result: ["leads", "leads:page"] }) };
+    }));
+    const { invalidate } = await import("@/lib/cache");
+
+    await invalidate("leads");
+
+    expect(calls).toHaveLength(2);
+    const [deleteCommand, removeIndexCommand] = calls[1]!;
+    expect(deleteCommand?.[0]).toBe("DEL");
+    expect(deleteCommand?.slice(1)).toHaveLength(4);
+    expect(deleteCommand?.some((key) => key.includes(":fresh:"))).toBe(true);
+    expect(deleteCommand?.some((key) => key.includes(":stale:"))).toBe(true);
+    expect(removeIndexCommand).toEqual(["SREM", "atpl:cache:index:leads", "leads", "leads:page"]);
+  });
+
+  it("reads completed background assignment warnings without serving a cached pending value", async () => {
+    const { getCachedValue, setCachedValue } = await import("@/lib/cache");
+    await expect(getCachedValue("assignment-warnings:request-1")).resolves.toBeUndefined();
+    await setCachedValue("assignment-warnings:request-1", 60_000, { taskWarning: "Task failed." });
+    await expect(getCachedValue("assignment-warnings:request-1")).resolves.toEqual({ taskWarning: "Task failed." });
+  });
+
+  it("does not repopulate invalidated values from an older in-flight load", async () => {
+    let releaseOldLoad: (value: string) => void = () => undefined;
+    let oldLoadStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => { oldLoadStarted = resolve; });
+    const oldLoad = import("@/lib/cache").then(({ cached }) => cached(
+      "leads:page",
+      1_000,
+      () => new Promise<string>((resolve) => {
+        releaseOldLoad = resolve;
+        oldLoadStarted();
+      }),
+    ));
+    const { cached, invalidate } = await import("@/lib/cache");
+    await started;
+    await invalidate("leads");
+    await expect(cached("leads:page", 1_000, async () => "new data")).resolves.toBe("new data");
+    releaseOldLoad("old data");
+    await expect(oldLoad).resolves.toBe("old data");
+    await expect(cached("leads:page", 1_000, async () => "unexpected reload")).resolves.toBe("new data");
   });
 });

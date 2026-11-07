@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const assignmentAfterTasks = vi.hoisted(() => [] as (() => Promise<void> | void)[]);
+
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   unstable_cache: (load: () => unknown) => load,
+}));
+vi.mock("next/server", () => ({
+  after: (task: () => Promise<void> | void) => { assignmentAfterTasks.push(task); },
 }));
 
 beforeEach(async () => {
@@ -19,6 +24,7 @@ beforeEach(async () => {
   delete process.env.ZOHO_QUEUE_OWNER_ID;
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  assignmentAfterTasks.length = 0;
   vi.doUnmock("@/lib/zoho/client");
   vi.resetModules();
 });
@@ -293,17 +299,20 @@ describe("Zoho lead actions", () => {
     const { zohoRepository } = await import("@/lib/zoho/repository");
 
     await zohoRepository.assignLead("lead-1", "1394515000001147001", { id: "manager-1", name: "Reshma", role: "Manager" });
+    await assignmentAfterTasks.shift()?.();
 
     expect(writes[0]).toMatchObject({
       method: "PUT", path: "/Leads/lead-1",
       record: { Owner: { id: "1394515000001147001" }, Lead_Status: "Assigned to Sales" },
     });
-    expect(writes[1]).toMatchObject({
+    const task = writes.find((entry) => entry.path === "/Tasks");
+    expect(task).toMatchObject({
       method: "POST", path: "/Tasks",
       record: { Subject: "Call new lead", Due_Date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), Owner: { id: "1394515000001147001" } },
     });
-    expect(writes[2]).toMatchObject({ method: "POST", path: "/Notes", record: { Note_Title: "Lead assigned" } });
-    expect(writes[2]?.record.Note_Content).toMatch(/Assigned to Pavan by Reshma on \d{4}-\d{2}-\d{2}/);
+    const note = writes.find((entry) => entry.path === "/Notes");
+    expect(note).toMatchObject({ method: "POST", record: { Note_Title: "Lead assigned" } });
+    expect(note?.record.Note_Content).toMatch(/Assigned to Pavan by Reshma on \d{4}-\d{2}-\d{2}/);
   });
 
   it("does not move a progressed lead backwards during assignment", async () => {
@@ -328,10 +337,11 @@ describe("Zoho lead actions", () => {
     invalidate("users", "leads", "visits");
     const { zohoRepository } = await import("@/lib/zoho/repository");
     await zohoRepository.assignLead("lead-2", "1394515000001147001", { id: "manager-1", name: "Reshma", role: "Manager" });
+    await assignmentAfterTasks.shift()?.();
     expect(writes[0]?.record).toEqual({ Owner: { id: "1394515000001147001" } });
   });
 
-  it("reports partial assignment success when follow-up task creation fails", async () => {
+  it("keeps assignment successful when background follow-up task creation fails", async () => {
     const write = vi.fn(async (_method: string, path: string) => {
       if (path === "/Tasks") throw new Error("invalid data");
       return "ok";
@@ -349,8 +359,11 @@ describe("Zoho lead actions", () => {
     invalidate("leads", "users");
     const { zohoRepository } = await import("@/lib/zoho/repository");
     const result = await zohoRepository.assignLead("lead-partial", "exec-1", { id: "manager-1", name: "Reshma", role: "Manager" });
+    await assignmentAfterTasks.shift()?.();
     expect(result.owner).toBe("Pavan");
-    expect(result.taskWarning).toContain("Follow-up task creation failed");
+    const { cached } = await import("@/lib/cache");
+    await expect(cached(`assignment-warnings:${result.warningCheckId}`, 60_000, async () => null))
+      .resolves.toMatchObject({ taskWarning: "Follow-up task creation failed." });
   });
 
   it("does not create a duplicate assignment task", async () => {
@@ -368,6 +381,7 @@ describe("Zoho lead actions", () => {
     invalidate("leads", "users");
     const { zohoRepository } = await import("@/lib/zoho/repository");
     const result = await zohoRepository.assignLead("lead-dup", "exec-1", { id: "manager-1", name: "Reshma", role: "Manager" });
+    await assignmentAfterTasks.shift()?.();
     expect(result.taskCreated).toBe(false);
     expect(write.mock.calls.some(([, path]) => path === "/Tasks")).toBe(false);
   });

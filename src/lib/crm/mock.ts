@@ -77,7 +77,7 @@ export const mockRepository: CrmRepository = {
     if (lead.status === "Fresh Lead") lead.status = ASSIGNED_STAGE;
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
     note(id, actor.name, `Assigned to ${assignee.name} by ${actor.name}`);
-    return { owner: assignee.name, ownerId: String(assignee.id), status: lead.status, taskCreated: true };
+    return { owner: assignee.name, ownerId: String(assignee.id), status: lead.status, taskCreated: true, warningCheckId: "" };
   },
   async fixAssignedLeads(actor) {
     if (actor.role !== "Manager") throw new Error("Only managers can fix assigned leads.");

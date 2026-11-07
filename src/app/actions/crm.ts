@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
-import { invalidate } from "@/lib/cache";
+import { getCachedValue, invalidate } from "@/lib/cache";
 import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { hosts, ZohoError } from "@/lib/zoho/client";
@@ -166,7 +166,7 @@ export async function addLeadAction(input: unknown) {
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
     if (assigneeId && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     const lead = await crm().createLead(data, user, assigneeId, forceCreate);
-    invalidate("leads", ...(lead.assignedToId ? ["visits"] : []));
+    await invalidate("leads", ...(lead.assignedToId ? ["visits"] : []));
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
   }, () => submittedPhone);
 }
@@ -217,7 +217,7 @@ export async function updateLeadAction(input: unknown) {
       status: p.status, remarks: p.remarks, followUp: p.followUp,
     };
     await crm().updateLead(p.id, patch, user);
-    invalidate("leads");
+    await invalidate("leads");
     return { zohoUrl: zohoLeadUrl(p.id) };
   }, () => submittedPhone);
 }
@@ -225,7 +225,7 @@ export async function updateLeadAction(input: unknown) {
 const reassignLeadSchema = z.object({ id, assignedToId: id });
 
 export async function reassignLeadAction(input: unknown) {
-  return run<{ owner: string; ownerId: string; status: string; taskCreated: boolean; taskWarning?: string; historyWarning?: string; zohoUrl?: string }>(async () => {
+  return run<{ owner: string; ownerId: string; status: string; taskCreated: boolean; warningCheckId: string; zohoUrl?: string }>(async () => {
     const user = await requireActionUser("leads");
     if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can reassign leads.");
     const p = reassignLeadSchema.parse(input);
@@ -233,8 +233,19 @@ export async function reassignLeadAction(input: unknown) {
     const assignee = (await crm().listAssignableUsers()).find((member) => String(member.id) === String(p.assignedToId));
     if (!assignee) throw new ForbiddenError("Choose an active team member.");
     const assignment = await crm().assignLead(p.id, p.assignedToId, user);
-    invalidate("leads");
+    await invalidate("leads", "visits");
+    revalidatePath("/leads");
+    revalidatePath("/visits");
     return { ...assignment, zohoUrl: zohoLeadUrl(p.id) };
+  });
+}
+
+export async function getAssignmentWarningsAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    if (!canAssignLeads(user.role)) throw new ForbiddenError("You cannot check reassignment warnings.");
+    const { id: warningCheckId } = z.object({ id }).parse(input);
+    return getCachedValue<{ taskWarning?: string; historyWarning?: string }>(`assignment-warnings:${warningCheckId}`);
   });
 }
 
@@ -247,7 +258,7 @@ export async function deleteLeadAction(input: unknown) {
     const p = deleteLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
     await crm().deleteLead(p.id);
-    invalidate("leads");
+    await invalidate("leads");
   });
 }
 
@@ -261,7 +272,7 @@ export async function saveLeadUpdateAction(input: unknown) {
       if (p.assignedTo && !(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     }
     await crm().updateLead(p.id, { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo }, user);
-    invalidate("leads");
+    await invalidate("leads");
     return { zohoUrl: zohoLeadUrl(p.id) };
   });
 }
@@ -292,7 +303,7 @@ export async function logCallAction(input: unknown) {
       throw new ForbiddenError("Call Back Later requires a follow-up date.");
     }
     const result = await crm().logCall(data, user);
-    invalidate("leads", "visits");
+    await invalidate("leads", "visits");
     return result;
   });
 }
@@ -302,7 +313,7 @@ export async function fixAssignedLeadsAction() {
     const user = await requireActionUser("leads");
     if (user.role !== "Manager") throw new ForbiddenError("Only managers can fix assigned leads.");
     const changed = await crm().fixAssignedLeads(user);
-    invalidate("leads");
+    await invalidate("leads");
     return { changed };
   });
 }
@@ -345,7 +356,7 @@ export async function createQuoteAction(input: unknown) {
     const existingQuotes = await repository.listQuotes();
     const offerNo = nextOfferNo(existingQuotes.map((quote) => quote.offerNo), todayIST());
     const quote = await repository.createQuote({ ...q, offerNo }, user, executive);
-    invalidate("quotes", "leads");
+    await invalidate("quotes", "leads");
     return quote;
   });
 }
@@ -362,7 +373,7 @@ export async function markQuotationSentAction(input: unknown) {
         throw new ForbiddenError("A closed lead cannot be marked as quotation sent.");
       }
       await crm().updateLead(lead.id, { status: "Quotation Sent" }, user);
-      invalidate("leads", "quotes");
+      await invalidate("leads", "quotes");
     }
     return { status: "Quotation Sent" as const };
   });
@@ -411,7 +422,7 @@ export async function scheduleVisitAction(input: unknown) {
     const executive = isExecutive(user) ? user.name : v.executive;
     if (!executive || !(await assignableNames()).includes(executive)) throw new ForbiddenError("Choose a team member.");
     await crm().createVisit({ ...v, executive }, user);
-    invalidate("visits");
+    await invalidate("visits");
     revalidatePath("/visits");
   });
 }
@@ -433,7 +444,7 @@ export async function updateVisitAction(input: unknown) {
       throw new ForbiddenError("You can only update your own work.");
     }
     await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user, visit);
-    invalidate("visits");
+    await invalidate("visits");
     revalidatePath("/visits");
   });
 }

@@ -13,15 +13,16 @@ type CacheEntry = {
   refresh?: Promise<unknown>;
 };
 type CacheStats = { hits: number; misses: number; staleHits: number };
+type CacheStore = { inflight: Map<string, Promise<unknown>>; values: Map<string, CacheEntry>; generations: Map<string, number> };
 
 const STALE_TTL_MS = 60 * 60_000;
 const g = globalThis as unknown as {
-  __atplCache?: { inflight: Map<string, Promise<unknown>>; values: Map<string, CacheEntry> };
+  __atplCache?: CacheStore;
   __atplCacheRedisWarningLogged?: boolean;
   __atplCacheRedisUnavailableUntil?: number;
   __atplCacheStats?: CacheStats;
 };
-const store = (g.__atplCache ??= { inflight: new Map(), values: new Map() });
+const store = (g.__atplCache ??= { inflight: new Map(), values: new Map(), generations: new Map() });
 const stats = (g.__atplCacheStats ??= { hits: 0, misses: 0, staleHits: 0 });
 
 const tagFor = (key: string) => {
@@ -70,6 +71,41 @@ async function redisCommand(args: string[]): Promise<unknown | undefined> {
     }
     return undefined;
   }
+}
+
+async function redisPipeline(commands: string[][]): Promise<void> {
+  const config = redisConfig();
+  if (!config || (g.__atplCacheRedisUnavailableUntil ?? 0) > Date.now() || !commands.length) return;
+  try {
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(commands),
+      cache: "no-store",
+      signal: AbortSignal.timeout(800),
+    });
+    if (!response.ok) throw new Error(`Upstash REST request returned ${response.status}`);
+    const results = await response.json() as { result?: unknown; error?: string }[];
+    const failure = results.find((result) => result.error);
+    if (failure?.error) throw new Error(failure.error);
+  } catch (error) {
+    g.__atplCacheRedisUnavailableUntil = Date.now() + 60_000;
+    if (!g.__atplCacheRedisWarningLogged) {
+      console.error("[cache] Upstash cache unavailable; using process-local cache", {
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      g.__atplCacheRedisWarningLogged = true;
+    }
+  }
+}
+
+function generationFor(key: string) {
+  let generation = 0;
+  for (const [prefix, version] of store.generations) {
+    if (key === prefix || key.startsWith(`${prefix}:`)) generation += version;
+  }
+  return generation;
 }
 
 function parseCachedValue(value: unknown): unknown | undefined {
@@ -147,7 +183,8 @@ export async function cached<T>(
     return pending as Promise<T>;
   }
 
-  const task = (async () => {
+  const task: Promise<unknown> = (async () => {
+    const generation = generationFor(key);
     const [remoteFresh, remoteStale] = await readRedisValues(key);
     if (remoteFresh !== undefined) {
       stats.hits += 1;
@@ -166,13 +203,16 @@ export async function cached<T>(
 
     stats.misses += 1;
     const value = await load();
+    if (generationFor(key) !== generation) return value;
     const entry: CacheEntry = {
       value, expiresAt: Date.now() + ttlMs, staleUntil: keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS, ttlMs, keepStale, load,
     };
     store.values.set(key, entry);
     await writeRedisValue(key, value, ttlMs, keepStale);
     return value;
-  })().finally(() => store.inflight.delete(key));
+  })().finally(() => {
+    if (store.inflight.get(key) === task) store.inflight.delete(key);
+  });
   store.inflight.set(key, task);
   return task as Promise<T>;
 }
@@ -188,6 +228,12 @@ export async function setCachedValue<T>(key: string, ttlMs: number, value: T): P
   };
   store.values.set(key, entry);
   await writeRedisValue(key, value, ttlMs);
+}
+
+export async function getCachedValue<T>(key: string): Promise<T | undefined> {
+  const [fresh] = await readRedisValues(key);
+  if (fresh !== undefined) return fresh as T;
+  return store.values.get(key)?.value as T | undefined;
 }
 
 function refreshInBackground(key: string, entry: CacheEntry) {
@@ -218,27 +264,37 @@ async function invalidateRedisPrefix(prefix: string) {
   const index = `atpl:cache:index:${tagFor(prefix)}`;
   const keys = await redisCommand(["SMEMBERS", index]);
   if (!Array.isArray(keys)) return;
-  for (const key of keys.filter((item): item is string => typeof item === "string")) {
-    if (key !== prefix && !key.startsWith(`${prefix}:`)) continue;
+  const matching = keys.filter((item): item is string =>
+    typeof item === "string" && (item === prefix || item.startsWith(`${prefix}:`)),
+  );
+  if (!matching.length) return;
+  const redisEntryKeys = matching.flatMap((key) => {
     const redis = redisKeys(key);
-    await redisCommand(["DEL", redis.fresh, redis.stale]);
-    await redisCommand(["SREM", index, key]);
-  }
+    return [redis.fresh, redis.stale];
+  });
+  await redisPipeline([["DEL", ...redisEntryKeys], ["SREM", index, ...matching]]);
 }
 
-export function invalidate(...prefixes: string[]) {
+export async function invalidate(...prefixes: string[]): Promise<void> {
+  const work: Promise<void>[] = [];
   for (const prefix of prefixes) {
+    store.generations.set(prefix, (store.generations.get(prefix) ?? 0) + 1);
     for (const key of store.values.keys()) {
       if (key === prefix || key.startsWith(`${prefix}:`)) store.values.delete(key);
     }
-    scheduleAfter(() => invalidateRedisPrefix(prefix));
+    for (const key of store.inflight.keys()) {
+      if (key === prefix || key.startsWith(`${prefix}:`)) store.inflight.delete(key);
+    }
+    work.push(invalidateRedisPrefix(prefix));
     revalidateTag(tagFor(prefix));
   }
+  await Promise.all(work);
 }
 
 export function resetMemoryCache() {
   store.inflight.clear();
   store.values.clear();
+  store.generations.clear();
 }
 
 export function cacheStats(): CacheStats {

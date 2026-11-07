@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
-import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getLeadSourcesAction, getLeadTimelineAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
+import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getAssignmentWarningsAction, getLeadSourcesAction, getLeadTimelineAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction } from "@/app/actions/crm";
 import {
   LEAD_SOURCES, LEAD_STATUSES, adjustLeadTabCounts, canAssignLeads, leadsForTab, normalizePhone, reassignLeadOptimistically, todayIST,
   type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
@@ -520,14 +520,22 @@ export function LeadsClient({ user, leads, executives, assignees, assigneesUnava
         optimisticAssignments.current.delete(action.lead.id);
         setJustAdded((current) => current?.id === action.lead.id ? persisted : current);
         setAction(null);
-        void requestPage(1, false).catch((error: unknown) =>
-          toast.error(error instanceof Error ? error.message : "Unable to refresh leads."),
-        );
-        if (assignment.historyWarning) toast.warning(`${assignment.historyWarning} Reassigned to ${assignment.owner}.`);
-        else toast.success(`Reassigned to ${assignment.owner}.`);
+        toast.success(`Reassigned to ${assignment.owner}.`);
+        if (assignment.warningCheckId) void pollAssignmentWarnings(assignment.warningCheckId);
       }} />}
     </div>
   );
+}
+
+async function pollAssignmentWarnings(warningCheckId: string) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const result = await getAssignmentWarningsAction({ id: warningCheckId });
+    if (!result.ok || result.data === null || result.data === undefined) continue;
+    if (result.data.taskWarning) toast.warning(`${result.data.taskWarning} The owner update is saved.`);
+    if (result.data.historyWarning) toast.warning(`${result.data.historyWarning} The owner update is saved.`);
+    return;
+  }
 }
 
 function ActionButtons({ lead, manager, pending, onAction }: { lead: Lead; manager: boolean; pending: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
@@ -644,7 +652,7 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
 }
 
 function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssignees, onRetryAssignees, onPendingChange, onOptimisticChange, onRollbackChange, onClose, onDone, onAssigned, onOptimisticAssign, onRollbackAssign }: {
-  action: LeadMutationAction; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; onPendingChange: (pending: boolean) => void; onOptimisticChange: (before: Lead, after: Lead | null) => void; onRollbackChange: (before: Lead | null, after: Lead | null) => void; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (assignment: { owner: string; ownerId: string; status: string; historyWarning?: string }) => void; onOptimisticAssign: (member: { id: string; name: string }) => void; onRollbackAssign: () => void;
+  action: LeadMutationAction; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; onPendingChange: (pending: boolean) => void; onOptimisticChange: (before: Lead, after: Lead | null) => void; onRollbackChange: (before: Lead | null, after: Lead | null) => void; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (assignment: { owner: string; ownerId: string; status: string; warningCheckId: string }) => void; onOptimisticAssign: (member: { id: string; name: string }) => void; onRollbackAssign: () => void;
 }) {
   useBodyScrollLock(true);
   const [pending, start] = useTransition();
@@ -708,8 +716,12 @@ function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssi
         if (action.type === "reassign") {
           const assignment = result.data;
           if (assignment && "ownerId" in assignment) {
-            if (assignment.taskWarning) toast.warning(`${assignment.taskWarning}. The owner update is saved.`);
-            onAssigned({ owner: assignment.owner, ownerId: assignment.ownerId, status: assignment.status, historyWarning: assignment.historyWarning });
+            onAssigned({
+              owner: assignment.owner,
+              ownerId: assignment.ownerId,
+              status: assignment.status,
+              warningCheckId: assignment.warningCheckId,
+            });
           }
         }
         else {

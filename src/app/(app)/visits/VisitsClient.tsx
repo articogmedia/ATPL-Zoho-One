@@ -263,26 +263,26 @@ const Item = memo(function Item({ v, today, onOptimisticChange }: {
         </Button>
       )}
 
-      <div className="grid grid-cols-4 gap-1.5 border-t pt-3 sm:gap-2">
+      <div className="grid grid-cols-2 gap-2 border-t pt-3 sm:grid-cols-4">
         <Button type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] sm:flex-row sm:gap-1 sm:text-xs" disabled={!v.phone || savingAction !== null} onClick={() => setCallOpen(true)} aria-label="Call">
-          <Phone className="h-4 w-4 shrink-0" /><span>Call</span>
+          <Phone className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Call</span>
         </Button>
         {whatsappHref
           ? <Button asChild type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] text-[#087443] hover:bg-[#25D366]/10 sm:flex-row sm:gap-1 sm:text-xs">
-            <a href={whatsappHref} target="_blank" rel="noreferrer" aria-label="WhatsApp"><WhatsAppIcon className="h-4 w-4 shrink-0" /><span>WhatsApp</span></a>
+            <a href={whatsappHref} target="_blank" rel="noreferrer" aria-label="WhatsApp" title="WhatsApp"><WhatsAppIcon className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">WhatsApp</span></a>
           </Button>
-          : <Button type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] sm:flex-row sm:gap-1 sm:text-xs" disabled aria-label="WhatsApp unavailable">
-            <WhatsAppIcon className="h-4 w-4 shrink-0" /><span>WhatsApp</span>
+          : <Button type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] sm:flex-row sm:gap-1 sm:text-xs" disabled aria-label="WhatsApp unavailable" title="No mobile number on this lead">
+            <WhatsAppIcon className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">WhatsApp</span>
           </Button>}
         {quote
           ? <Button asChild type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] sm:flex-row sm:gap-1 sm:text-xs">
-            <Link href={quote}><FileText className="h-4 w-4 shrink-0" /><span>Quotation</span></Link>
+            <Link href={quote}><FileText className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Quotation</span></Link>
           </Button>
           : <Button type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] sm:flex-row sm:gap-1 sm:text-xs" disabled title="No customer linked to this task">
-            <FileText className="h-4 w-4 shrink-0" /><span>Quotation</span>
+            <FileText className="h-4 w-4 shrink-0" /><span className="min-w-0 truncate">Quotation</span>
           </Button>}
         <Button type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] sm:flex-row sm:gap-1 sm:text-xs" disabled={savingAction !== null || v.status === "Completed"} onClick={openReschedule}>
-          {savingAction === "reschedule" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4 shrink-0" />}<span>Reschedule</span>
+          {savingAction === "reschedule" ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <CalendarClock className="h-4 w-4 shrink-0" />}<span className="min-w-0 truncate">Reschedule</span>
         </Button>
       </div>
 

@@ -19,6 +19,7 @@ export type SiteVisitsSchema = {
   date?: string;
   time?: string;
   status?: string;
+  phone?: string;
   address?: string;
   notes?: string;
   nextAction?: string;
@@ -65,6 +66,7 @@ export async function getSiteVisitsSchema(): Promise<SiteVisitsSchema | null> {
       const time = findField(fields, (field) => text(field).includes("time") && /date/.test(label(field)) === false);
       const address = findField(fields, (field) => /address|location/.test(text(field)));
       const notes = findField(fields, (field) => /notes?|remarks?|description/.test(text(field)));
+      const phone = findField(fields, (field) => /mobile|phone|telephone/.test(text(field)));
       const nextAction = findField(fields, (field) => /nextaction|followupaction/.test(text(field)));
       const followUp = findField(fields, (field) => /followupdate/.test(text(field)));
       const statusField = fields.find((field) => /status|stage/.test(text(field)) && field.pick_list_values?.length);
@@ -80,7 +82,7 @@ export async function getSiteVisitsSchema(): Promise<SiteVisitsSchema | null> {
 
       return {
         module: moduleApiName,
-        lead, date, time, address, notes, nextAction, followUp,
+        lead, date, time, address, phone, notes, nextAction, followUp,
         status: apiName(statusField ?? {}),
         statusValues,
       };
@@ -108,7 +110,7 @@ function isoTime(value: unknown): string {
 
 export async function listSiteVisits(schema: SiteVisitsSchema, leads: ReadonlyMap<string, Lead>): Promise<Visit[]> {
   if (!schema.lead || !schema.date) return [];
-  const fields = [...new Set([schema.lead, schema.date, schema.time, schema.status, schema.address, schema.notes, schema.nextAction, schema.followUp, "Owner", "Name"].filter(Boolean) as string[])];
+  const fields = [...new Set([schema.lead, schema.date, schema.time, schema.status, schema.address, schema.phone, schema.notes, schema.nextAction, schema.followUp, "Owner", "Name"].filter(Boolean) as string[])];
   const records = await zohoList<Record<string, unknown>>(schema.module, fields, 1000);
   return records.map((record) => mapSiteVisitRecord(schema, record, leads)).filter((visit) => visit.id && visit.leadId);
 }
@@ -126,7 +128,7 @@ export function mapSiteVisitRecord(schema: SiteVisitsSchema, record: Record<stri
     module: schema.module,
     leadId: related?.id ?? "",
     customer: lead ? lead.company || lead.name : related?.name ?? "",
-    phone: lead?.phone ?? "",
+    phone: String((schema.phone ? record[schema.phone] : "") ?? "").trim() || lead?.phone || "",
     address: String(schema.address ? record[schema.address] ?? lead?.address ?? "" : lead?.address ?? ""),
     area: lead?.area ?? "",
     executive: owner?.name ?? "",

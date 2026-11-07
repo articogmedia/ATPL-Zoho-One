@@ -45,7 +45,7 @@ export function quoteLineItemsField(fieldNames: Iterable<string>): QuoteLineItem
   const names = new Set(fieldNames);
   return names.has("Quoted_Items") ? "Quoted_Items" : "Product_Details";
 }
-export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; [k: string]: unknown };
+export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; Mobile?: string; Phone?: string; [k: string]: unknown };
 export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
 export type ZEvent = { Event_Title?: string; Start_DateTime?: string; Created_Time?: string; Owner?: Ref; Description?: string };
 export type ZNote = { Note_Title?: string; Note_Content?: string; Created_Time?: string; Owner?: Ref; Created_By?: Ref };
@@ -232,7 +232,7 @@ export function mapTask(z: ZTask, leadsById: ReadonlyMap<string, Lead>): Visit {
     id: String(z.id).trim(),
     leadId: related?.id ?? "",
     customer: lead ? lead.company || lead.name : related?.name ?? "",
-    phone: lead?.phone ?? "",
+    phone: String(z.Mobile || z.Phone || lead?.phone || ""),
     address: lead?.address ?? "",
     area: lead?.area ?? "",
     executive: cleanZohoDisplayName(z.Owner?.name),

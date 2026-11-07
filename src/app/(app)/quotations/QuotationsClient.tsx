@@ -807,6 +807,13 @@ function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; t
 
 type Item = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
 
+class SharePreparationError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "SharePreparationError";
+  }
+}
+
 function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, offerDate, status = "Draft" }: {
  lead: QuotationCustomer; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; subject: string; setSubject: (subject: string) => void;
   onBack: () => void; onMarkSent: () => Promise<void>;
@@ -905,7 +912,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     });
     const result = await response.json().catch(() => null) as { url?: string; error?: string } | null;
     if (!response.ok || !result?.url) {
-      throw new Error(result?.error || `Could not prepare a shareable PDF (HTTP ${response.status}).`);
+      throw new SharePreparationError(result?.error || `Could not prepare a shareable PDF (HTTP ${response.status}).`, response.status);
     }
     setShareUrl(result.url);
     return result.url;
@@ -942,7 +949,10 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       toast.error("Customer mobile number must contain 10 digits for WhatsApp.");
       return;
     }
-    const whatsappWindow = window.open("about:blank", "_blank");
+    const whatsappWindow = window.open(
+      `https://wa.me/91${waPhone}?text=${encodeURIComponent(shortMessage)}`,
+      "_blank",
+    );
     setDownloading(true);
     try {
       const publicUrl = await prepareShareUrl();
@@ -977,11 +987,48 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       await onMarkSent();
       toast.success("Quotation PDF link is ready to share in WhatsApp.");
     } catch (error) {
+      if (error instanceof SharePreparationError && error.status === 503 && error.message.includes("BLOB_READ_WRITE_TOKEN")) {
+        try {
+          const file = await buildPdfFile();
+          if (navigator.share && navigator.canShare?.({ files: [file] })) {
+            try {
+              await navigator.share({ files: [file], title: `Offer ${offerNo}`, text: shortMessage });
+              whatsappWindow?.close();
+              await onMarkSent();
+              toast.success("Quotation PDF shared.");
+              return;
+            } catch (shareError) {
+              if (shareError instanceof DOMException && shareError.name === "AbortError") {
+                whatsappWindow?.close();
+                return;
+              }
+              console.warn("[quotations] native file share failed; downloading PDF for WhatsApp", shareError);
+            }
+          }
+          downloadFile(file);
+          const manualMessage = `${shortMessage}\nPlease see the attached quotation PDF.`;
+          const whatsappUrl = `https://wa.me/91${waPhone}?text=${encodeURIComponent(manualMessage)}`;
+          if (whatsappWindow && !whatsappWindow.closed) {
+            whatsappWindow.opener = null;
+            whatsappWindow.location.href = whatsappUrl;
+          } else {
+            window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+          }
+          await onMarkSent();
+          toast.success("PDF downloaded. Attach it in WhatsApp.");
+          return;
+        } catch (fallbackError) {
+          whatsappWindow?.close();
+          toast.error(fallbackError instanceof Error ? fallbackError.message : "Could not prepare the quotation PDF.");
+          return;
+        }
+      }
       whatsappWindow?.close();
       toast.error(error instanceof Error ? error.message : "Could not share the quotation PDF.");
     } finally {
       setDownloading(false);
     }
+
   };
   const copyShareLink = async () => {
     if (!shareUrl) return;

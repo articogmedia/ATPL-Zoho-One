@@ -27,7 +27,7 @@ export interface CrmRepository {
   findLeadByPhone(phone: string): Promise<{ lead: Lead; matchedField: "Mobile" | "Phone" } | null>;
   listAssignableUsers(): Promise<User[]>;
   createLead(input: NewLead, actor: User, assignToId: string | null, forceCreate?: boolean): Promise<Lead>;
-  assignLead(id: string, assigneeId: string, actor: User): Promise<{ owner: string; ownerId: string; status: string; taskCreated: boolean; taskWarning?: string; historyWarning?: string }>;
+  assignLead(id: string, assigneeId: string, actor: User): Promise<{ owner: string; ownerId: string; status: string; taskCreated: boolean; warningCheckId: string }>;
   fixAssignedLeads(actor: User): Promise<number>;
   listFixableAssignedLeads(actor: User): Promise<{ id: string; name: string; ownerName: string }[]>;
   updateLead(id: string, patch: LeadPatch, actor: User): Promise<void>;

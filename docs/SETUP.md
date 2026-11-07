@@ -45,10 +45,12 @@ authorization errors, a separate Self Client may be needed for the sandbox.
 
 ### Public quotation PDF sharing
 
-Create a Vercel Blob store in the project and add its read/write token as
-`BLOB_READ_WRITE_TOKEN` in Vercel and local `.env.local`. WhatsApp sharing uploads
-the generated PDF under a random, unguessable filename and shares the public URL.
-Keep this token server-side; it is never sent to the browser.
+In the Vercel Dashboard, open **Storage → Create Blob store**, then connect the
+store to this project and redeploy. Vercel adds `BLOB_READ_WRITE_TOKEN`; add the
+same value to local `.env.local` for development. WhatsApp sharing uploads the
+generated PDF under a random, unguessable filename and shares the public URL.
+Keep this token server-side; it is never sent to the browser. Without the token,
+the portal downloads the PDF and opens WhatsApp so it can be attached manually.
 
 ### Environment variables
 

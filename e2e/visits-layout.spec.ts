@@ -4,6 +4,7 @@ for (const viewport of [
   { width: 360, height: 800 },
   { width: 390, height: 844 },
   { width: 430, height: 932 },
+  { width: 768, height: 900 },
   { width: 1366, height: 768 },
   { width: 1920, height: 1080 },
 ]) {
@@ -38,6 +39,15 @@ for (const viewport of [
           expect(boxes.every(Boolean)).toBe(true);
           expect(boxes.map((box) => box!.height)).toEqual([44, 44, 44, 44]);
           expect(Math.max(...boxes.map((box) => box!.width)) - Math.min(...boxes.map((box) => box!.width))).toBeLessThanOrEqual(1);
+          for (let first = 0; first < boxes.length; first += 1) {
+            for (let second = first + 1; second < boxes.length; second += 1) {
+              const a = boxes[first]!;
+              const b = boxes[second]!;
+              const intersects = Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x)
+                && Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y);
+              expect(intersects, `action buttons ${first} and ${second} overlap at ${viewport.width}px`).toBe(false);
+            }
+          }
           const whatsapp = card.getByRole("link", { name: "WhatsApp" });
           if (await whatsapp.count()) await expect(whatsapp).toHaveAttribute("href", /^https:\/\/wa\.me\/91\d{10}\?text=/);
         }

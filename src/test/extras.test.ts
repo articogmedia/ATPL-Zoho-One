@@ -158,6 +158,8 @@ describe("zoho mapping", () => {
   });
   it("normalizes duplicate phone numbers and maps every call outcome", () => {
     expect(normalizePhone("+91 98765 43210")).toBe("9876543210");
+    expect(normalizePhone("91-98765-43210")).toBe("9876543210");
+    expect(normalizePhone("098765 43210")).toBe("9876543210");
     expect(CALL_STATUS_BY_OUTCOME).toMatchObject({
       Connected: "Contacted", "No Answer": "Attempted to Contact", Busy: "Attempted to Contact",
       "Call Back Later": "Callback in Future", "Wrong Number": "Not Responsive",

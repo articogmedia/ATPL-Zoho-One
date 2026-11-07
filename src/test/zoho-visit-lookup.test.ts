@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mapSiteVisitRecord } from "@/lib/zoho/site-visits";
+import type { Lead } from "@/lib/domain";
+import type { SiteVisitsSchema } from "@/lib/zoho/site-visits";
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/cache", () => ({
@@ -55,6 +58,7 @@ describe("Zoho visit lookup", () => {
     const visit = await zohoRepository.getVisit("task-1");
 
     expect(visit?.executiveId).toBe("sai-id");
+    expect(visit?.phone).toBe("9876543210");
     await zohoRepository.updateVisit("task-1", { status: "In Progress" }, manager, visit!);
 
     expect(write).toHaveBeenCalledWith("PUT", "/Tasks/task-1", { Status: "In Progress" });
@@ -62,6 +66,28 @@ describe("Zoho visit lookup", () => {
       Note_Title: "Work update",
       Parent_Id: { module: { api_name: "Leads" }, id: "lead-1" },
     }));
+  });
+
+  it("prefers the visit phone and falls back to the linked lead phone", () => {
+    const schema: SiteVisitsSchema = {
+      module: "Site_Visits",
+      lead: "Lead_Name",
+      phone: "Mobile",
+      date: "Visit_Date",
+      statusValues: { Assigned: "Assigned", "In Progress": "In Progress", Completed: "Completed" },
+    };
+    const linkedLead: Lead = {
+      id: "lead-1", name: "Customer", company: "Customer Co", phone: "9876543210", area: "",
+      source: "Direct Call", status: "Fresh Lead", assignedTo: null, remarks: "", createdOn: "",
+      address: "", touchedBy: [],
+    };
+    const leads = new Map<string, Lead>([[linkedLead.id, linkedLead]]);
+    expect(mapSiteVisitRecord(schema, {
+      id: "visit-1", Lead_Name: { id: "lead-1", name: "Customer" }, Mobile: "+91 99888 77665",
+    }, leads).phone).toBe("+91 99888 77665");
+    expect(mapSiteVisitRecord(schema, {
+      id: "visit-2", Lead_Name: { id: "lead-1", name: "Customer" }, Mobile: "",
+    }, leads).phone).toBe("9876543210");
   });
 
   it("fetches a task by ID instead of depending on the cached/paginated task list", async () => {
