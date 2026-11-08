@@ -3,7 +3,7 @@ import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
 import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User, type Visit } from "@/lib/domain";
-import { cached, invalidate, setCachedValue } from "@/lib/cache";
+import { cached, invalidate, patchCachedValues, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository } from "@/lib/crm/repository";
 import { hosts, zoho, zohoList, zohoWrite, ZohoError, ZOHO_CRM_API_VERSION } from "./client";
@@ -13,6 +13,8 @@ import {
   quoteLineItemsField, type QuoteLineItemsField, type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
 import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitRecord, mapSiteVisitUpdate } from "./site-visits";
+import { zohoDateTime } from "./date-time";
+import { leadSearchCriteria } from "./search";
 
 const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
 const LEAD_DETAIL_FIELDS = [...LEAD_FIELDS, "Street", "Created_By", "Modified_By"];
@@ -34,7 +36,7 @@ const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_I
 const NOTE_FIELDS = ["Note_Title", "Note_Content", "Created_Time", "Owner", "Created_By"];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result", "Description"];
 const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", "Description"];
-const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", "Account_Name", "Contact_Name", ...Object.values(FIELD.quote)];
+const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products, and field metadata
@@ -578,9 +580,7 @@ export const zohoRepository: CrmRepository = {
   async searchLeads(query, page = 1) {
     const normalized = query.trim().replace(/\s+/g, " ");
     if (normalized.length < 2) return { leads: [], hasMore: false };
-    const criteriaValue = normalized.replace(/[\\(),:]/g, "\\$&");
-    const criteria = `(${["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City"]
-      .map((field) => `(${field}:contains:${criteriaValue})`).join("or")})`;
+    const criteria = leadSearchCriteria(normalized);
     const response = await zoho<{ data?: ZLead[]; info?: { more_records?: boolean } }>("GET", "/Leads/search", {
       query: { fields: LEAD_FIELDS.join(","), criteria, per_page: 50, page: Math.max(1, Math.floor(page)) },
     });
@@ -898,11 +898,12 @@ export const zohoRepository: CrmRepository = {
       }));
   },
 
-  async updateLead(id, p, actor) {
-    const current = await this.getLead(id);
+  async updateLead(id, p, actor, knownLead) {
+    const current = knownLead ?? await this.getLead(id);
     if (!current) throw new ZohoError("Lead not found", 404);
     const record: Record<string, unknown> = {};
     const parts: string[] = [];
+    let updatedOwner: User | undefined;
 
     if (p.name?.trim() && p.name.trim() !== current.name) {
       record.Last_Name = p.name.trim();
@@ -922,7 +923,8 @@ export const zohoRepository: CrmRepository = {
     }
     if (p.assignedTo !== undefined && p.assignedTo !== current.assignedTo) {
       if (p.assignedTo) {
-        record.Owner = { id: (await userByName(p.assignedTo)).id };
+        updatedOwner = await userByName(p.assignedTo);
+        record.Owner = { id: updatedOwner.id };
         parts.push(`Assigned to ${p.assignedTo}`);
       } else {
         record.Owner = { id: await queueOwnerId() };
@@ -937,6 +939,21 @@ export const zohoRepository: CrmRepository = {
     if (!parts.length) return;
 
     if (Object.keys(record).length) await zohoWrite("PUT", `/Leads/${id}`, record, { trigger: ["workflow"] });
+    const updatedLead: Lead = {
+      ...current,
+      ...(p.name !== undefined ? { name: p.name.trim() } : {}),
+      ...(p.company !== undefined ? { company: p.company.trim() } : {}),
+      ...(p.phone !== undefined ? { phone: p.phone.trim() } : {}),
+      ...(p.source !== undefined ? { source: p.source } : {}),
+      ...(p.status !== undefined ? { status: p.status } : {}),
+      ...(p.remarks !== undefined ? { remarks: p.remarks.trim() } : {}),
+      ...(p.followUp !== undefined ? { followUp: p.followUp } : {}),
+      ...(p.assignedTo !== undefined ? {
+        assignedTo: updatedOwner?.name ?? p.assignedTo,
+        assignedToId: updatedOwner?.id ?? (p.assignedTo ? current.assignedToId : undefined),
+        ownerId: updatedOwner?.id ?? (p.assignedTo ? current.ownerId : undefined),
+      } : {}),
+    };
     const sideEffects: [string, () => Promise<unknown>][] = [
       ["history note", () => addHistoryNoteBestEffort(
         id, "Lead update", `${parts.join(" · ")} (by ${actor.name})`, { action: "update lead" },
@@ -953,7 +970,15 @@ export const zohoRepository: CrmRepository = {
         });
       }]);
     }
-    scheduleSideEffects("lead update", sideEffects, () => invalidate("leads", "users", "visits"));
+    scheduleSideEffects("lead update", sideEffects, () => invalidate("users", "visits"));
+    await patchCachedValues("leads", (value) => {
+      if (Array.isArray(value)) return value.map((lead) => (lead as Lead).id === id ? updatedLead : lead);
+      if (value && typeof value === "object" && "leads" in value && Array.isArray(value.leads)) {
+        return { ...value, leads: value.leads.map((lead) => (lead as Lead).id === id ? updatedLead : lead) };
+      }
+      return undefined;
+    }, SHORT);
+    return updatedLead;
   },
 
   async deleteLead(id) {
@@ -1028,7 +1053,7 @@ export const zohoRepository: CrmRepository = {
       Subject: `${input.outcome} - ${lead.name}`,
       ...relatedToLead(leadId), Call_Type: "Outbound",
       [FIELD.call.result]: input.outcome,
-      [FIELD.call.startTime]: new Date().toISOString(),
+      [FIELD.call.startTime]: zohoDateTime(),
       Description: input.remarks || undefined,
       ...(callOwner?.id.trim() ? { Owner: { id: callOwner.id.trim() } } : {}),
     });
@@ -1130,7 +1155,11 @@ export const zohoRepository: CrmRepository = {
     const schema = await quoteSchema();
     const lineItemsField = quoteLineItemsField(schema.fieldNames);
     const response = await zoho<{ data?: ZQuote[] }>("GET", `/Quotes/${encodeURIComponent(id)}`, {
-      query: { fields: [...new Set([...QUOTE_FIELDS, lineItemsField])].join(",") },
+      query: { fields: [...new Set([
+        ...QUOTE_FIELDS,
+        ...["Mobile", "Phone", "Customer_Name"].filter((field) => schema.fieldNames.has(field)),
+        lineItemsField,
+      ])].join(",") },
     });
     const record = response?.data?.[0];
     if (!record) return null;
@@ -1138,7 +1167,19 @@ export const zohoRepository: CrmRepository = {
     const leadId = rawLead && typeof rawLead === "object" && "id" in rawLead
       ? String(rawLead.id ?? "").trim()
       : typeof rawLead === "string" ? rawLead.trim() : "";
-    const [lead, products] = await Promise.all([leadId ? this.getLead(leadId) : null, this.listProducts()]);
+    let lead = leadId ? await this.getLead(leadId) : null;
+    const lookupName = (value: unknown) =>
+      value && typeof value === "object" ? String((value as { name?: string }).name ?? "").trim() : "";
+    const customerName = lookupName(record.Contact_Name) || lookupName(record.Account_Name);
+    const quotePhone = String(record.Mobile ?? record.Phone ?? "").trim();
+    if (!lead && customerName) {
+      const normalizedName = customerName.toLowerCase();
+      lead = (await this.listLeads()).find((candidate) =>
+        [candidate.name, candidate.company].some((value) => value.trim().toLowerCase() === normalizedName),
+      ) ?? null;
+    }
+    if (!lead && quotePhone) lead = (await this.findLeadByPhone(quotePhone))?.lead ?? null;
+    const products = await this.listProducts();
     const map = new Map(lead ? [[lead.id, lead]] : []);
     return mapQuote(record, map, new Map(products.map((product) => [product.id, product])), schema.fieldNames);
   },
@@ -1350,9 +1391,10 @@ export const zohoRepository: CrmRepository = {
       ...(input.isVisit ? [["lead status", () => advanceLead(lead.id, lead.status, "Site Visit Scheduled")] as [string, () => Promise<unknown>]] : []),
     ];
     if (input.isVisit) sideEffects.push(["calendar event", async () => {
-      const start = `${input.date}T${input.time}:00+05:30`;
-      const endMinutes = Number(input.time.slice(0, 2)) * 60 + Number(input.time.slice(3)) + 60;
-      const end = `${input.date}T${String(Math.floor(endMinutes / 60) % 24).padStart(2, "0")}:${String(endMinutes % 60).padStart(2, "0")}:00+05:30`;
+      const startDate = new Date(`${input.date}T${input.time}:00+05:30`);
+      const endDate = new Date(startDate.getTime() + 60 * 60_000);
+      const start = zohoDateTime(startDate);
+      const end = zohoDateTime(endDate);
       return zohoWrite("POST", "/Events", {
         Event_Title: `${input.type} - ${lead.company || lead.name}`,
         Start_DateTime: start, End_DateTime: end, Location: address || undefined,

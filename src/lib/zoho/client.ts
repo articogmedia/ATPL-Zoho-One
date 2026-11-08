@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { env, ZOHO_HOSTS } from "@/lib/env";
 import { newErrorReference } from "@/lib/crm-action-errors";
+import { logPerf } from "@/lib/perf-log";
 
 /** Server-side Zoho CRM client. Tokens never leave the server. */
 export class ZohoError extends Error {
@@ -47,6 +48,10 @@ export const hosts = () => {
   return resolved;
 };
 export const ZOHO_CRM_API_VERSION = "v6";
+
+function perfPath(path: string) {
+  return path.replace(/\/(?:\d{6,}|[a-f0-9-]{20,})(?=\/|$)/gi, "/:id");
+}
 
 const g = globalThis as unknown as {
   __atplZohoToken?: { value: string; exp: number };
@@ -116,6 +121,7 @@ async function requestAccessToken(timeoutMs = 15_000): Promise<{ value: string; 
       method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
+    logPerf("zoho.token_refresh", Date.now() - started, { status: null });
     const reference = newErrorReference();
     const zohoHosts = hosts();
     console.error("[zoho] token refresh transport failed", {
@@ -143,6 +149,7 @@ async function requestAccessToken(timeoutMs = 15_000): Promise<{ value: string; 
     access_token?: string; expires_in?: number; error?: string; error_description?: string;
     code?: string; message?: string; details?: Record<string, unknown>; field?: string;
   };
+  logPerf("zoho.token_refresh", Date.now() - started, { status: res.status });
   console.info(`[zoho] token ${res.status} ${Date.now() - started}ms`);
   if (!res.ok || !json.access_token) {
     const message = json.error_description ?? json.message ?? json.error ?? `Zoho token refresh failed (${res.status})`;
@@ -417,8 +424,15 @@ export async function zoho<T = unknown>(
   for (const [k, v] of Object.entries(opts.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
   const requestPath = `${path}${url.search}`;
   const operation = `${method} ${requestPath}`;
+  const timingPath = perfPath(path);
 
-  const token = await accessToken(retried, rejectedToken);
+  let token: string;
+  try {
+    token = await accessToken(retried, rejectedToken);
+  } catch (error) {
+    logPerf("zoho.request", Date.now() - started, { method, path: timingPath, status: null, retry: networkRetryAttempt });
+    throw error;
+  }
   let res: Response;
   const isLargeListGet = method === "GET" && /^\/(?:Products|Quotes|Leads)(?:\/search)?$/.test(path);
   const requestTimeoutMs = isLargeListGet ? 25_000 : method === "GET" ? 8_000 : 20_000;
@@ -466,10 +480,12 @@ export async function zoho<T = unknown>(
       { cause: message }, reference,
     );
   }
-  console.info(`[zoho] ${method} ${path} ${res.status} ${Date.now() - started}ms`);
-
-  if (res.status === 204) return null;
+  if (res.status === 204) {
+    logPerf("zoho.request", Date.now() - started, { method, path: timingPath, status: res.status, retry: networkRetryAttempt });
+    return null;
+  }
   const rawBody = await res.text();
+  logPerf("zoho.request", Date.now() - started, { method, path: timingPath, status: res.status, retry: networkRetryAttempt });
   let parsedBody: unknown = null;
   try {
     parsedBody = rawBody ? JSON.parse(rawBody) : null;

@@ -50,7 +50,6 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
   const router = useRouter();
   const refreshSilently = () => {
     startTransition(() => router.refresh());
-    window.setTimeout(() => startTransition(() => router.refresh()), 1_500);
   };
   const [leadSources, setLeadSources] = useState(initialLeadSources);
   const [leadSourcesUnavailable, setLeadSourcesUnavailable] = useState(initialLeadSourcesUnavailable);
@@ -559,7 +558,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
       id: readOnlyQuote.leadId,
       name: readOnlyQuote.customer,
       company: "",
-      phone: "",
+      phone: readOnlyQuote.phone ?? "",
       area: "",
       address: "",
       source: "Direct Call" as LeadSource,
@@ -582,7 +581,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
         offerNo={readOnlyQuote.offerNo}
         setOfferNo={() => undefined}
         items={readOnlyQuote.items ?? []}
-        subject={offerSubject((readOnlyQuote.items ?? []).map((item) => item.model))}
+        subject={readOnlyQuote.subject || offerSubject((readOnlyQuote.items ?? []).map((item) => item.model))}
         setSubject={() => undefined}
         onBack={() => setReadOnlyQuote(null)}
         onMarkSent={async () => undefined}
@@ -590,6 +589,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
         editableOfferNo={false}
         customer={readOnlyQuote.customer}
         offerDate={readOnlyQuote.date}
+        validTill={readOnlyQuote.validTill}
+        savedQuoteId={readOnlyQuote.id}
+        savedSubject={readOnlyQuote.subject}
         status={readOnlyQuote.status ?? "Draft"}
       />
       {savedDialog}
@@ -604,7 +606,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
       </Button>
     </div>
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
-    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} />
+    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedQuoteId={wizard.savedQuotation.id} />
     {savedDialog}
   </div>;
 
@@ -866,10 +868,10 @@ class SharePreparationError extends Error {
   }
 }
 
-function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, offerDate, status = "Draft" }: {
+function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, status = "Draft" }: {
  lead: QuotationCustomer; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; subject: string; setSubject: (subject: string) => void;
   onBack: () => void; onMarkSent: () => Promise<void>;
-  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; offerDate?: string; status?: string;
+  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; status?: string;
 }) {
   const t = quoteTotals(items);
   const customer = savedCustomer ?? (lead.company || lead.name);
@@ -885,7 +887,9 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   const lineAmount = (item: Item) => basicAmount(item) - (item.discount ?? 0);
   const validTillDate = new Date(offerDate ? `${offerDate}T12:00:00Z` : Date.now());
   validTillDate.setDate(validTillDate.getDate() + 30);
-  const validTill = new Intl.DateTimeFormat("en-GB", {
+  const validTill = savedValidTill ? new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric",
+  }).format(new Date(`${savedValidTill}T12:00:00+05:30`)) : new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric",
   }).format(validTillDate);
   const renderPart = (part: Item[], title: string, gst: string, startIndex = 0) => (
@@ -916,21 +920,23 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     : phoneDigits.startsWith("0") && phoneDigits.length === 11
       ? phoneDigits.slice(1)
       : phoneDigits.slice(-10);
-  const canCreatePdf = !!offerNo.trim() && !!customer.trim() && !!lead.id.trim() && items.length > 0;
+  const canCreatePdf = !!offerNo.trim() && !!customer.trim() && (!!lead.id.trim() || !!savedQuoteId) &&
+    items.length > 0 && items.every((item) => !!item.productId);
   const [downloading, setDownloading] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
+  const missingBlobHintShown = useRef(false);
   const buildPdfFile = async (): Promise<File> => {
     if (!offerNo.trim()) throw new Error("Offer reference is missing.");
     if (!customer.trim()) throw new Error("Customer name is missing.");
-    if (!lead.id.trim()) throw new Error("Customer record is missing.");
+    if (!lead.id.trim() && !savedQuoteId) throw new Error("Customer record is missing.");
     if (!items.length || items.some((item) => !item.productId)) throw new Error("Add at least one valid product.");
     const response = await fetch("/api/quotations/pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        leadId: lead.id,
+        ...(savedQuoteId ? { quoteId: savedQuoteId } : { leadId: lead.id }),
         offerNo,
-        subject,
+        subject: savedSubject || subject,
         items: items.map((item) => ({ productId: item.productId, qty: item.qty, discount: item.discount ?? 0 })),
       }),
     });
@@ -951,14 +957,14 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   const prepareShareUrl = async () => {
     if (!offerNo.trim()) throw new Error("Offer reference is missing.");
     if (!customer.trim()) throw new Error("Customer name is missing.");
-    if (!lead.id.trim()) throw new Error("Customer record is missing.");
+    if (!lead.id.trim() && !savedQuoteId) throw new Error("Customer record is missing.");
     const response = await fetch("/api/quotations/share", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        leadId: lead.id,
+        ...(savedQuoteId ? { quoteId: savedQuoteId } : { leadId: lead.id }),
         offerNo,
-        subject,
+        subject: savedSubject || subject,
         items: items.map((item) => ({ productId: item.productId, qty: item.qty, discount: item.discount ?? 0 })),
       }),
     });
@@ -998,13 +1004,28 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   const shareOnWhatsApp = async () => {
     if (downloading || !canCreatePdf) return;
     if (!/^\d{10}$/.test(waPhone)) {
-      toast.error("Customer mobile number must contain 10 digits for WhatsApp.");
+      toast.error("No valid mobile number is available for this customer.");
       return;
     }
-    const whatsappWindow = window.open(
-      `https://wa.me/91${waPhone}?text=${encodeURIComponent(shortMessage)}`,
-      "_blank",
-    );
+    const mobile = window.matchMedia("(max-width: 767px)").matches || "ontouchstart" in window;
+    const whatsappWindow = mobile ? null : window.open("about:blank", "_blank");
+    if (whatsappWindow) whatsappWindow.opener = null;
+    const openWhatsApp = (url: string) => {
+      if (mobile) {
+        window.location.assign(url);
+        return true;
+      }
+      if (whatsappWindow && !whatsappWindow.closed) {
+        whatsappWindow.location.replace(url);
+        return true;
+      }
+      return !!window.open(url, "_blank", "noopener");
+    };
+    const markSentInBackground = () => {
+      void onMarkSent().catch((error: unknown) =>
+        toast.warning(error instanceof Error ? error.message : "The PDF is ready, but the lead status could not be updated."),
+      );
+    };
     setDownloading(true);
     try {
       const publicUrl = await prepareShareUrl();
@@ -1019,7 +1040,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           try {
             await navigator.share({ files: [file], title: file.name, text: shortMessage });
             whatsappWindow?.close();
-            await onMarkSent();
+            markSentInBackground();
             return;
           } catch (error) {
             if (error instanceof DOMException && error.name === "AbortError") {
@@ -1031,14 +1052,8 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
         }
       }
       const wa = `https://wa.me/91${waPhone}?text=${encodeURIComponent(message)}`;
-      if (whatsappWindow && !whatsappWindow.closed) {
-        whatsappWindow.opener = null;
-        whatsappWindow.location.href = wa;
-      } else {
-        const opened = window.open(wa, "_blank", "noopener,noreferrer");
-        if (!opened) throw new Error("WhatsApp could not be opened. Copy the PDF link and share it manually.");
-      }
-      await onMarkSent();
+      if (!openWhatsApp(wa)) throw new Error("WhatsApp could not be opened. Copy the PDF link and share it manually.");
+      markSentInBackground();
       toast.success("Quotation PDF link is ready to share in WhatsApp.");
     } catch (error) {
       if (error instanceof SharePreparationError && error.status === 503 && error.message.includes("BLOB_READ_WRITE_TOKEN")) {
@@ -1048,7 +1063,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
             try {
               await navigator.share({ files: [file], title: `Offer ${offerNo}`, text: shortMessage });
               whatsappWindow?.close();
-              await onMarkSent();
+              markSentInBackground();
               toast.success("Quotation PDF shared.");
               return;
             } catch (shareError) {
@@ -1060,16 +1075,14 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
             }
           }
           downloadFile(file);
+          if (!missingBlobHintShown.current) {
+            missingBlobHintShown.current = true;
+            toast.success("PDF downloaded. Attach it in WhatsApp.");
+          }
           const manualMessage = `${shortMessage}\nPlease see the attached quotation PDF.`;
           const whatsappUrl = `https://wa.me/91${waPhone}?text=${encodeURIComponent(manualMessage)}`;
-          if (whatsappWindow && !whatsappWindow.closed) {
-            whatsappWindow.opener = null;
-            whatsappWindow.location.href = whatsappUrl;
-          } else {
-            window.open(whatsappUrl, "_blank", "noopener,noreferrer");
-          }
-          await onMarkSent();
-          toast.success("PDF downloaded. Attach it in WhatsApp.");
+          if (!openWhatsApp(whatsappUrl)) toast.warning("Open WhatsApp and attach the downloaded file.");
+          markSentInBackground();
           return;
         } catch (fallbackError) {
           whatsappWindow?.close();
@@ -1099,7 +1112,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
         <Button variant="outline" className="w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> {readOnly ? "Back to Create Quotation" : "Back to Products"}</Button>
         <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf} disabled={downloading || !canCreatePdf}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
-        <Button variant="outline" className="h-12 w-full bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 sm:w-auto" onClick={shareOnWhatsApp} disabled={downloading || !canCreatePdf}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
+        <Button variant="outline" title={!waPhone ? "No mobile number is available for this customer" : undefined} className="h-12 w-full bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 sm:w-auto" onClick={shareOnWhatsApp} disabled={downloading || !canCreatePdf || !waPhone}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
         {shareUrl && <Button type="button" variant="outline" className="h-12 w-full sm:w-auto" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
       </div>
       <article className="print-area offer-document mx-auto max-w-full overflow-hidden rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">

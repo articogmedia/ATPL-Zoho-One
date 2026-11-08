@@ -44,10 +44,6 @@ const leads: Lead[] = Array.from({ length: 6 }, (_, index) => ({
 }));
 const counts: Record<LeadTab, number> = { fresh: 1, assigned: 5, callback: 0, mine: 3, all: 6 };
 
-function response(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
-
 describe("LeadsClient server paging", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -67,19 +63,19 @@ describe("LeadsClient server paging", () => {
     vi.unstubAllGlobals();
   });
 
-  function renderClient() {
+  function renderClient(initialRows = leads.slice(0, 1), initialCount = 1, initialTab: LeadTab = "fresh") {
     return act(async () => {
       root.render(createElement(LeadsClient, {
         user: manager,
-        leads: leads.slice(0, 1),
+        leads: initialRows,
         executives: [],
         assignees: [],
         assigneesUnavailable: false,
         owners: [],
         canAssign: true,
         fixableLeads: [],
-        initialTab: "fresh",
-        initialCount: 1,
+        initialTab,
+        initialCount,
         tabCounts: counts,
         todaysFollowUps: 0,
         hasAnyLeads: true,
@@ -94,42 +90,16 @@ describe("LeadsClient server paging", () => {
     });
   }
 
-  it("shows all six rows after selecting All Leads", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
-      leads,
-      total: 6,
-      tabCounts: counts,
-      todaysFollowUps: 0,
-      hasAnyLeads: true,
-    })));
+  it("shows all already-loaded rows after selecting All Leads without a refetch", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
 
-    await renderClient();
+    await renderClient(leads, 6);
     await clickAllLeads();
 
     expect(host.querySelectorAll("#leads-list tbody tr")).toHaveLength(6);
     expect(host.textContent).toContain("Lead 6");
     expect(host.querySelector('[data-tab="all"]')?.textContent).toContain("(6)");
-  });
-
-  it("keeps the existing rows and counts on failure and offers a retry", async () => {
-    vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce(response({ error: "Unable to load leads right now." }, 500))
-      .mockResolvedValueOnce(response({ leads, total: 6, tabCounts: counts, hasAnyLeads: true })));
-
-    await renderClient();
-    await clickAllLeads();
-
-    expect(host.querySelectorAll("#leads-list tbody tr")).toHaveLength(1);
-    expect(host.textContent).toContain("Lead 1");
-    expect(host.textContent).not.toContain("No leads yet");
-    expect(host.querySelector('[data-tab="all"]')?.textContent).toContain("(6)");
-
-    const retry = mocks.toastError.mock.calls[0]?.[1]?.action;
-    expect(retry?.label).toBe("Retry");
-    await act(async () => {
-      retry.onClick();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
-    expect(host.querySelectorAll("#leads-list tbody tr")).toHaveLength(6);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

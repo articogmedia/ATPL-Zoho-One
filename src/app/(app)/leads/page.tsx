@@ -1,10 +1,11 @@
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
-import { leadsForTab, todayIST, type LeadTab } from "@/lib/domain";
+import { leadsForTab, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
 import { LeadsClient } from "./LeadsClient";
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { PageLoadError } from "@/components/PageLoadError";
 import { withPageTimeout } from "@/lib/page-timeout";
+import { env } from "@/lib/env";
 
 export const metadata = { title: "Manage Leads" };
 export const dynamic = "force-dynamic";
@@ -16,7 +17,8 @@ export default async function LeadsPage() {
   const perf = beginPagePerf("leads");
   const user = await requireSection("leads");
   const repo = crm();
-  let initialPage: { leads: Awaited<ReturnType<typeof repo.listLeads>>; total: number; hasMore: boolean };
+  let allLeads: Awaited<ReturnType<typeof repo.listLeads>>;
+  let totalLeads = 0;
   let fixableLeads: Awaited<ReturnType<typeof repo.listFixableAssignedLeads>> = [];
   let assignableUsers: Awaited<ReturnType<typeof repo.listAssignableUsers>> = [];
   let leadSources: Awaited<ReturnType<typeof repo.listLeadSources>> = [];
@@ -31,9 +33,14 @@ export default async function LeadsPage() {
     return null;
   });
   try {
-    initialPage = await withPageTimeout(repo.listLeadsPage
-      ? repo.listLeadsPage(1, 50, user.role === "Sales Executive" ? user.id : undefined)
-      : repo.listLeads().then((rows) => ({ leads: rows.slice(0, 50), total: rows.length, hasMore: rows.length > 50 })));
+    allLeads = await withPageTimeout(repo.listLeads());
+    const visibleLeads = visibleFor(user, allLeads);
+    totalLeads = visibleLeads.length;
+    if (allLeads.length >= env().ZOHO_MAX_LEADS && repo.listLeadsPage) {
+      totalLeads = await withPageTimeout(repo.listLeadsPage(
+        1, 1, user.role === "Sales Executive" ? user.id : undefined,
+      )).then((page) => page.total);
+    }
   } catch (error) {
     console.error("[page] leads data load failed", { message: error instanceof Error ? error.message : String(error) });
     endPagePerf(perf);
@@ -60,21 +67,20 @@ export default async function LeadsPage() {
   }
   assignableUsersFailed ||= assignableUsers.length === 0;
   leadSourcesUnavailable ||= leadSources.length === 0;
-  const visibleLeads = initialPage.leads;
+  const visibleLeads = visibleFor(user, allLeads);
   const tabs: LeadTab[] = ["fresh", "assigned", "callback", "mine", "all"];
   const tabCounts = Object.fromEntries(tabs.map((tab) => [tab, leadsForTab(user, visibleLeads, tab).length])) as Record<LeadTab, number>;
   const initialTab: LeadTab = user.role === "Manager" && tabCounts.fresh === 0 ? "all" : user.role === "Sales Executive" ? "mine" : "fresh";
-  const initialRows = leadsForTab(user, visibleLeads, initialTab);
   const todaysFollowUps = leadsForTab(user, visibleLeads, "callback").filter((lead) => lead.followUp === todayIST()).length;
-  console.info(`[page] leads ${Date.now() - started}ms (${initialRows.length}/${initialPage.total} rows)`);
+  console.info(`[page] leads ${Date.now() - started}ms (${visibleLeads.length}/${totalLeads} rows)`);
   endPagePerf(perf);
   return (
     <LeadsClient
       user={{ id: user.id, name: user.name, role: user.role }}
-      leads={initialRows}
-      initialHasMore={initialPage.hasMore}
+      leads={visibleLeads}
+      initialHasMore={false}
       initialTab={initialTab}
-      initialCount={tabCounts[initialTab]}
+      initialCount={totalLeads}
       tabCounts={tabCounts}
       todaysFollowUps={todaysFollowUps}
       hasAnyLeads={visibleLeads.length > 0}

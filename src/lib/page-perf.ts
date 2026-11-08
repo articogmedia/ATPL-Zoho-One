@@ -2,6 +2,7 @@ import "server-only";
 import { after } from "next/server";
 import { cacheStats } from "@/lib/cache";
 import { zohoRequestCount } from "@/lib/zoho/client";
+import { logPerf } from "@/lib/perf-log";
 
 type PagePerfSnapshot = {
   page: string;
@@ -17,9 +18,8 @@ export function beginPagePerf(page: string): PagePerfSnapshot {
 export function endPagePerf(snapshot: PagePerfSnapshot) {
   const report = () => {
     const current = cacheStats();
-    console.info("[perf]", {
+    logPerf("page.render", Date.now() - snapshot.startedAt, {
       page: snapshot.page,
-      totalMs: Date.now() - snapshot.startedAt,
       cacheHits: current.hits - snapshot.cache.hits,
       cacheMisses: current.misses - snapshot.cache.misses,
       staleCacheHits: current.staleHits - snapshot.cache.staleHits,

@@ -126,6 +126,9 @@ export type Quotation = {
   offerNo: string;
   leadId: string;
   customer: string;
+  phone?: string;
+  subject?: string;
+  validTill?: string;
   executive: string;
   total: number;
   date: string;
@@ -399,8 +402,12 @@ function matchesLeadFilters(lead: Lead, search: string, source: LeadSource | "Al
   if (filters.stage && filters.stage !== "All" && lead.status !== filters.stage) return false;
   if (filters.from && lead.createdOn < filters.from) return false;
   if (filters.to && lead.createdOn > filters.to) return false;
-  return !q || [lead.name, lead.company, lead.phone.replace(/\s/g, ""), lead.phone, lead.id]
+  if (!q) return true;
+  const textMatch = [lead.name, lead.company, lead.area, lead.id]
     .some((field) => field.toLowerCase().includes(q));
+  const digits = search.replace(/\D/g, "");
+  const phoneNeedle = digits.length > 10 ? digits.slice(-10) : digits;
+  return textMatch || (!!phoneNeedle && normalizePhone(lead.phone).includes(phoneNeedle));
 }
 
 export function reassignLeadOptimistically(

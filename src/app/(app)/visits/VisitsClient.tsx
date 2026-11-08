@@ -70,7 +70,6 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
   const summary = performance?.[range === "week" ? "week" : "month"];
   const refreshSilently = useCallback(() => {
     startTransition(() => router.refresh());
-    window.setTimeout(() => startTransition(() => router.refresh()), 1_500);
   }, [router]);
 
   useEffect(() => {
@@ -267,7 +266,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange, onMutationSucces
         {v.nextAction && <InfoLine icon={ClipboardList}>{v.nextAction}</InfoLine>}
         {v.followUp && <InfoLine icon={CalendarClock}>Follow-up {displayDate(v.followUp)}</InfoLine>}
         {(v.address || v.area) && <InfoLine icon={MapPin}>{[v.address, v.area].filter(Boolean).join(", ")}</InfoLine>}
-        {v.notes && <p className="break-words pl-6 text-xs italic text-muted-foreground/80">{v.notes}</p>}
+        {v.notes && <p className="break-words pl-6 text-xs italic text-muted-foreground">{v.notes}</p>}
       </div>
 
       {v.status === "Assigned" && (

@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { after } from "next/server";
 import { revalidateTag } from "next/cache";
+import { logPerf } from "@/lib/perf-log";
 
 type CacheEntry = {
   value: unknown;
@@ -28,6 +29,10 @@ const stats = (g.__atplCacheStats ??= { hits: 0, misses: 0, staleHits: 0 });
 const tagFor = (key: string) => {
   const tag = ["leads", "users", "products", "quotes", "visits"].find((candidate) => key.startsWith(candidate));
   return tag ?? key;
+};
+const resourceFor = (key: string) => {
+  const tag = ["leads", "users", "products", "quotes", "visits"].find((candidate) => key.startsWith(candidate));
+  return tag ?? key.split(":", 1)[0] ?? "other";
 };
 
 function redisConfig() {
@@ -158,6 +163,7 @@ export async function cached<T>(
   load: () => Promise<T>,
   options: { keepStale?: boolean } = {},
 ): Promise<T> {
+  const started = performance.now();
   const keepStale = options.keepStale === true;
   const local = store.values.get(key);
   if (local) {
@@ -168,11 +174,13 @@ export async function cached<T>(
       if (local.keepStale || local.staleUntil > Date.now()) {
         stats.staleHits += 1;
         refreshInBackground(key, local);
+        logPerf("cache.read", performance.now() - started, { resource: resourceFor(key), result: "memory-stale" });
         return local.value as T;
       }
       store.values.delete(key);
     } else {
       stats.hits += 1;
+      logPerf("cache.read", performance.now() - started, { resource: resourceFor(key), result: "memory-hit" });
       return local.value as T;
     }
   }
@@ -180,6 +188,7 @@ export async function cached<T>(
   const pending = store.inflight.get(key);
   if (pending) {
     stats.hits += 1;
+    logPerf("cache.read", performance.now() - started, { resource: resourceFor(key), result: "inflight-hit" });
     return pending as Promise<T>;
   }
 
@@ -193,6 +202,7 @@ export async function cached<T>(
     if (remoteFresh !== undefined) {
       stats.hits += 1;
       store.values.set(key, { value: remoteFresh, expiresAt: Date.now() + ttlMs, staleUntil: keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS, ttlMs, keepStale, load });
+      logPerf("cache.read", performance.now() - started, { resource: resourceFor(key), result: "redis-hit" });
       return remoteFresh as T;
     }
     if (remoteStale !== undefined) {
@@ -202,6 +212,7 @@ export async function cached<T>(
       };
       store.values.set(key, entry);
       refreshInBackground(key, entry);
+      logPerf("cache.read", performance.now() - started, { resource: resourceFor(key), result: "redis-stale" });
       return remoteStale as T;
     }
 
@@ -222,6 +233,7 @@ export async function cached<T>(
         if (current) await writeRedisValue(key, current.value, current.ttlMs, current.keepStale);
       }
     }
+    logPerf("cache.read", performance.now() - started, { resource: resourceFor(key), result: "miss" });
     return value;
   })().finally(() => {
     if (store.inflight.get(key) === task) store.inflight.delete(key);
@@ -243,6 +255,32 @@ export async function setCachedValue<T>(key: string, ttlMs: number, value: T): P
   };
   store.values.set(key, entry);
   await writeRedisValue(key, value, ttlMs);
+}
+
+export async function patchCachedValues(
+  prefix: string,
+  patch: (value: unknown) => unknown,
+  ttlMs = 60_000,
+): Promise<void> {
+  const keys = new Set<string>();
+  for (const key of store.values.keys()) {
+    if (key === prefix || key.startsWith(`${prefix}:`)) keys.add(key);
+  }
+  const indexed = await redisCommand(["SMEMBERS", `atpl:cache:index:${tagFor(prefix)}`]);
+  if (Array.isArray(indexed)) {
+    for (const key of indexed) {
+      if (typeof key === "string" && (key === prefix || key.startsWith(`${prefix}:`))) keys.add(key);
+    }
+  }
+  for (const key of keys) {
+    const entry = store.values.get(key);
+    const remote = entry ? undefined : await readRedisValues(key);
+    const current = entry?.value ?? remote?.[0] ?? remote?.[1];
+    if (current === undefined) continue;
+    const updated = patch(current);
+    if (updated === undefined) continue;
+    await setCachedValue(key, entry?.ttlMs ?? ttlMs, updated);
+  }
 }
 
 export async function getCachedValue<T>(key: string): Promise<T | undefined> {

@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, RotateCw } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
+import { trackableNavigation } from "@/lib/navigation-stall";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
 
@@ -38,23 +39,30 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       setStalledNavigation(null);
     };
     const onNavigationClick = (event: MouseEvent) => {
-      if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const clicked = event.target instanceof Element ? event.target : null;
       const anchor = clicked?.closest<HTMLAnchorElement>("a[href]");
-      if (!anchor || anchor.target === "_blank") return;
-      const target = new URL(anchor.href, window.location.href);
-      if (target.origin !== window.location.origin || `${target.pathname}?${target.searchParams.toString()}` === `${window.location.pathname}?${new URLSearchParams(window.location.search).toString()}`) return;
+      if (!anchor) return;
+      const navigation = trackableNavigation({
+        defaultPrevented: event.defaultPrevented,
+        button: event.button,
+        modified: event.metaKey || event.ctrlKey || event.shiftKey || event.altKey,
+        href: anchor.href,
+        target: anchor.target,
+        download: anchor.hasAttribute("download"),
+      }, window.location.href);
+      if (!navigation) return;
       clearNavigation();
       const state: NonNullable<typeof pendingNavigation.current> = {
-        routeKey: `${target.pathname}?${target.searchParams.toString()}`,
-        href: target.href,
+        routeKey: navigation.routeKey,
+        href: navigation.href,
         timer: 0,
       };
       state.timer = window.setTimeout(() => {
         if (pendingNavigation.current === state) setStalledNavigation({ href: state.href });
-      }, 15_000);
+      }, 20_000);
       pendingNavigation.current = state;
     };
+    const clearOnBrowserNavigation = () => clearNavigation();
     const versionMismatch = (message: string) => {
       if (/failed to find server action|chunkloaderror|loading chunk .* failed/i.test(message)) {
         setNewVersionAvailable(true);
@@ -67,14 +75,22 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       if (versionMismatch(message)) event.preventDefault();
     };
     const onError = (event: ErrorEvent) => { versionMismatch(`${event.message} ${event.error?.name ?? ""}`); };
-    document.addEventListener("click", onNavigationClick, true);
+    document.addEventListener("click", onNavigationClick);
     window.addEventListener("unhandledrejection", onUnhandledRejection);
     window.addEventListener("error", onError);
+    window.addEventListener("pageshow", clearOnBrowserNavigation);
+    window.addEventListener("popstate", clearOnBrowserNavigation);
+    window.addEventListener("focus", clearOnBrowserNavigation);
+    document.addEventListener("visibilitychange", clearOnBrowserNavigation);
     return () => {
       clearNavigation();
-      document.removeEventListener("click", onNavigationClick, true);
+      document.removeEventListener("click", onNavigationClick);
       window.removeEventListener("unhandledrejection", onUnhandledRejection);
       window.removeEventListener("error", onError);
+      window.removeEventListener("pageshow", clearOnBrowserNavigation);
+      window.removeEventListener("popstate", clearOnBrowserNavigation);
+      window.removeEventListener("focus", clearOnBrowserNavigation);
+      document.removeEventListener("visibilitychange", clearOnBrowserNavigation);
     };
   }, []);
 
@@ -171,12 +187,10 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
             <span>Taking longer than usual, retry.</span>
             <div className="flex gap-2">
               <Button type="button" variant="outline" className="h-10" onClick={() => {
-                if (pendingNavigation.current) window.clearTimeout(pendingNavigation.current.timer);
-                pendingNavigation.current = null;
-                setStalledNavigation(null);
-                router.refresh();
+                const href = pendingNavigation.current?.href;
+                if (!href) return;
+                router.push(href);
               }}>Retry</Button>
-              <Button type="button" className="h-10" onClick={() => window.location.assign(stalledNavigation.href)}>Open page</Button>
             </div>
           </div>}
           {newVersionAvailable && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">

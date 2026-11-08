@@ -92,6 +92,15 @@ describe("access rules", () => {
 
 import { canAssignLeads, leadBucket } from "@/lib/domain";
 describe("manage leads", () => {
+  it("searches loaded leads locally by area and normalized phone", () => {
+    const manager = { id: "manager", name: "Manager", role: "Manager" as const };
+    const lead = { ...SAMPLE_LEADS[0], area: "Hitech City", phone: "+91 98765-43210" } as Lead;
+
+    expect(leadsForTab(manager, [lead], "all", "hitech")).toEqual([lead]);
+    expect(leadsForTab(manager, [lead], "all", "9876543210")).toEqual([lead]);
+    expect(leadsForTab(manager, [lead], "all", "+91 98765 43210")).toEqual([lead]);
+  });
+
   it("buckets manager-owned and executive-owned Fresh Leads as assigned", () => {
     const base = SAMPLE_LEADS[0];
     expect(leadBucket({ ...base, status: "Fresh Lead", assignedTo: "Reshma", assignedToId: "manager-id" } as Lead)).toBe("assigned");

@@ -4,7 +4,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
-import { CalendarPlus, Clock3, History, LoaderCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { CalendarPlus, FileText, History, LoaderCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
@@ -81,7 +81,7 @@ function isLeadsResponse(value: unknown): value is LeadsResponse {
     TABS.every(({ id }) => Number.isInteger(counts[id]) && counts[id] >= 0);
 }
 
-export function LeadsClient({ user, leads, initialHasMore = false, executives, assignees, assigneesUnavailable, owners, canAssign, leadSources: initialLeadSources = LEAD_SOURCES, leadSourcesUnavailable = false, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, todaysFollowUps: initialFollowUps, hasAnyLeads: initialHasAnyLeads }: Props) {
+export function LeadsClient({ user, leads, initialHasMore = false, executives, assignees, assigneesUnavailable, owners, canAssign, leadSources: initialLeadSources = LEAD_SOURCES, leadSourcesUnavailable = false, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, hasAnyLeads: initialHasAnyLeads }: Props) {
   const router = useRouter();
   const [leadRows, setLeadRows] = useState(leads);
   const leadRowsRef = useRef(leadRows);
@@ -94,7 +94,6 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
   const [retryingLeadSources, setRetryingLeadSources] = useState(false);
   const [total, setTotal] = useState(initialCount);
   const [tabCounts, setTabCounts] = useState(initialTabCounts);
-  const [todaysFollowUps, setTodaysFollowUps] = useState(initialFollowUps);
   const [hasAnyLeads, setHasAnyLeads] = useState(initialHasAnyLeads);
   const [hasMoreRows, setHasMoreRows] = useState(initialHasMore);
   const currentPage = useRef(1);
@@ -106,6 +105,8 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
   const tabListRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [searchFallbackHint, setSearchFallbackHint] = useState(false);
+  const searchRequestKey = useRef("");
   const [source, setSource] = useState<LeadSource | "All">("All");
   const [filters, setFilters] = useState<LeadFilters>({ stage: "All", owner: "All" });
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -122,10 +123,6 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
   const previousServerLeads = useRef(leads);
   const refreshSilently = useCallback(() => {
     startTransition(() => router.refresh());
-    window.setTimeout(() => {
-      startTransition(() => router.refresh());
-      window.dispatchEvent(new Event("atpl:leads-refresh"));
-    }, 1_500);
   }, [router]);
   useEffect(() => {
     const saved = readExpiredAction<{ type: string; payload: { leadId?: string; actionType?: string } }>();
@@ -206,7 +203,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
   }, [justAdded, leadRows]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 400);
     return () => window.clearTimeout(timer);
   }, [search]);
 
@@ -214,14 +211,14 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     tabListRef.current?.querySelector<HTMLButtonElement>(`[data-tab="${tab}"]`)?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   }, [tab]);
   const visible = useMemo(
-    () => leadsForTab(user, mergedLeadRows, tab, debouncedSearch, source, filters),
-    [user, mergedLeadRows, tab, debouncedSearch, source, filters],
+    () => leadsForTab(user, mergedLeadRows, tab, search, source, filters),
+    [user, mergedLeadRows, tab, search, source, filters],
   );
   const updateLeadOptimistically = useCallback((before: Lead | null, after: Lead | null) => {
     const id = before?.id ?? after?.id;
     if (!id) return;
-    const currentTabDelta = (after ? leadsForTab(user, [after], tab, debouncedSearch, source, filters).length : 0) -
-      (before ? leadsForTab(user, [before], tab, debouncedSearch, source, filters).length : 0);
+    const currentTabDelta = (after ? leadsForTab(user, [after], tab, search, source, filters).length : 0) -
+      (before ? leadsForTab(user, [before], tab, search, source, filters).length : 0);
     const changedFields = after
       ? Object.fromEntries(Object.entries(after).filter(([key, value]) =>
           !Object.is(before?.[key as keyof Lead], value),
@@ -233,12 +230,12 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     setLeadRows((current) => {
       const withoutOriginal = current.filter((lead) => lead.id !== id);
       const updated = after ? [...withoutOriginal, after] : withoutOriginal;
-      return leadsForTab(user, updated, tab, debouncedSearch, source, filters);
+      return updated;
     });
-    setTabCounts((current) => adjustLeadTabCounts(user, before, after, current, debouncedSearch, source, filters));
+    setTabCounts((current) => adjustLeadTabCounts(user, before, after, current, search, source, filters));
     if (currentTabDelta) setTotal((current) => Math.max(0, current + currentTabDelta));
     setJustAdded((current) => current?.id === id ? after : current);
-  }, [user, tab, debouncedSearch, source, filters]);
+  }, [user, tab, search, source, filters]);
   const requestPage = useCallback(async (requestedPage: number, append: boolean, isCurrent: () => boolean = () => true, requestedTab = tab) => {
     const params = new URLSearchParams({
       tab: requestedTab, page: String(requestedPage), search: debouncedSearch, source,
@@ -289,7 +286,6 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     if (leadOverrides.current.size === 0) {
       setTotal(result.total);
       setTabCounts(result.tabCounts);
-      setTodaysFollowUps(result.todaysFollowUps ?? 0);
       setHasAnyLeads(result.hasAnyLeads ?? false);
     }
   }, [tab, debouncedSearch, source, filters, applyLeadOverrides, user]);
@@ -300,12 +296,11 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     for (const id of optimisticLeadRows.current.keys()) {
       if (!leadOverrides.current.has(id)) optimisticLeadRows.current.delete(id);
     }
-    setLeadRows((current) => {
-      const merged = new Map(current.map((lead) => [lead.id, lead]));
-      for (const lead of incoming) merged.set(lead.id, lead);
+    setLeadRows(() => {
+      const merged = new Map(incoming.map((lead) => [lead.id, lead]));
       for (const [id, lead] of optimisticLeadRows.current) {
         if (!leads.some((serverLead) => serverLead.id === id) &&
-          leadsForTab(user, [lead], tab, debouncedSearch, source, filters).length > 0) {
+          leadsForTab(user, [lead], tab, search, source, filters).length > 0) {
           merged.set(id, lead);
         }
       }
@@ -317,13 +312,8 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
       setTeamMembersUnavailable(assigneesUnavailable);
       setLeadSources(initialLeadSources);
       setLeadSourcesUnavailableState(leadSourcesUnavailable);
-      void requestPage(1, false).catch((error: unknown) =>
-        console.error("[leads] silent refresh failed", {
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
     }
-  }, [leads, justAdded, applyLeadOverrides, assignees, assigneesUnavailable, initialLeadSources, leadSourcesUnavailable, requestPage, user, tab, debouncedSearch, source, filters]);
+  }, [leads, justAdded, applyLeadOverrides, assignees, assigneesUnavailable, initialLeadSources, leadSourcesUnavailable, user, tab, search, source, filters]);
   const runRequest = useCallback(async function runRequest(requestedPage: number, append: boolean, isCurrent: () => boolean = () => true) {
     if (append) setLoadingMore(true);
     else setLoadingRows(true);
@@ -344,31 +334,63 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     }
   }, [requestPage]);
   useEffect(() => {
-    const refreshVisibleLeads = () => {
-      void requestPage(1, false).catch((error: unknown) =>
-        console.error("[leads] background refresh failed", {
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    };
+    const refreshVisibleLeads = () => startTransition(() => router.refresh());
     window.addEventListener("atpl:leads-refresh", refreshVisibleLeads);
     return () => window.removeEventListener("atpl:leads-refresh", refreshVisibleLeads);
-  }, [requestPage]);
-  const initializedQuery = useRef(false);
+  }, [router]);
+
   useEffect(() => {
-    if (!initializedQuery.current) {
-      initializedQuery.current = true;
+    const query = debouncedSearch.trim();
+    const requestKey = `${tab}:${query}:${source}:${filters.owner}:${filters.stage}:${filters.from ?? ""}:${filters.to ?? ""}`;
+    if (query.length < 2 || total <= leadRows.length ||
+      leadsForTab(user, mergedLeadRows, tab, query, source, filters).length > 0) {
+      setSearchFallbackHint(false);
+      if (query.length < 2) searchRequestKey.current = "";
       return;
     }
-    let active = true;
-    void runRequest(1, false, () => active);
-    return () => { active = false; };
-  }, [runRequest]);
+    if (searchRequestKey.current === requestKey) return;
+    const controller = new AbortController();
+    setSearchFallbackHint(false);
+    const timer = window.setTimeout(() => {
+      searchRequestKey.current = requestKey;
+      const params = new URLSearchParams({
+        tab, page: "1", search: query, source,
+        owner: filters.owner ?? "All", stage: filters.stage ?? "All",
+      });
+      if (filters.from) params.set("from", filters.from);
+      if (filters.to) params.set("to", filters.to);
+      void fetch(`/api/leads?${params}`, { cache: "no-store", signal: controller.signal })
+        .then(async (response) => {
+          const result: unknown = await response.json();
+          if (!response.ok || !isLeadsResponse(result)) throw new Error("Zoho search unavailable");
+          if (!result.leads.length) return;
+          setLeadRows((current) => {
+            const rows = new Map(current.map((lead) => [lead.id, lead]));
+            for (const lead of applyLeadOverrides(result.leads)) rows.set(lead.id, lead);
+            return [...rows.values()];
+          });
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          console.warn("[leads] Zoho search unavailable; keeping local results", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+          setSearchFallbackHint(true);
+        });
+    }, 400);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [debouncedSearch, total, leadRows.length, mergedLeadRows, user, tab, source, filters, applyLeadOverrides]);
+
+  const count = (id: LeadTab) => leadsForTab(user, mergedLeadRows, id, search, source, filters).length;
+  const currentTodaysFollowUps = leadsForTab(user, mergedLeadRows, "callback", search, source, filters)
+    .filter((lead) => lead.followUp === todayIST()).length;
   const loadMore = async () => { await runRequest(currentPage.current + 1, true); };
   const availableTabs = TABS.filter((item) =>
     user.role === "Calling Team" ? item.id === "fresh" || item.id === "callback"
     : !(item.id === "fresh" && isExec) && !(item.id === "all" && user.role !== "Manager"));
-  const count = (id: LeadTab) => tabCounts[id] ?? 0;
   const fixableCount = fixableLeads.length;
   const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
 
@@ -381,11 +403,11 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
             <Button className="sm:hidden" onClick={() => setAdding((value) => !value)}><Plus /> Add</Button>
           </div>
           <p className="mt-1 truncate text-sm text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
-          {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-muted-foreground sm:hidden">Today&apos;s follow-ups: {todaysFollowUps}</p>}
+          {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-muted-foreground sm:hidden">Today&apos;s follow-ups: {currentTodaysFollowUps}</p>}
         </div>
         <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
           <Button className="hidden h-11 shrink-0 sm:inline-flex" onClick={() => setAdding((value) => !value)}><Plus /> Add Lead</Button>
-          {(user.role === "Manager" || user.role === "Calling Team") && <span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {todaysFollowUps}</span>}
+          {(user.role === "Manager" || user.role === "Calling Team") && <span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}
           {user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeads} count={fixableCount} /></span>}
         </div>
       </div>
@@ -418,6 +440,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
         </label>
         <Button type="button" variant="outline" size="icon" className="relative h-11 w-11 shrink-0 sm:hidden" onClick={() => setFiltersOpen(true)} aria-label={`Filters${activeFilterCount ? `, ${activeFilterCount} active` : ""}`}><SlidersHorizontal />{activeFilterCount > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{activeFilterCount}</span>}</Button>
       </div>
+      {searchFallbackHint && <p role="status" className="text-xs text-muted-foreground">Showing results from loaded leads.</p>}
 
       <LeadFiltersPanel
         open={filtersOpen}
@@ -468,7 +491,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
             ownerId: lead.ownerId,
           });
           optimisticLeadRows.current.set(lead.id, lead);
-          const counts = adjustLeadTabCounts(user, optimistic, lead, tabCounts, debouncedSearch, source, filters);
+          const counts = adjustLeadTabCounts(user, optimistic, lead, tabCounts, search, source, filters);
           setTabCounts(counts);
           const targetTab = user.role === "Manager" ? "all" : isExec ? "mine" : leadBucketForTab(lead);
           setTotal(counts[targetTab]);
@@ -545,12 +568,23 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
         <LeadDrawer
           lead={selected}
           executives={executives}
+          assignees={teamMembers}
           canAssign={canAssignLeads(user.role)}
           onClose={() => setSelected(null)}
-          onSaved={() => {
-            const fresh = leadRows.find((lead) => lead.id === selected.id);
-            if (fresh) setSelected(fresh);
-            refreshSilently();
+          onOptimistic={(updated) => {
+            const current = leadRowsRef.current.find((lead) => lead.id === updated.id) ?? selected;
+            if (current) updateLeadOptimistically(current, updated);
+            setSelected(updated);
+          }}
+          onRollback={(original) => {
+            const fresh = leadRowsRef.current.find((lead) => lead.id === original.id) ?? original;
+            updateLeadOptimistically(fresh, original);
+            setSelected(original);
+          }}
+          onSaved={(updated) => {
+            const current = leadRowsRef.current.find((lead) => lead.id === updated.id) ?? selected;
+            if (current) updateLeadOptimistically(current, updated);
+            setSelected(updated);
           }}
           onNext={selectLead}
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
@@ -572,7 +606,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
       }} />}
       {action && action.type !== "call" && <LeadActionModal key={`${action.type}:${action.lead.id}`} action={action} assignees={teamMembers} assigneesUnavailable={teamMembersUnavailable} retryingAssignees={retryingTeamMembers} onRetryAssignees={() => { teamLoadAttempted.current = false; void reloadTeamMembers(); }} onPendingChange={(pending) => setPendingLeadId(pending ? action.lead.id : null)} onClose={() => setAction(null)} onOptimisticAssign={(member) => {
         const { lead: reassigned } = reassignLeadOptimistically(
-          user, action.lead, member, tabCounts, debouncedSearch, source, filters,
+          user, action.lead, member, tabCounts, search, source, filters,
         );
         optimisticAssignments.current.set(action.lead.id, reassigned);
         updateLeadOptimistically(action.lead, reassigned);
@@ -584,8 +618,9 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
         optimisticAssignments.current.delete(action.lead.id);
         leadOverrides.current.delete(action.lead.id);
         optimisticLeadRows.current.delete(action.lead.id);
-      }} onOptimisticChange={(before, after) => updateLeadOptimistically(before, after)} onRollbackChange={(before, after) => updateLeadOptimistically(before, after)} onDone={() => {
+      }} onOptimisticChange={(before, after) => updateLeadOptimistically(before, after)} onRollbackChange={(before, after) => updateLeadOptimistically(before, after)} onDone={(savedLead) => {
         setAction(null);
+        if (savedLead && action.type === "edit") updateLeadOptimistically(action.lead, savedLead);
         refreshSilently();
       }} onAssigned={(assignment) => {
         const optimistic = optimisticAssignments.current.get(action.lead.id) ?? action.lead;
@@ -600,8 +635,8 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
         optimisticLeadRows.current.set(persisted.id, persisted);
         optimisticAssignments.current.delete(action.lead.id);
         setJustAdded((current) => current?.id === action.lead.id ? persisted : current);
-        if (assignment.warningCheckId) void pollAssignmentWarnings(assignment.warningCheckId);
         refreshSilently();
+        if (assignment.warningCheckId) void pollAssignmentWarnings(assignment.warningCheckId);
       }} />}
     </div>
   );
@@ -732,7 +767,7 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
 }
 
 function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssignees, onRetryAssignees, onPendingChange, onOptimisticChange, onRollbackChange, onClose, onDone, onAssigned, onOptimisticAssign, onRollbackAssign }: {
-  action: LeadMutationAction; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; onPendingChange: (pending: boolean) => void; onOptimisticChange: (before: Lead, after: Lead | null) => void; onRollbackChange: (before: Lead | null, after: Lead | null) => void; onClose: () => void; onDone: (patch: Partial<Lead>) => void; onAssigned: (assignment: { owner: string; ownerId: string; status: string; warningCheckId: string }) => void; onOptimisticAssign: (member: { id: string; name: string }) => void; onRollbackAssign: () => void;
+  action: LeadMutationAction; assignees: { id: string; name: string }[]; assigneesUnavailable: boolean; retryingAssignees: boolean; onRetryAssignees: () => void; onPendingChange: (pending: boolean) => void; onOptimisticChange: (before: Lead, after: Lead | null) => void; onRollbackChange: (before: Lead | null, after: Lead | null) => void; onClose: () => void; onDone: (lead?: Lead) => void; onAssigned: (assignment: { owner: string; ownerId: string; status: string; warningCheckId: string }) => void; onOptimisticAssign: (member: { id: string; name: string }) => void; onRollbackAssign: () => void;
 }) {
   useBodyScrollLock(true);
   const [pending, start] = useTransition();
@@ -806,7 +841,7 @@ function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssi
         }
         else {
           toast.success(action.type === "delete" ? "Lead deleted" : "Lead updated");
-          onDone({});
+          onDone(action.type === "edit" && result.data && "lead" in result.data ? result.data.lead : undefined);
         }
       } catch (error) {
         if (optimisticOwner) onRollbackAssign();
@@ -852,8 +887,9 @@ function LeadActionModal({ action, assignees, assigneesUnavailable, retryingAssi
   </div>;
 }
 
-function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nextLead }: {
-  lead: Lead; executives: string[]; canAssign: boolean; onClose: () => void; onSaved: () => void; onNext: (lead: Lead) => void; nextLead?: Lead;
+function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimistic, onRollback, onSaved, onNext, nextLead }: {
+  lead: Lead; executives: string[]; assignees: { id: string; name: string }[]; canAssign: boolean; onClose: () => void;
+  onOptimistic: (lead: Lead) => void; onRollback: (original: Lead) => void; onSaved: (lead: Lead) => void; onNext: (lead: Lead) => void; nextLead?: Lead;
 }) {
   const [mode, setMode] = useState<DrawerMode>("edit");
   const [status, setStatus] = useState<LeadStatus>(lead.status);
@@ -866,6 +902,7 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
   const [comboboxOpen, setComboboxOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const drawerRef = useRef<HTMLDivElement>(null);
+  const originalLead = useRef(lead);
   const filteredExecutives = executives.filter((name) => name.toLowerCase().includes(assigneeSearch.toLowerCase()));
   useBodyScrollLock(true);
 
@@ -876,20 +913,45 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const save = (saveNext = false) => start(async () => {
-    const result = await saveLeadUpdateAction({ id: lead.id, status, remarks, ...(canAssign ? { assignedTo: assignee || null } : {}) });
-    if (!result.ok) { toast.error(result.error); return; }
-    const zohoUrl = result.data?.zohoUrl;
-    toast.success(`Saved update for ${lead.name}`, zohoUrl ? {
-      action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") },
-    } : undefined);
-    onSaved();
-    setRemarks("");
-    if (saveNext && nextLead) {
-      toast.success(`Next lead: ${nextLead.name}`);
-      onNext(nextLead);
-    }
-  });
+  const save = (saveNext = false) => {
+    if (pending) return;
+    const assigned = assignees.find((member) => member.name === assignee);
+    const optimistic: Lead = {
+      ...lead,
+      status,
+      remarks,
+      ...(canAssign ? {
+        assignedTo: assignee || null,
+        assignedToId: assignee ? assigned?.id : undefined,
+        ownerId: assignee ? assigned?.id : undefined,
+      } : {}),
+    };
+    onOptimistic(optimistic);
+    start(async () => {
+      try {
+        const result = await saveLeadUpdateAction({ id: lead.id, status, remarks, ...(canAssign ? { assignedTo: assignee || null } : {}) });
+        if (!result.ok) {
+          onRollback(originalLead.current);
+          toast.error(result.error);
+          return;
+        }
+        const saved = result.data?.lead ?? optimistic;
+        const zohoUrl = result.data?.zohoUrl;
+        toast.success("Saved", zohoUrl ? {
+          action: { label: "Open in Zoho", onClick: () => window.open(zohoUrl, "_blank", "noopener,noreferrer") },
+        } : undefined);
+        onSaved(saved);
+        setRemarks("");
+        if (saveNext && nextLead) {
+          toast.success(`Next lead: ${nextLead.name}`);
+          onNext(nextLead);
+        }
+      } catch (error) {
+        onRollback(originalLead.current);
+        toast.error(error instanceof Error ? error.message : "Could not save this lead update.");
+      }
+    });
+  };
 
   const loadHistory = () => {
     setMode("history");
@@ -927,7 +989,7 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
           {mode === "history" ? (
             <HistoryList history={history} loading={historyLoading} error={historyError} onRetry={loadHistory} />
           ) : mode === "schedule" ? (
-            <ScheduleForm lead={lead} onDone={() => setMode("edit")} onSaved={onSaved} />
+            <ScheduleForm lead={lead} onDone={() => setMode("edit")} onSaved={() => onSaved(lead)} />
           ) : (
             <div className="space-y-4">
               <label className="block font-medium">Status<SelectField className="mt-1" value={status} onValueChange={(value) => setStatus(value as LeadStatus)} options={LEAD_STATUSES.map((item) => ({ value: item, label: item }))} /></label>
@@ -942,14 +1004,16 @@ function LeadDrawer({ lead, executives, canAssign, onClose, onSaved, onNext, nex
                 </div>}
               </label>}
               <label className="block font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-28 py-2 text-sm`} placeholder="Add a note about this lead…" value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="sticky bottom-0 z-10 -mx-4 mt-4 border-t bg-card/95 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur sm:static sm:mx-0 sm:mt-0 sm:border-0 sm:bg-transparent sm:p-0 sm:pb-0 sm:backdrop-blur-none">
+                <div className="grid gap-2 sm:grid-cols-2">
                 <Button disabled={pending} onClick={() => save()}>{pending ? "Saving…" : "Save"}</Button>
                 <Button variant="outline" disabled={pending || !nextLead} onClick={() => save(true)}>{pending ? "Saving…" : "Save & next"}</Button>
-              </div>
-              <div className="grid gap-2 border-t pt-4 sm:grid-cols-2">
-                <Button variant="outline" onClick={loadHistory}><History /> History</Button>
-                <Button variant="outline" onClick={() => setMode("schedule")}><CalendarPlus /> Schedule visit</Button>
-                <Button asChild variant="secondary" className="sm:col-span-2"><Link href={`/quotations?lead=${lead.id}`} onClick={onClose}><Clock3 /> Create quotation</Link></Button>
+                </div>
+                <div className="mt-2 grid gap-2 border-t pt-3 sm:grid-cols-3">
+                  <Button variant="outline" onClick={loadHistory}><History /> History</Button>
+                  <Button variant="outline" onClick={() => setMode("schedule")}><CalendarPlus /> Schedule visit</Button>
+                  <Button asChild variant="secondary"><Link href={`/quotations?lead=${lead.id}`} onClick={onClose}><FileText /> Create quotation</Link></Button>
+                </div>
               </div>
             </div>
           )}

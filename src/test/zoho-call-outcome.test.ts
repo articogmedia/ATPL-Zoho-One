@@ -81,6 +81,7 @@ describe("Zoho call outcome persistence", () => {
         Subject: "Connected - Call test lead",
       }),
     });
+    expect(calls[0]?.record.Call_Start_Time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
     expect(calls[1]).toMatchObject({
       method: "PUT",
       path: `/Leads/${leadId}`,
@@ -171,6 +172,26 @@ describe("Zoho call outcome persistence", () => {
     expect(result).toEqual({});
     expect(calls.some((call) => call.path === `/Leads/${leadId}` && call.method === "PUT")).toBe(true);
     expect(calls.some((call) => call.path === "/Tasks")).toBe(true);
+  });
+
+  it.each([
+    ["Connected", "Contacted"],
+    ["No Answer", "Attempted to Contact"],
+    ["Busy", "Attempted to Contact"],
+    ["Wrong Number", "Not Responsive"],
+    ["Call Back Later", "Callback in Future"],
+  ] as const)("writes call outcome %s to Zoho and updates status", async (outcome, status) => {
+    const { calls } = mockRepository();
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.logCall({ leadId, outcome, remarks: "" }, {
+      id: "manager-1", name: "Manager", role: "Manager",
+    });
+    await flushAfterJobs();
+
+    expect(calls[0]?.record.Call_Result).toBe(outcome);
+    expect(calls[0]?.record.Call_Start_Time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
+    expect(calls.find((call) => call.path === `/Leads/${leadId}`)?.record.Lead_Status).toBe(status);
   });
 
   it("identifies the failing nested Zoho field path in user-facing errors", async () => {

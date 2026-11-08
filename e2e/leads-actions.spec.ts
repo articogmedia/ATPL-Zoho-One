@@ -7,6 +7,9 @@ declare global {
 }
 
 test("manager can create and manage a lead from the list", async ({ page }) => {
+  const phone = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
+  const leadName = `E2E Lead ${phone.slice(-4)}`;
+  const updatedLeadName = `${leadName} Updated`;
   await page.addInitScript(() => {
     const originalNow = Date.now.bind(Date);
     let offset = 0;
@@ -33,16 +36,15 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   });
   await page.evaluate(() => {
     window.__advanceTime(10 * 60 * 1000);
-    window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
   });
-  await page.waitForTimeout(1000);
-  expect(refreshRequests.length).toBeGreaterThan(0);
+  await expect.poll(() => refreshRequests.length).toBeGreaterThan(0);
 
   const allLeadsTab = page.locator('[data-tab="all"]');
   const initialCount = Number((await allLeadsTab.textContent())?.match(/\((\d+)\)/)?.[1]);
   await page.getByRole("button", { name: "Add Lead", exact: true }).click();
-  await page.getByLabel("Lead name *").fill("E2E Lead");
-  await page.getByLabel("Mobile number *").fill("8111111199");
+  await page.getByLabel("Lead name *").fill(leadName);
+  await page.getByLabel("Mobile number *").fill(phone);
   await page.getByLabel("Source", { exact: true }).click();
   await page.getByRole("option", { name: "Website", exact: true }).click();
   await expect(page.getByLabel("Source", { exact: true })).toContainText("Website");
@@ -51,72 +53,76 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   await expect(page.getByLabel("Assign to")).toContainText("Anil");
   await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
 
-  const row = page.locator("#leads-list tbody tr").filter({ hasText: "E2E Lead" });
+  const row = page.locator("#leads-list tbody tr").filter({ hasText: leadName });
   await expect(row).toBeVisible();
   await expect(row).toContainText("Website");
   await expect(row).toContainText("Anil");
   await expect(allLeadsTab).toContainText(`(${initialCount + 1})`);
-  await expect(row.getByRole("link", { name: "Message E2E Lead on WhatsApp" })).toHaveAttribute("href", "https://wa.me/918111111199");
+  await expect(row.getByRole("link", { name: `Message ${leadName} on WhatsApp` })).toHaveAttribute("href", `https://wa.me/91${phone}`);
 
-  await row.getByRole("button", { name: "Call E2E Lead" }).click();
+  await row.getByRole("button", { name: `Call ${leadName}` }).click();
   const callDialog = page.getByRole("dialog", { name: "Call lead" });
-  await expect(callDialog).toContainText("E2E Lead");
-  await expect(callDialog.getByRole("link", { name: "Open dialer" })).toHaveAttribute("href", "tel:+918111111199");
-  await expect(callDialog.getByRole("link", { name: "WhatsApp" })).toHaveAttribute("href", "https://wa.me/918111111199");
+  await expect(callDialog).toContainText(leadName);
+  await expect(callDialog.getByRole("link", { name: "Open dialer" })).toHaveAttribute("href", `tel:+91${phone}`);
+  await expect(callDialog.getByRole("link", { name: "WhatsApp" })).toHaveAttribute("href", `https://wa.me/91${phone}`);
   await callDialog.getByRole("button", { name: "Copy number" }).click();
   await expect(page.getByText("Copied")).toBeVisible();
-  expect(await page.evaluate(() => window.name)).toBe("8111111199");
+  expect(await page.evaluate(() => window.name)).toBe(phone);
   await callDialog.getByRole("button", { name: "Answered", exact: true }).click();
   await callDialog.getByRole("button", { name: "Save outcome" }).click();
   await expect(callDialog).toHaveCount(0);
   await expect(page.getByText("Call outcome saved")).toBeVisible();
 
   await row.click();
-  const leadDrawer = page.getByRole("dialog", { name: "E2E Lead" });
+  const leadDrawer = page.getByRole("dialog", { name: leadName });
   await leadDrawer.getByRole("button", { name: "History", exact: true }).first().click();
   await expect(leadDrawer.getByText(/Call: Connected/)).toBeVisible();
   await page.getByRole("button", { name: "Close lead details" }).click();
 
-  await row.getByRole("button", { name: "Edit E2E Lead" }).click();
+  await row.getByRole("button", { name: `Edit ${leadName}` }).click();
   const editDialog = page.getByRole("dialog", { name: "Edit lead" });
-  await editDialog.getByLabel("Name").fill("E2E Lead Updated");
+  await editDialog.getByLabel("Name").fill(updatedLeadName);
   await editDialog.getByRole("combobox").first().click();
   await page.getByRole("option", { name: "Direct Call", exact: true }).click();
   await editDialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Lead updated", { exact: true })).toBeVisible();
-  const updatedRow = page.locator("#leads-list tbody tr").filter({ hasText: "E2E Lead Updated" });
+  const updatedRow = page.locator("#leads-list tbody tr").filter({ hasText: updatedLeadName });
   await expect(updatedRow).toBeVisible();
   await expect(updatedRow).toContainText("Direct Call");
 
-  await updatedRow.getByRole("button", { name: "Reassign E2E Lead Updated" }).click();
+  await updatedRow.getByRole("button", { name: `Reassign ${updatedLeadName}` }).click();
   const reassignDialog = page.getByRole("dialog", { name: "Reassign owner" });
   const confirm = reassignDialog.getByRole("button", { name: "Confirm" });
   await expect(confirm).toBeDisabled();
-  await expect(reassignDialog).toContainText("E2E Lead Updated");
+  await expect(reassignDialog).toContainText(updatedLeadName);
+  await reassignDialog.getByLabel("Assign to").click();
+  await expect(page.getByRole("option", { name: "Anil (current)", exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "Anil (current)", exact: true }).click();
+  await expect(reassignDialog.getByRole("button", { name: "Already assigned to this person" })).toBeDisabled();
   await reassignDialog.getByLabel("Assign to").click();
   await expect(page.getByRole("option", { name: "Sai Kiran", exact: true })).toBeVisible();
-  await expect(page.getByRole("option", { name: "Anil", exact: true })).toHaveCount(0);
   await page.getByRole("option", { name: "Sai Kiran", exact: true }).click();
   await expect(confirm).toBeEnabled();
   await confirm.click();
-  const reassignedRow = page.locator("#leads-list tbody tr").filter({ hasText: "E2E Lead Updated" });
+  const reassignedRow = page.locator("#leads-list tbody tr").filter({ hasText: updatedLeadName });
   await expect(reassignedRow).toBeVisible();
   await expect(reassignedRow).toContainText("Sai Kiran");
 
   await page.locator('[data-tab="all"]').click();
-  const allLeadsRow = page.locator("#leads-list tbody tr").filter({ hasText: "E2E Lead Updated" });
+  const allLeadsRow = page.locator("#leads-list tbody tr").filter({ hasText: updatedLeadName });
   await expect(allLeadsRow).toBeVisible({ timeout: 30000 });
-  const deleteButton = allLeadsRow.getByRole("button", { name: "Delete E2E Lead Updated" });
+  const deleteButton = allLeadsRow.getByRole("button", { name: `Delete ${updatedLeadName}` });
   await expect(deleteButton).toBeVisible();
   await deleteButton.click();
   const deleteDialog = page.getByRole("dialog", { name: "Delete lead" });
-  await expect(deleteDialog.getByText("Delete E2E Lead Updated? This can't be undone.")).toBeVisible();
+  await expect(deleteDialog.getByText(`Delete ${updatedLeadName}? This can't be undone.`)).toBeVisible();
   await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(allLeadsRow).toHaveCount(0);
 });
 
 test("reassign immediately removes an owner from My Leads but keeps the lead in All Leads", async ({ page }) => {
   const mobile = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
+  const leadText = `Reassignment Membership Lead ${mobile.slice(-4)}`;
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
@@ -126,13 +132,12 @@ test("reassign immediately removes an owner from My Leads but keeps the lead in 
   const initialMineCount = Number((await page.locator('[data-tab="mine"]').textContent())?.match(/\((\d+)\)/)?.[1]);
 
   await page.getByRole("button", { name: "Add Lead", exact: true }).click();
-  await page.getByLabel("Lead name *").fill("Reassignment Membership Lead");
+  await page.getByLabel("Lead name *").fill(leadText);
   await page.getByLabel("Mobile number *").fill(mobile);
   await page.getByLabel("Assign to").click();
   await page.getByRole("option", { name: "Reshma", exact: true }).click();
   await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
 
-  const leadText = "Reassignment Membership Lead";
   await expect(page.locator("#leads-list tbody tr").filter({ hasText: leadText })).toBeVisible();
   await expect(page.locator('[data-tab="all"]')).toHaveAttribute("aria-selected", "true");
   await page.locator('[data-tab="mine"]').click();

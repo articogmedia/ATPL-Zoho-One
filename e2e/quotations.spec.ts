@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
 for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 }]) {
-  test(`product picker and preview work at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`product picker and preview work at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    const mobileProject = testInfo.project.name === "Pixel 7" || testInfo.project.name === "iPhone 14";
+    const mobileShare = viewport.width < 640 || mobileProject;
     await page.setViewportSize(viewport);
     await page.addInitScript((nativeFileShare) => {
       Object.defineProperty(navigator, "canShare", {
@@ -17,7 +19,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
           },
         });
       }
-    }, viewport.width < 640);
+    }, mobileShare);
     await page.goto("/login");
     await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
     await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
@@ -102,21 +104,21 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
       whatsappUrls.push(route.request().url());
       return route.fulfill({ status: 200, body: "ok" });
     });
-    if (viewport.width < 640) {
+    if (mobileShare) {
       await page.route("https://public.blob.vercel-storage.com/**", (route) => route.fulfill({
         status: 200,
         contentType: "application/pdf",
         body: "%PDF-1.4\nshare fixture",
       }));
     }
-    const whatsappPopupPromise = viewport.width >= 640 ? page.waitForEvent("popup") : undefined;
+    const whatsappPopupPromise = mobileShare ? undefined : page.waitForEvent("popup");
     const shareResponsePromise = page.waitForResponse((response) =>
       response.url().includes("/api/quotations/share") && response.request().method() === "POST",
     );
     await page.getByRole("button", { name: "WhatsApp" }).click();
     const shareResponse = await shareResponsePromise;
     expect(shareResponse.status()).toBe(200);
-    if (viewport.width < 640) {
+    if (mobileShare) {
       await expect.poll(() => page.evaluate(() =>
         (window as typeof window & { __atplSharedFileCount?: number }).__atplSharedFileCount,
       )).toBe(1);
@@ -132,8 +134,57 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
   });
 }
 
+test("saved quotation keeps customer details and can download and share its PDF", async ({ page }, testInfo) => {
+  const mobileProject = testInfo.project.name === "Pixel 7" || testInfo.project.name === "iPhone 14";
+  await page.setViewportSize({ width: 1366, height: 768 });
+  if (mobileProject) {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "canShare", { configurable: true, value: () => false });
+    });
+  }
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/quotations");
+  await page.getByRole("button", { name: /Saved quotations/ }).click();
+  const savedDialog = page.getByRole("dialog", { name: "Saved quotations" });
+  const quoteCard = savedDialog.locator("article").filter({ hasText: "225/26-27" });
+  await expect(quoteCard).toContainText("Sri Lakshmi Textiles");
+  await quoteCard.getByRole("button", { name: "View" }).click();
+
+  const offer = page.locator("article.offer-document");
+  await expect(offer.getByText("Bill To").locator("..")).toContainText("Sri Lakshmi Textiles");
+  await expect(page.getByRole("button", { name: "Download PDF" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "WhatsApp" })).toBeEnabled();
+
+  const whatsappUrls: string[] = [];
+  await page.context().route("https://wa.me/**", (route) => {
+    whatsappUrls.push(route.request().url());
+    return route.fulfill({ status: 200, body: "ok" });
+  });
+  await page.route("**/api/quotations/share", (route) => route.fulfill({
+    status: 503,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "BLOB_READ_WRITE_TOKEN is missing" }),
+  }));
+  const pdfDownload = page.waitForEvent("download");
+  const whatsappPopup = mobileProject ? undefined : page.waitForEvent("popup");
+  await page.getByRole("button", { name: "WhatsApp" }).click();
+  const download = await pdfDownload;
+  expect(download.suggestedFilename()).toMatch(/^offer-.*\.pdf$/);
+  if (mobileProject) {
+    await expect.poll(() => page.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
+  } else {
+    const popup = await whatsappPopup!;
+    await expect.poll(() => popup.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
+    await expect(page.getByRole("heading", { name: "Create Quotation" })).toBeVisible();
+  }
+  expect(whatsappUrls).toHaveLength(1);
+});
+
 test("new quotation customer can be cancelled or created and selected", async ({ page }) => {
   const mobile = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
+  const customerName = `E2E Quotation Customer ${mobile.slice(-4)}`;
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
@@ -148,7 +199,7 @@ test("new quotation customer can be cancelled or created and selected", async ({
 
   await page.getByRole("button", { name: "New customer" }).click();
   await expect(page.getByLabel("Contact name")).toHaveValue("");
-  await page.getByLabel("Contact name").fill("E2E Quotation Customer");
+  await page.getByLabel("Contact name").fill(customerName);
   await page.getByLabel("Mobile number").fill(mobile);
   await page.getByRole("combobox", { name: "Source", exact: true }).click();
   await page.getByRole("option", { name: "Website", exact: true }).click();
@@ -158,8 +209,8 @@ test("new quotation customer can be cancelled or created and selected", async ({
   await expect(page.locator("#quote-step-products")).toBeVisible();
 
   await page.getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page.locator("#quote-step-customer")).toContainText("E2E Quotation Customer");
-  await page.locator("#quote-step-customer ul button").filter({ hasText: "E2E Quotation Customer" }).click();
+  await expect(page.locator("#quote-step-customer")).toContainText(customerName);
+  await page.locator("#quote-step-customer ul button").filter({ hasText: customerName }).click();
   await expect(page.locator("#quote-step-products")).toBeVisible();
   await page.getByRole("button", { name: "Item 1 product" }).click();
   const productDialog = page.getByRole("dialog", { name: "Choose product" });
@@ -168,5 +219,5 @@ test("new quotation customer can be cancelled or created and selected", async ({
   await page.getByRole("button", { name: "Preview Offer" }).click();
   await expect(page.locator("#offer-heading")).toBeVisible();
   await expect(page.locator("article.offer-document").getByText(/^\d+\/\d{2}-\d{2}$/)).toBeVisible();
-  await expect(page.locator("article.offer-document")).toContainText("E2E Quotation Customer");
+  await expect(page.locator("article.offer-document")).toContainText(customerName);
 });

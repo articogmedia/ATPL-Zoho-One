@@ -40,6 +40,9 @@ const quoteFields = {
     ] },
     { api_name: "Offer_No" },
     { api_name: "Lead_Ref", data_type: "lookup", lookup: { module: { api_name: "Leads" } }, system_mandatory: true },
+    { api_name: "Mobile", data_type: "phone" },
+    { api_name: "Phone", data_type: "phone" },
+    { api_name: "Customer_Name", data_type: "text" },
   ],
 };
 
@@ -129,6 +132,50 @@ describe("Zoho quotation creation", () => {
     }]);
   });
 
+  it("maps a saved quote to its customer, phone, validity, and discounted items", () => {
+    const mapped = mapQuote({
+      id: "saved-quote",
+      Subject: "Offer 249/26-27 - AC package",
+      Lead_Ref: { id: "lead-1" },
+      Account_Name: { id: "account-1", name: "Customer Co" },
+      Mobile: "9876543210",
+      Valid_Till: "2026-12-15",
+      Grand_Total: 240000,
+      Quoted_Items: [{
+        Product_Name: { id: "product-1", name: "Cassette AC" },
+        Quantity: 2,
+        List_Price: 122000,
+        Discount: 4000,
+      }],
+    }, new Map([["lead-1", {
+      id: "lead-1",
+      name: "Customer",
+      company: "Customer Co",
+      phone: "9876543210",
+      area: "Hyderabad",
+      address: "",
+      source: "Direct Call",
+      status: "Quotation Sent",
+      assignedTo: "Manager",
+      ownerId: "manager-1",
+      remarks: "",
+      createdOn: "2026-11-01",
+      touchedBy: [],
+    }]]), undefined, ["Quoted_Items"]);
+
+    expect(mapped).toMatchObject({
+      id: "saved-quote",
+      offerNo: "249/26-27",
+      leadId: "lead-1",
+      customer: "Customer Co",
+      phone: "9876543210",
+      subject: "Offer 249/26-27 - AC package",
+      validTill: "2026-12-15",
+      items: [{ productId: "product-1", model: "Cassette AC", qty: 2, price: 122000, discount: 4000 }],
+    });
+    expect(mapped.customer).not.toBe(mapped.subject);
+  });
+
   it("requests and maps the schema-selected line-item field when loading a saved quote", async () => {
     const savedQuote = {
       id: "quote-read",
@@ -142,7 +189,8 @@ describe("Zoho quotation creation", () => {
         Discount: 0,
       }],
     };
-    const zoho = vi.fn(async (_method: string, path: string) => {
+    const zoho = vi.fn(async (_method: string, path: string, options?: { query?: { fields?: string } }) => {
+      void options;
       if (path === "/settings/fields") return { fields: quoteFields.fields };
       if (path === "/settings/layouts") return { layouts: [] };
       if (path === "/Quotes/quote-read") return { data: [savedQuote] };
@@ -173,6 +221,55 @@ describe("Zoho quotation creation", () => {
     expect(zoho).toHaveBeenCalledWith("GET", "/Quotes/quote-read", {
       query: { fields: expect.stringContaining("Quoted_Items") },
     });
+    expect(zoho.mock.calls.find((call) => call[1] === "/Quotes/quote-read")?.[2]).toMatchObject({
+      query: { fields: expect.stringContaining("Mobile") },
+    });
+  });
+
+  it("resolves a saved quote's missing lead link from its customer phone", async () => {
+    const phoneLead = { ...leadRecord, id: "lead-phone", Company: "Unrelated Customer" };
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return { fields: quoteFields.fields };
+      if (path === "/settings/layouts") return { layouts: [] };
+      if (path === "/Quotes/quote-phone") return {
+        data: [{
+          id: "quote-phone",
+          Subject: "Offer 250/26-27 - AC package",
+          Account_Name: { id: "account-2", name: "Different Account" },
+          Mobile: "9876543210",
+          Quoted_Items: [{
+            Product_Name: { id: "product-1", name: "Cassette AC" },
+            Quantity: 1,
+            List_Price: 122000,
+          }],
+        }],
+      };
+      if (path === "/Leads/search") return { data: [phoneLead] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => {
+      if (module === "Leads") return [];
+      if (module === "Products") return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos" }];
+      return [];
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
+      ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.getQuote("quote-phone")).resolves.toMatchObject({
+      leadId: "lead-phone",
+      customer: "Unrelated Customer",
+      phone: "9876543210",
+      items: [{ productId: "product-1", model: "Cassette AC" }],
+    });
+    expect(zoho.mock.calls.some((call) => call[1] === "/Leads/search")).toBe(true);
   });
 
   it("writes the CRM Quoted_Items shape and keeps note failures from masking a saved quote", async () => {

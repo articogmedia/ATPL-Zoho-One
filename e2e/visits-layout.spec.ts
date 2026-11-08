@@ -78,7 +78,10 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
   await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
   await page.goto("/visits");
 
-  const task = page.locator("#work-list article").filter({ has: page.getByRole("button", { name: /Start Work/ }) }).first();
+  const task = page.locator("#work-list article")
+    .filter({ has: page.getByRole("button", { name: /Start Work/ }) })
+    .filter({ hasText: /Site survey|Room inspection|Demo visit|Installation check|Collect advance/ })
+    .first();
   await task.getByRole("button", { name: "Call" }).click();
   const callDialog = page.getByRole("dialog", { name: "Call lead" });
   await expect(callDialog).toBeVisible();

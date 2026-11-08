@@ -70,13 +70,42 @@ export async function POST(request: NextRequest) {
 
   try {
   const repository = crm();
-  const [lead, products] = await Promise.all([repository.getLead(parsed.leadId), repository.listProducts()]);
-  if (!lead || visibleFor(user, [lead]).length === 0) {
+  const savedQuote = parsed.quoteId ? await repository.getQuote(parsed.quoteId) : null;
+  if (parsed.quoteId && (!savedQuote || visibleFor(user, [savedQuote]).length === 0)) {
+    return NextResponse.json({ error: "Quotation not found or access denied." }, { status: 403 });
+  }
+  const linkedLeadId = savedQuote?.leadId || parsed.leadId || "";
+  const [linkedLead, products] = await Promise.all([
+    linkedLeadId ? repository.getLead(linkedLeadId) : Promise.resolve(null),
+    repository.listProducts(),
+  ]);
+  if (!linkedLead && !savedQuote) {
     return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
   }
+  if (linkedLead && visibleFor(user, [linkedLead]).length === 0 && !savedQuote) {
+    return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
+  }
+  const lead = linkedLead ?? {
+    id: linkedLeadId,
+    name: savedQuote!.customer,
+    company: "",
+    phone: savedQuote!.phone ?? "",
+    area: "",
+    address: "",
+    source: "Direct Call" as const,
+  };
+  const offerNo = savedQuote?.offerNo || parsed.offerNo;
+  const subject = savedQuote?.subject || parsed.subject;
+  const quoteItems = savedQuote?.items?.length && savedQuote.items.every((item) => item.productId)
+    ? savedQuote.items.map((item) => ({
+        productId: item.productId!,
+        qty: item.qty,
+        discount: item.discount ?? 0,
+      }))
+    : parsed.items;
 
   const byId = new Map(products.map((product) => [product.id, product]));
-  const items = parsed.items.map((row, index) => {
+  const items = quoteItems.map((row, index) => {
     const product = byId.get(row.productId);
     if (!product) throw new Error(`Product not found at row ${index + 1}.`);
     return {
@@ -117,7 +146,7 @@ export async function POST(request: NextRequest) {
   drawHeader(page);
   let y = height - 112;
   text(page, "OFFER REF", margin, y, 8, bold);
-  text(page, parsed.offerNo, margin + 75, y, 10, bold);
+  text(page, offerNo, margin + 75, y, 10, bold);
   text(page, `DATE: ${formatOfferDate(todayIST())}`, 330, y, 8, bold);
   y -= 20;
   text(page, "CLIENT", margin, y, 8, bold);
@@ -160,7 +189,7 @@ export async function POST(request: NextRequest) {
     }
   }
   y -= 8;
-  text(page, `Dear Sir,  Sub: ${parsed.subject}`, margin, y, 9, bold);
+  text(page, `Dear Sir,  Sub: ${subject}`, margin, y, 9, bold);
   y -= 16;
   wrap(regular, OFFER_TEXT.enquiry, 8, width - margin * 2).forEach((line) => { text(page, line, margin, y, 8); y -= 10; });
 
@@ -222,7 +251,7 @@ export async function POST(request: NextRequest) {
 
   const bytes = await pdf.save();
   return new NextResponse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
-    headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="offer-${parsed.offerNo.replace("/", "-")}.pdf"`, "Cache-Control": "private, no-store" },
+    headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="offer-${offerNo.replace("/", "-")}.pdf"`, "Cache-Control": "private, no-store" },
   });
   } catch (error) {
     const reference = newErrorReference();

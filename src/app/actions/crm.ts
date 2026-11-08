@@ -212,23 +212,37 @@ export async function updateLeadAction(input: unknown) {
     const user = await requireActionUser("leads");
     const p = editLeadSchema.parse(input);
     submittedPhone = p.phone;
-    await ownLeadOrThrow(user, p.id);
-    const duplicate = await crm().findLeadByPhone(p.phone);
-    if (duplicate && duplicate.lead.id !== p.id) {
-      throw new DuplicateLeadError({
-        id: duplicate.lead.id, name: duplicate.lead.name,
-        owner: duplicate.lead.assignedTo ?? "Unassigned", status: duplicate.lead.status,
-        matchedField: duplicate.matchedField,
-      });
+    const current = await ownLeadOrThrow(user, p.id);
+    if (normalizePhone(current.phone) !== normalizePhone(p.phone)) {
+      const duplicate = await crm().findLeadByPhone(p.phone);
+      if (duplicate && duplicate.lead.id !== p.id) {
+        throw new DuplicateLeadError({
+          id: duplicate.lead.id, name: duplicate.lead.name,
+          owner: duplicate.lead.assignedTo ?? "Unassigned", status: duplicate.lead.status,
+          matchedField: duplicate.matchedField,
+        });
+      }
     }
     const patch: LeadPatch = {
       name: p.name, company: p.company, phone: p.phone, source: p.source,
       status: p.status, remarks: p.remarks, followUp: p.followUp,
     };
-    await crm().updateLead(p.id, patch, user);
-    await invalidate("leads", "visits");
+    const updated = await crm().updateLead(p.id, patch, user, current);
+    await invalidate("visits");
     revalidateCrmPaths(...LEAD_MUTATION_PATHS);
-    return { zohoUrl: zohoLeadUrl(p.id) };
+    return {
+      zohoUrl: zohoLeadUrl(p.id),
+      lead: updated ?? {
+        ...current,
+        name: p.name,
+        company: p.company,
+        phone: p.phone,
+        source: p.source,
+        ...(p.status ? { status: p.status } : {}),
+        ...(p.remarks !== undefined ? { remarks: p.remarks } : {}),
+        ...(p.followUp ? { followUp: p.followUp } : {}),
+      },
+    };
   }, () => submittedPhone);
 }
 
@@ -289,15 +303,24 @@ export async function saveLeadUpdateAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("leads");
     const p = updateLeadSchema.parse(input);
-    await ownLeadOrThrow(user, p.id);
+    const current = await ownLeadOrThrow(user, p.id);
     if (p.assignedTo !== undefined) {
       if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
       if (p.assignedTo && !(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     }
-    await crm().updateLead(p.id, { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo }, user);
-    await invalidate("leads", "visits");
+    const patch: LeadPatch = { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo };
+    const updated = await crm().updateLead(p.id, patch, user, current);
+    await invalidate("visits");
     revalidateCrmPaths(...LEAD_MUTATION_PATHS);
-    return { zohoUrl: zohoLeadUrl(p.id) };
+    return {
+      zohoUrl: zohoLeadUrl(p.id),
+      lead: updated ?? {
+        ...current,
+        ...(p.status ? { status: p.status as LeadStatus } : {}),
+        ...(p.remarks !== undefined ? { remarks: p.remarks } : {}),
+        ...(p.assignedTo !== undefined ? { assignedTo: p.assignedTo } : {}),
+      },
+    };
   });
 }
 
@@ -399,7 +422,7 @@ export async function markQuotationSentAction(input: unknown) {
       if (!canAdvanceLeadStatus(lead.status, "Quotation Sent")) {
         throw new ForbiddenError("A closed lead cannot be marked as quotation sent.");
       }
-      await crm().updateLead(lead.id, { status: "Quotation Sent" }, user);
+      await crm().updateLead(lead.id, { status: "Quotation Sent" }, user, lead);
       await invalidate("leads", "quotes", "performance");
       revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
     }

@@ -298,12 +298,13 @@ describe("zoho mapping", () => {
     }, execs);
     expect(lead.assignedTo).toBe("Pavan Kumar");
   });
-  it("uses the quotation subject when offer number and linked customer are unavailable", () => {
+  it("does not mistake the quotation subject for a linked customer", () => {
     const quote = mapQuote({
       id: "Q1",
       Subject: "Offer 239/26-27 - Example Customer",
     }, new Map());
-    expect(quote).toMatchObject({ offerNo: "239/26-27", customer: "Example Customer" });
+    expect(quote).toMatchObject({ offerNo: "239/26-27", customer: "" });
+    expect(quote.subject).toBe("Offer 239/26-27 - Example Customer");
   });
   it("maps a text Lead_Ref value back to its selected lead", () => {
     const lead = mapLead({ id: "L10", Last_Name: "Ramesh", Company: "Clinic Two" }, execs);

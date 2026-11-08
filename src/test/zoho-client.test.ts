@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Lead } from "@/lib/domain";
 
 const assignmentAfterTasks = vi.hoisted(() => [] as (() => Promise<void> | void)[]);
 
@@ -252,26 +253,37 @@ describe("Zoho lead actions", () => {
 
       return "ok";
     });
+    const request = vi.fn(async (_method: string, path: string) => path === "/settings/fields"
+      ? leadSourceSettings
+      : { data: [] });
+    const current: Lead = {
+      id: "lead-1", name: "Old Lead", company: "Old Co", phone: "8888888888", area: "",
+      source: "Direct Call", status: "Fresh Lead", assignedTo: null, ownerId: "queue-1",
+      remarks: "", createdOn: "2026-11-06", address: "", touchedBy: [],
+    };
 
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
-      zoho: vi.fn(async (_method: string, path: string) => path === "/settings/fields"
-        ? leadSourceSettings
-        : path === "/Leads/lead-1"
-          ? { data: [{ id: "lead-1", Last_Name: "Old Lead", Company: "Old Co", Mobile: "8888888888", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }] }
-          : ({ data: [] })),
+      zoho: request,
       zohoList: vi.fn(async () => [{ id: "lead-1", Last_Name: "Old Lead", Company: "Old Co", Mobile: "8888888888", Lead_Source: "Direct Call", Lead_Status: "Fresh Lead", Owner: { id: "queue-1", name: "Queue" } }]),
       zohoWrite: write,
     }));
     const { invalidate } = await import("@/lib/cache");
     invalidate("leads", "users");
     const { zohoRepository } = await import("@/lib/zoho/repository");
-    await zohoRepository.updateLead("lead-1", {
+    const { cached } = await import("@/lib/cache");
+    await cached("leads", 60_000, async () => [current]);
+    const updated = await zohoRepository.updateLead("lead-1", {
       name: "Updated Lead", company: "Updated Co", phone: "9999999999", source: "Google Ads",
-    }, { id: "manager-1", name: "Manager", role: "Manager" });
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, current);
     expect(write).toHaveBeenCalledWith("PUT", "/Leads/lead-1", expect.objectContaining({
       Last_Name: "Updated Lead", Company: "Updated Co", Mobile: "9999999999", Lead_Source: "Google Ads",
     }), { trigger: ["workflow"] });
+    expect(updated).toMatchObject({ name: "Updated Lead", company: "Updated Co", phone: "9999999999" });
+    expect(request).not.toHaveBeenCalledWith("GET", "/Leads/lead-1", expect.anything());
+    await expect(cached("leads", 60_000, async () => [])).resolves.toMatchObject([
+      { id: "lead-1", name: "Updated Lead", company: "Updated Co" },
+    ]);
   });
 
   it("assigns a lead, advances Fresh Lead, notes it, and creates a call task", async () => {

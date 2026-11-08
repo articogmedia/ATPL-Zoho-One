@@ -34,11 +34,13 @@ export type ZQuotedItem = {
   Quantity?: number | string;
   List_Price?: number | string;
   Discount?: number | string;
+  Rate?: number | string;
+  Discount_Amount?: number | string;
   Description?: string;
   Unit?: string;
   Usage_Unit?: string;
 };
-export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
+export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; Valid_Till?: string; Mobile?: string; Phone?: string; Customer_Name?: string; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
 export type QuoteLineItemsField = "Quoted_Items" | "Product_Details";
 
 export function quoteLineItemsField(fieldNames: Iterable<string>): QuoteLineItemsField {
@@ -181,18 +183,28 @@ export function mapQuote(
   const rawLeadRef = z[FIELD.quote.lead];
   const ref = rawLeadRef && typeof rawLeadRef === "object" ? rawLeadRef as Ref : undefined;
   const textLeadId = typeof rawLeadRef === "string" ? rawLeadRef.trim() : "";
-  const leadId = ref?.id ?? textLeadId;
-  const lead = leadId ? leadsById.get(leadId) : undefined;
+  const referencedLeadId = ref?.id ?? textLeadId;
   const account = z.Account_Name && typeof z.Account_Name === "object" ? z.Account_Name as Ref : undefined;
   const contact = z.Contact_Name && typeof z.Contact_Name === "object" ? z.Contact_Name as Ref : undefined;
   const subjectMatch = /^Offer\s+(.+?)\s+-\s+(.+)$/.exec(String(z.Subject ?? "").trim());
   const offerNo = String(z[FIELD.quote.offerNo] ?? "").trim() || subjectMatch?.[1] || "";
-  const customer = (lead ? lead.company || lead.name : "") || account?.name || contact?.name || ref?.name || subjectMatch?.[2] || "";
+  const customerRefName = contact?.name || account?.name || ref?.name || String(z.Customer_Name ?? "").trim();
+  const lead = (referencedLeadId ? leadsById.get(referencedLeadId) : undefined) ??
+    [...leadsById.values()].find((candidate) =>
+      (customerRefName && [candidate.name, candidate.company].some((name) => name.trim().toLowerCase() === customerRefName.trim().toLowerCase())) ||
+      (!!z.Mobile && candidate.phone.replace(/\D/g, "").slice(-10) === String(z.Mobile).replace(/\D/g, "").slice(-10)) ||
+      (!!z.Phone && candidate.phone.replace(/\D/g, "").slice(-10) === String(z.Phone).replace(/\D/g, "").slice(-10)),
+    );
+  const leadId = lead?.id ?? referencedLeadId ?? "";
+  const customer = (lead ? lead.company || lead.name : "") || customerRefName;
   return {
     id: String(z.id).trim(),
     offerNo,
     leadId,
     customer,
+    phone: lead?.phone || String(z.Mobile ?? z.Phone ?? ""),
+    subject: String(z.Subject ?? ""),
+    validTill: day(z.Valid_Till),
     executive: cleanZohoDisplayName(z.Owner?.name),
     ownerId: ownerId(z.Owner?.id),
     total: z.Grand_Total ?? 0,
@@ -201,16 +213,20 @@ export function mapQuote(
     items: z[lineItemsField]?.map((item) => {
       const product = item.product ?? item.Product_Name;
       const reference = typeof product === "string" ? undefined : product;
-      const catalogProduct = reference?.id ? productsById?.get(reference.id) : undefined;
+      const catalogProduct = reference?.id
+        ? productsById?.get(reference.id)
+        : [...(productsById?.values() ?? [])].find((candidate) =>
+          candidate.model.trim().toLowerCase() === String(product ?? "").trim().toLowerCase(),
+        );
       const number = (value: number | string | undefined) => Number(value ?? 0);
       return {
-        productId: reference?.id,
+        productId: reference?.id ?? catalogProduct?.id,
         model: reference?.name ?? (typeof product === "string" ? product : catalogProduct?.model ?? ""),
         description: item.Description ?? catalogProduct?.description ?? "",
         unit: item.Usage_Unit ?? item.Unit ?? catalogProduct?.unit ?? "Nos",
-        price: number(item.list_price ?? item.List_Price ?? item.Unit_Price),
+        price: number(item.list_price ?? item.List_Price ?? item.Unit_Price ?? item.Rate),
         qty: number(item.quantity ?? item.Quantity),
-        discount: number(item.Discount),
+        discount: number(item.Discount ?? item.Discount_Amount),
       };
     }),
   };
