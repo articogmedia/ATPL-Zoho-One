@@ -506,6 +506,22 @@ export async function suggestOfferNoAction(): Promise<string> {
   }
 }
 
+export async function getProductsAction(): Promise<ActionResult<import("@/lib/domain").Product[]>> {
+  return run(async () => {
+    await requireActionUser("quotations");
+    return crm().listProducts();
+  });
+}
+
+export async function refreshProductsAction(): Promise<ActionResult<import("@/lib/domain").Product[]>> {
+  return run(async () => {
+    const user = await requireActionUser("quotations");
+    if (user.role !== "Manager") throw new ForbiddenError("Only managers can refresh products.");
+    await invalidate("products");
+    return crm().listProducts();
+  });
+}
+
 // ---------- Work & site visits ----------
 
 const newVisitSchema = z.object({

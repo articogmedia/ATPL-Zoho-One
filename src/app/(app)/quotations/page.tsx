@@ -100,6 +100,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
     leadSources={leadSources}
     leadSourcesUnavailable={leadSourcesUnavailable || leadSources.length === 0}
     products={uniqueProducts(products)}
+    isManager={user.role === "Manager"}
     suggestedOfferNo={suggestedOfferNo}
     presetLeadId={presetLead && !presetLeadError ? String(presetLead.id).trim() : ""}
     presetLeadError={presetLeadError}

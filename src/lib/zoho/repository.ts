@@ -39,7 +39,8 @@ const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", 
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", "Description", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
-const LONG = 600_000;   // users, products, and field metadata
+const LONG = 600_000;   // users and field metadata
+const PRODUCTS_TTL = 120_000;
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
 let productFieldSet: string[] | undefined;
 type QuoteFieldMetadata = {
@@ -1418,7 +1419,7 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listProducts() {
-    return cached("products", LONG, async () => {
+    return cached("products", PRODUCTS_TTL, async () => {
       const fieldAttempts = [
         ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit"],
         ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],

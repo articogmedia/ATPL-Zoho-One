@@ -64,7 +64,8 @@ Set `DATA_SOURCE`, `AUTH_MODE`, `SESSION_SECRET`, `ALLOW_DEMO_LOGIN`, `ZOHO_DC`,
 data centre; mismatches fail environment validation instead of silently sending
 credentials or requests to another Zoho region.
 `ZOHO_ROLE_OVERRIDES` is optional. `ZOHO_CRM_WEB_BASE` is optional and enables
-the **Open in Zoho** link after lead create/assignment.
+the **Open in Zoho** link after lead create/assignment. `ZOHO_WEBHOOK_SECRET` is
+optional and protects the Zoho Products cache-invalidation webhook.
 
 For production Vercel deployments, configure `UPSTASH_REDIS_REST_URL` and
 `UPSTASH_REDIS_REST_TOKEN` from a private Upstash Redis database. They share the
@@ -81,6 +82,17 @@ The signed-in app also refreshes warm caches on foreground, at most once every
 five minutes. If a deployment needs warmth between active sessions, an external
 uptime monitor can issue a GET request to `https://<portal-host>/api/warm` every
 five minutes; no authentication is required for this read-only endpoint.
+
+### Refresh products from Zoho
+
+Set a long, random `ZOHO_WEBHOOK_SECRET` in the deployment environment and redeploy.
+In Zoho CRM, open **Setup → Automation → Workflow Rules → Products**, create a rule
+that runs on product creation or edit, and configure a webhook action to send a
+`POST` request to `https://<portal-host>/api/webhooks/zoho-products` with the
+header `x-zoho-webhook-secret: <same ZOHO_WEBHOOK_SECRET>`. The endpoint accepts
+only that shared-secret header and invalidates the product cache; the portal
+re-fetches product data on the next product-list request. Managers can also use
+**Refresh products** in the quotation product picker.
 
 For static portal login, set `ATPL_RESHMA_PASSWORD`, `ATPL_PAVAN_PASSWORD`, and
 `ATPL_SAIKIRAN_PASSWORD`. The static users in `src/lib/auth/users.ts` use the

@@ -3,7 +3,7 @@
 import { startTransition, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, LoaderCircle, Minus, Plus, Printer, Search, Trash2, UserPlus, X } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, LoaderCircle, Minus, Plus, Printer, Search, Trash2, UserPlus, X, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
@@ -11,10 +11,10 @@ import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
-import { addLeadAction, createQuoteAction, getLeadSourcesAction, getQuoteDetailAction, markQuotationSentAction } from "@/app/actions/crm";
+import { addLeadAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, markQuotationSentAction, refreshProductsAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { canCreateQuotationPdf, splitQuotationItems } from "@/lib/quotation-presentation";
-import { formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
+import { formatINR, quoteTotals, uniqueProducts, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
 type WizardState = {
@@ -29,7 +29,7 @@ type WizardState = {
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
 type QuotationCustomer = Pick<Lead, "id" | "name" | "company" | "phone" | "area" | "source" | "status" | "assignedTo">
   & Partial<Pick<Lead, "assignedToId" | "ownerId" | "remarks" | "createdOn" | "address" | "touchedBy" | "followUp" | "followUpTime">>;
-type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; isManager: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
 function normalizeWhatsAppPhone(value: string) {
   const digits = value.replace(/\D/g, "");
@@ -55,7 +55,7 @@ function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep 
   </nav>;
 }
 
-export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQuotesCount, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQuotesCount, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products: initialProducts, isManager, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
   const router = useRouter();
   const refreshSilently = () => {
     startTransition(() => router.refresh());
@@ -63,6 +63,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   const [leadSources, setLeadSources] = useState(initialLeadSources);
   const [leadSourcesUnavailable, setLeadSourcesUnavailable] = useState(initialLeadSourcesUnavailable);
   const [retryingLeadSources, setRetryingLeadSources] = useState(false);
+  const [products, setProducts] = useState(initialProducts);
+  const [refreshingProducts, setRefreshingProducts] = useState(false);
+  const [productRefreshFailed, setProductRefreshFailed] = useState(false);
   const [nl, setNl] = useState({ name: "", company: "", phone: "", area: "", source: initialLeadSources[0] ?? "Direct Call" as LeadSource });
   const [created, setCreated] = useState<QuotationCustomer[]>([]);
   const myLeads = useMemo(() => [...created.filter((c) => !leads.some((l) => l.id === c.id)), ...leads], [created, leads]);
@@ -129,6 +132,39 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       toast.success("Lead sources loaded");
     } finally {
       setRetryingLeadSources(false);
+    }
+  };
+  const loadProductsOnPickerOpen = async () => {
+    try {
+      const result = await getProductsAction();
+      if (!result.ok || !result.data) {
+        toast.error("Couldn't refresh products. Please try again.");
+        return;
+      }
+      setProducts(uniqueProducts(result.data));
+    } catch {
+      toast.error("Couldn't refresh products. Please try again.");
+    }
+  };
+  const refreshProducts = async () => {
+    if (refreshingProducts) return;
+    setRefreshingProducts(true);
+    setProductRefreshFailed(false);
+    try {
+      const result = await refreshProductsAction();
+      if (!result.ok || !result.data) {
+        setProductRefreshFailed(true);
+        toast.error("Couldn't refresh products. Please try again.");
+        return;
+      }
+      const refreshed = uniqueProducts(result.data);
+      setProducts(refreshed);
+      toast.success(`Products updated (${refreshed.length})`);
+    } catch {
+      setProductRefreshFailed(true);
+      toast.error("Couldn't refresh products. Please try again.");
+    } finally {
+      setRefreshingProducts(false);
     }
   };
   useEffect(() => {
@@ -762,7 +798,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
                 <tr key={i} className="border-b">
                   <td className="p-2">{i + 1}</td>
-                  <td className="p-2"><ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} /></td>
+                  <td className="p-2"><ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} /></td>
                   <td className="p-2">{p?.unit}</td>
                   <td className="p-2"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
                   <td className="p-2 text-right">{formatINR(p?.price ?? 0)}</td>
@@ -778,7 +814,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
             <div key={i} className="space-y-3 rounded-xl border border-border bg-card p-3 shadow-sm">
               <div className="flex min-h-11 items-center justify-between"><span className="font-semibold">Item {i + 1}</span>
                 <Button variant="ghost" size="icon" className="h-11 w-11" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></div>
-              <ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} />
+              <ProductPicker products={products} value={r.productId} onChange={(productId) => upd(i, { productId })} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} />
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Quantity ({p?.unit || "Unit"})</span><div className="grid grid-cols-[44px_1fr_44px]"><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-r-none" aria-label={`Decrease quantity for item ${i + 1}`} onClick={() => setQty(i, String(Math.max(1, r.qty - 1)))}><Minus /></Button><input aria-label={`Quantity for item ${i + 1}`} type="number" min={1} inputMode="numeric" className={`${fieldClass} min-h-11 rounded-none text-center text-base`} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-l-none" aria-label={`Increase quantity for item ${i + 1}`} onClick={() => setQty(i, String(r.qty + 1))}><Plus /></Button></div></label>
                 <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Discount</span><input aria-label={`Discount for item ${i + 1}`} type="number" min={0} inputMode="numeric" className={`${fieldClass} min-h-11 text-base`} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></label>
@@ -811,7 +847,17 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   );
 }
 
-function ProductPicker({ products, value, onChange, label }: { products: Product[]; value: string; onChange: (value: string) => void; label: string }) {
+function ProductPicker({ products, value, onChange, label, isManager, refreshing, refreshFailed, onOpen, onRefresh }: {
+  products: Product[];
+  value: string;
+  onChange: (value: string) => void;
+  label: string;
+  isManager: boolean;
+  refreshing: boolean;
+  refreshFailed: boolean;
+  onOpen: () => void;
+  onRefresh: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -849,7 +895,7 @@ function ProductPicker({ products, value, onChange, label }: { products: Product
         type="button"
         aria-label={label}
         aria-haspopup="dialog"
-        onClick={() => { setQuery(""); setOpen(true); }}
+        onClick={() => { setQuery(""); setOpen(true); onOpen(); }}
         className="flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border border-input bg-background px-3 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="min-w-0">
@@ -869,6 +915,10 @@ function ProductPicker({ products, value, onChange, label }: { products: Product
         >
           <header className="flex min-h-14 shrink-0 items-center justify-between border-b border-border px-4">
             <h2 id="product-picker-title" className="font-semibold">Choose product</h2>
+            {isManager && <Button type="button" variant="outline" size="sm" className="ml-auto mr-2" disabled={refreshing} onClick={onRefresh}>
+              <RefreshCw className={refreshing ? "animate-spin" : ""} />
+              {refreshing ? "Refreshing…" : refreshFailed ? "Retry refresh" : "Refresh products"}
+            </Button>}
             <Button type="button" variant="ghost" size="icon" className="h-11 w-11" aria-label="Close product picker" onClick={() => setOpen(false)}><X /></Button>
           </header>
           <div className="shrink-0 p-4 pb-2">
