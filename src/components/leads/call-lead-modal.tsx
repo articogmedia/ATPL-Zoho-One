@@ -22,7 +22,7 @@ export function CallLeadModal({
 }: {
   lead: { id: string; name: string; phone: string };
   onClose: () => void;
-  onOptimistic?: (status: LeadStatus, followUp?: string) => void;
+  onOptimistic?: (status: LeadStatus, followUp?: string, remarks?: string) => void;
   onRollback?: () => void;
   onPendingChange?: (pending: boolean) => void;
   onSaved: (status: LeadStatus, followUp?: string) => void;
@@ -58,8 +58,9 @@ export function CallLeadModal({
   const saveOutcome = () => {
     const selected = OUTCOMES.find((item) => item.value === outcome);
     if (!selected || (selected.value === "Call Back Later" && !followUp)) return;
-    onOptimistic?.(selected.status, selected.value === "Call Back Later" ? followUp : undefined);
+    onOptimistic?.(selected.status, selected.value === "Call Back Later" ? followUp : undefined, remarks);
     onPendingChange?.(true);
+    onClose();
     start(async () => {
       try {
         const result = await logCallAction({
@@ -85,7 +86,9 @@ export function CallLeadModal({
           return;
         }
         setRetryableError(false);
-        if (result.data?.partialWarning) toast.warning(result.data.partialWarning);
+        if (result.data?.callLogPending) {
+          toast.success("Call outcome saved", { description: "Call log pending" });
+        } else if (result.data?.partialWarning) toast.warning(result.data.partialWarning);
         else if (result.data?.historyWarning) toast.warning(result.data.historyWarning);
         else toast.success("Call outcome saved");
         onSaved(selected.status, selected.value === "Call Back Later" ? followUp : undefined);

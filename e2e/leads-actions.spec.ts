@@ -198,3 +198,41 @@ test("mobile lead cards fit narrow viewports and have one WhatsApp action", asyn
   await expect(firstWithWhatsApp.getByRole("link", { name: /Message .* on WhatsApp/ })).toHaveCount(1);
   await expect(firstWithWhatsApp.getByRole("link", { name: /Call .* at / })).toHaveAttribute("href", /^tel:\+91\d{10}$/);
 });
+
+test("all call outcomes save on mobile and laptop widths", async ({ page }) => {
+  const outcomes = [
+    { label: "Answered" },
+    { label: "Not answered" },
+    { label: "Call back", followUp: "2030-01-01" },
+    { label: "Wrong number" },
+  ];
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/leads");
+  await page.locator('[data-tab="all"]').click();
+  const mobileCards = page.getByTestId("mobile-lead-card");
+  const cardWithPhone = mobileCards.filter({ has: page.locator('a[aria-label^="Call "]') }).first();
+  await expect(cardWithPhone).toBeVisible();
+  const callButton = cardWithPhone.locator('button[aria-label^="Call "]');
+  const callLabel = await callButton.getAttribute("aria-label");
+  if (!callLabel) throw new Error("The selected lead has no call action.");
+  const leadName = callLabel.replace(/^Call /, "");
+
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const outcome of outcomes) {
+      const call = width < 768
+        ? page.getByTestId("mobile-lead-card").filter({ hasText: leadName }).locator('button[aria-label^="Call "]')
+        : page.locator("#leads-list tbody tr").filter({ hasText: leadName }).getByRole("button", { name: `Call ${leadName}` });
+      await call.click();
+      const dialog = page.getByRole("dialog", { name: "Call lead" });
+      await dialog.getByRole("button", { name: outcome.label, exact: true }).click();
+      if (outcome.followUp) await dialog.getByLabel("Follow-up date").fill(outcome.followUp);
+      await dialog.getByRole("button", { name: "Save outcome" }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByText("Call outcome saved").last()).toBeVisible();
+    }
+  }
+});

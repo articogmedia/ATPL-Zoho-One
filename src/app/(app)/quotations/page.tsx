@@ -31,9 +31,18 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
   let presetLead: Awaited<ReturnType<typeof repo.getLead>> = null;
   let products: Product[];
   let leadSources: Awaited<ReturnType<typeof repo.listLeadSources>> = [];
+  let savedQuotesCount: number | undefined;
   let leadSourcesUnavailable = false;
+  const savedQuotesCountPromise = repo.countQuotes
+    ? repo.countQuotes(user.role === "Sales Executive" ? user.id : undefined).catch((error: unknown) => {
+      console.error("[page] quotation count unavailable", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    })
+    : Promise.resolve(undefined);
   try {
-    [customerPage, products, leadSources, presetLead] = await withPageTimeout(Promise.all([
+    [customerPage, products, leadSources, presetLead, savedQuotesCount] = await withPageTimeout(Promise.all([
       repo.listLeadsPage
         ? repo.listLeadsPage(1, 30, user.role === "Sales Executive" ? user.id : undefined)
         : repo.listLeads().then((rows) => ({ leads: rows.slice(0, 30), total: rows.length, hasMore: rows.length > 30 })),
@@ -51,6 +60,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
         });
         return null;
       }) : Promise.resolve(null),
+      savedQuotesCountPromise,
     ]));
   } catch (error) {
     console.error("[page] quotations data load failed", {
@@ -83,6 +93,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
 
   return <QuotationsClient
     leads={initialCustomers}
+    initialSavedQuotesCount={savedQuotesCount}
     initialCustomersHasMore={customerPage.hasMore}
     leadSources={leadSources}
     leadSourcesUnavailable={leadSourcesUnavailable || leadSources.length === 0}

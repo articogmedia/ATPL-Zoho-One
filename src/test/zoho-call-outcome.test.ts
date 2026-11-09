@@ -28,10 +28,32 @@ async function flushAfterJobs() {
   await Promise.all(jobs.map((job) => job()));
 }
 
-function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolean; taskFailure?: boolean; unassignedLead?: boolean } = {}) {
+function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolean; taskFailure?: boolean; unassignedLead?: boolean; callFailure?: boolean; dependentCallFirst?: boolean } = {}) {
   const calls: { method: string; path: string; record: Record<string, unknown> }[] = [];
+  let callAttempts = 0;
+  class MockZohoError extends Error {
+    constructor(
+      message: string,
+      readonly status?: number,
+      readonly code?: string,
+      readonly field?: string,
+      readonly details?: Record<string, unknown>,
+      readonly operation?: string,
+    ) {
+      super(message);
+    }
+  }
   const write = vi.fn(async (method: string, path: string, record: Record<string, unknown>) => {
     calls.push({ method, path, record });
+    if (path === "/Calls") {
+      callAttempts += 1;
+      if (options.dependentCallFirst && callAttempts === 1) {
+        throw new MockZohoError("Dependent field missing", 400, "DEPENDENT_FIELD_MISSING", "Call_Category", {
+          api_name: "Call_Category", json_path: "$.data[0].Call_Category", dependee: "Call_Type",
+        }, "POST /Calls");
+      }
+      if (options.callFailure) throw new MockZohoError("Call rejected", 400, "INVALID_DATA", "Call_Purpose");
+    }
     if (path === "/Notes" && options.noteFailure) throw new Error("Zoho Notes unavailable");
     if (path.startsWith("/Leads/") && method === "PUT" && options.statusFailure) throw new Error("Zoho lead update unavailable");
     if (path === "/Tasks" && options.taskFailure) throw new Error("Zoho Tasks unavailable");
@@ -39,15 +61,23 @@ function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolea
   });
   vi.doMock("@/lib/zoho/client", () => ({
     ZOHO_CRM_API_VERSION: "v6",
-    ZohoError: class extends Error {
-      constructor(message: string, readonly status?: number, readonly code?: string, readonly field?: string) {
-        super(message);
-      }
-    },
-    zoho: vi.fn(async (_method: string, path: string) => {
+    ZohoError: MockZohoError,
+    zoho: vi.fn(async (_method: string, path: string, opts?: { query?: { module?: string } }) => {
       if (path === `/Leads/${leadId}`) return { data: [{ id: leadId, Last_Name: "Call test lead", Company: "Call test lead", Mobile: "9876543210", Lead_Status: "Fresh Lead", ...(options.unassignedLead ? {} : { Owner: { id: "manager-1", name: "Manager" } }) }] };
       if (path === "/users") return { users: [{ id: "manager-1", full_name: "Manager", role: { name: "Manager" }, profile: { name: "Administrator" } }] };
       if (path === "/settings/fields") {
+        if (opts?.query?.module === "Calls") return { fields: [
+          { api_name: "Subject" },
+          { api_name: "Call_Type", required: true, pick_list_values: [{ actual_value: "Inbound" }, { actual_value: "Outbound" }] },
+          { api_name: "Call_Result", pick_list_values: ["Connected", "No Answer", "Busy", "Call Back Later", "Wrong Number"].map((actual_value) => ({ actual_value })) },
+          { api_name: "Call_Status", pick_list_values: [{ actual_value: "Completed" }, { actual_value: "Not Connected" }] },
+          { api_name: "Call_Purpose", pick_list_values: [{ actual_value: "Prospecting" }, { actual_value: "Customer Support" }] },
+          { api_name: "Call_Category", pick_list_values: [{ actual_value: "Category A" }, { actual_value: "Category B" }] },
+        ] };
+        if (opts?.query?.module === "Leads") return { fields: [
+          { api_name: "Lead_Status", pick_list_values: ["Fresh Lead", "Contacted", "Attempted to Contact", "Callback in Future", "Not Responsive"].map((actual_value) => ({ actual_value })) },
+          { api_name: "Description" },
+        ] };
         return { fields: ["Subject", "Status", "Due_Date", "Owner", "What_Id", "Who_Id", "Description"].map((api_name) => ({ api_name })) };
       }
       return { data: [] };
@@ -69,25 +99,15 @@ describe("Zoho call outcome persistence", () => {
       { leadId, outcome: "Connected", remarks: "Answered" },
       { id: "manager-1", name: "Manager", role: "Manager" },
     );
-    expect(result).toEqual({});
+    expect(result).toMatchObject({ historyWarning: "The change was saved, but its history note could not be added." });
     await flushAfterJobs();
 
-    expect(calls[0]).toEqual({
-      method: "POST",
-      path: "/Calls",
-      record: expect.objectContaining({
-        What_Id: { id: leadId },
-        $se_module: "Leads",
-        Subject: "Connected - Call test lead",
-      }),
-    });
-    expect(calls[0]?.record.Call_Start_Time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
-    expect(calls[1]).toMatchObject({
+    expect(calls[0]).toMatchObject({
       method: "PUT",
       path: `/Leads/${leadId}`,
-      record: { Lead_Status: "Contacted" },
+      record: { Lead_Status: "Contacted", Description: "Answered" },
     });
-    expect(calls[2]).toEqual({
+    expect(calls[1]).toEqual({
       method: "POST",
       path: "/Notes",
       record: {
@@ -96,7 +116,18 @@ describe("Zoho call outcome persistence", () => {
         Parent_Id: { module: { api_name: "Leads" }, id: leadId },
       },
     });
-    expect(calls[2]?.record).not.toHaveProperty("se_module");
+    const callRecord = calls.find((call) => call.path === "/Calls");
+    expect(callRecord).toEqual({
+      method: "POST",
+      path: "/Calls",
+      record: expect.objectContaining({
+        What_Id: { id: leadId },
+        $se_module: "Leads",
+        Subject: "Connected - Call test lead",
+      }),
+    });
+    expect(callRecord?.record.Call_Start_Time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
+    expect(calls[1]?.record).not.toHaveProperty("se_module");
   });
 
   it("links follow-up Tasks to the exact Zoho Lead ID with $se_module", async () => {
@@ -137,10 +168,11 @@ describe("Zoho call outcome persistence", () => {
       { id: "", name: "Manager", role: "Manager" },
     );
 
-    expect(calls[0]?.record.Owner).toEqual({ id: "manager-1" });
-    expect(JSON.stringify(calls[0]?.record)).not.toContain('"id":""');
-    expect(calls[0]?.record.What_Id).toEqual({ id: leadId });
-    expect(calls[0]?.record.$se_module).toBe("Leads");
+    const call = calls.find((item) => item.path === "/Calls");
+    expect(call?.record.Owner).toEqual({ id: "manager-1" });
+    expect(JSON.stringify(call?.record)).not.toContain('"id":""');
+    expect(call?.record.What_Id).toEqual({ id: leadId });
+    expect(call?.record.$se_module).toBe("Leads");
   });
 
   it("omits Owner for an unmatched actor and an unassigned lead", async () => {
@@ -153,25 +185,58 @@ describe("Zoho call outcome persistence", () => {
     );
     await flushAfterJobs();
 
-    expect(calls[0]?.record).not.toHaveProperty("Owner");
+    expect(calls.find((item) => item.path === "/Calls")?.record).not.toHaveProperty("Owner");
     const followUpTask = calls.find((call) => call.path === "/Tasks");
     expect(followUpTask?.record).not.toHaveProperty("Owner");
   });
 
-  it("returns partial-success warnings when later updates fail after the Calls POST", async () => {
-    const { calls } = mockRepository({ statusFailure: true, taskFailure: true });
+  it("does not fail when the Call record fails and queues a background retry", async () => {
+    const { calls } = mockRepository({ callFailure: true });
     const { zohoRepository } = await import("@/lib/zoho/repository");
 
     const result = await zohoRepository.logCall(
       { leadId, outcome: "Call Back Later", remarks: "", followUp: "2026-11-07" },
       { id: "manager-1", name: "Manager", role: "Manager" },
     );
+    expect(result).toEqual({ callLogPending: true });
+    expect(calls.some((call) => call.path === `/Leads/${leadId}` && call.method === "PUT")).toBe(true);
+    expect(calls.some((call) => call.path === "/Notes")).toBe(true);
+    expect(calls.filter((call) => call.path === "/Calls")).toHaveLength(1);
     await flushAfterJobs();
 
-    expect(calls[0]?.path).toBe("/Calls");
+    expect(calls.filter((call) => call.path === "/Calls")).toHaveLength(2);
+  });
+
+  it.each([
+    ["Connected", "Completed"],
+    ["No Answer", "Not Connected"],
+    ["Call Back Later", "Not Connected"],
+    ["Wrong Number", "Not Connected"],
+  ] as const)("retries a dependent-field error for %s with valid picklist values", async (outcome, callStatus) => {
+    const { calls } = mockRepository({ dependentCallFirst: true });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const result = await zohoRepository.logCall({ leadId, outcome, remarks: "customer-only remark" }, {
+      id: "manager-1", name: "Manager", role: "Manager",
+    });
+    await flushAfterJobs();
+
+    const callWrites = calls.filter((call) => call.path === "/Calls");
     expect(result).toEqual({});
-    expect(calls.some((call) => call.path === `/Leads/${leadId}` && call.method === "PUT")).toBe(true);
-    expect(calls.some((call) => call.path === "/Tasks")).toBe(true);
+    expect(callWrites).toHaveLength(2);
+    expect(callWrites[0]?.record.Call_Status).toBe(callStatus);
+    expect(callWrites[0]?.record.Call_Purpose).toBe("Prospecting");
+    expect(callWrites[0]?.record).not.toHaveProperty("Call_Category");
+    expect(callWrites[1]?.record.Call_Category).toBe("Category A");
+    expect(errorLog).toHaveBeenCalledWith("[zoho] required/dependent field missing", expect.objectContaining({
+      module: "Calls",
+      api_name: "Call_Category",
+      json_path: "$.data[0].Call_Category",
+      dependee: "Call_Type",
+      payloadKeys: expect.arrayContaining(["Subject", "Description", "Call_Type", "Call_Purpose"]),
+    }));
+    expect(JSON.stringify(errorLog.mock.calls)).not.toContain("customer-only remark");
+    errorLog.mockRestore();
   });
 
   it.each([
@@ -189,8 +254,9 @@ describe("Zoho call outcome persistence", () => {
     });
     await flushAfterJobs();
 
-    expect(calls[0]?.record.Call_Result).toBe(outcome);
-    expect(calls[0]?.record.Call_Start_Time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
+    const call = calls.find((item) => item.path === "/Calls");
+    expect(call?.record.Call_Result).toBe(outcome);
+    expect(call?.record.Call_Start_Time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/);
     expect(calls.find((call) => call.path === `/Leads/${leadId}`)?.record.Lead_Status).toBe(status);
   });
 

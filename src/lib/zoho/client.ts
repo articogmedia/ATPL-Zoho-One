@@ -53,6 +53,26 @@ function perfPath(path: string) {
   return path.replace(/\/(?:\d{6,}|[a-f0-9-]{20,})(?=\/|$)/gi, "/:id");
 }
 
+function missingFieldDetails(details?: Record<string, unknown>) {
+  return {
+    api_name: details?.api_name,
+    json_path: details?.json_path,
+    dependee: details?.dependee,
+    expected_data_type: details?.expected_data_type,
+  };
+}
+
+function writePayloadKeys(body: unknown): string[] {
+  if (!body || typeof body !== "object") return [];
+  const data = (body as { data?: unknown }).data;
+  const record = Array.isArray(data) ? data[0] : undefined;
+  return record && typeof record === "object" ? Object.keys(record) : [];
+}
+
+function writeModule(path: string): string | undefined {
+  return /^\/(Calls|Leads)(?:\/|$)/.exec(path)?.[1];
+}
+
 const g = globalThis as unknown as {
   __atplZohoToken?: { value: string; exp: number };
   __atplZohoRefresh?: Promise<string>;
@@ -545,16 +565,24 @@ export async function zoho<T = unknown>(
       rawResponseBody,
       expected_data_type: detail?.expected_data_type,
     };
-    console.error("[zoho] request rejected", {
-      reference, method, path: requestPath, status: res.status,
-      code, message, details: responseDetails, field,
-      api_name: detail?.api_name,
-      json_path: detail?.json_path,
-      param_name: detail?.param_name,
-      expected_data_type: detail?.expected_data_type,
-      rawResponseBody,
-      payload: redactWritePayload(opts.body),
-    });
+    if (code === "DEPENDENT_FIELD_MISSING" || code === "REQUIRED_FIELD_MISSING") {
+      console.error("[zoho] request rejected", {
+        reference, method, path: requestPath, status: res.status,
+        code, module: writeModule(path), payloadKeys: writePayloadKeys(opts.body),
+        ...missingFieldDetails(detail),
+      });
+    } else {
+      console.error("[zoho] request rejected", {
+        reference, method, path: requestPath, status: res.status,
+        code, message, details: responseDetails, field,
+        api_name: detail?.api_name,
+        json_path: detail?.json_path,
+        param_name: detail?.param_name,
+        expected_data_type: detail?.expected_data_type,
+        rawResponseBody,
+        payload: redactWritePayload(opts.body),
+      });
+    }
     throw new ZohoError(
       res.status === 429 ? "Zoho API rate limit reached. Please retry shortly." : message ?? `Zoho request failed (${res.status})`,
       res.status, code, field, detail?.value, operation, responseDetails, reference,
@@ -600,16 +628,24 @@ export async function zohoWrite(
       ? error.reference
       : newErrorReference();
     const details = error instanceof ZohoError ? error.details : undefined;
-    console.error("[zoho] write request failed", {
-      reference, method, path,
-      status: error instanceof ZohoError ? error.status : undefined,
-      code: error instanceof ZohoError ? error.code : undefined,
-      message: error instanceof Error ? error.message : String(error),
-      details,
-      api_name: details?.api_name ?? (error instanceof ZohoError ? error.field : undefined),
-      expected_data_type: details?.expected_data_type,
-      payload: redactWritePayload(payload),
-    });
+    if (error instanceof ZohoError && (error.code === "DEPENDENT_FIELD_MISSING" || error.code === "REQUIRED_FIELD_MISSING")) {
+      console.error("[zoho] write request failed", {
+        reference, method, path, status: error.status, code: error.code,
+        module: writeModule(path), payloadKeys: writePayloadKeys(payload),
+        ...missingFieldDetails(details),
+      });
+    } else {
+      console.error("[zoho] write request failed", {
+        reference, method, path,
+        status: error instanceof ZohoError ? error.status : undefined,
+        code: error instanceof ZohoError ? error.code : undefined,
+        message: error instanceof Error ? error.message : String(error),
+        details,
+        api_name: details?.api_name ?? (error instanceof ZohoError ? error.field : undefined),
+        expected_data_type: details?.expected_data_type,
+        payload: redactWritePayload(payload),
+      });
+    }
     if (error instanceof ZohoError) {
       throw new ZohoError(error.message, error.status, error.code, error.field, error.invalidValue, error.operation, error.details, reference);
     }
@@ -623,16 +659,24 @@ export async function zohoWrite(
     const message = first?.message ?? "Zoho rejected the change";
     const apiName = first?.details?.api_name;
     const reference = newErrorReference();
-    console.error("[zoho] write rejected", {
-      reference, method, path, status: 200, recordStatus: first?.status,
-      code: first?.code, message, details: first?.details,
-      api_name: apiName, param_name: first?.details?.param_name,
-      json_path: first?.details?.json_path,
-      expected_data_type: first?.details?.expected_data_type,
-      rawResponseBody: redactWritePayload(json),
-      response: redactWritePayload(json),
-      payload: redactWritePayload(payload),
-    });
+    if (first?.code === "DEPENDENT_FIELD_MISSING" || first?.code === "REQUIRED_FIELD_MISSING") {
+      console.error("[zoho] write rejected", {
+        reference, method, path, status: 200, recordStatus: first?.status,
+        code: first?.code, module: writeModule(path), payloadKeys: writePayloadKeys(payload),
+        ...missingFieldDetails(first?.details),
+      });
+    } else {
+      console.error("[zoho] write rejected", {
+        reference, method, path, status: 200, recordStatus: first?.status,
+        code: first?.code, message, details: first?.details,
+        api_name: apiName, param_name: first?.details?.param_name,
+        json_path: first?.details?.json_path,
+        expected_data_type: first?.details?.expected_data_type,
+        rawResponseBody: redactWritePayload(json),
+        response: redactWritePayload(json),
+        payload: redactWritePayload(payload),
+      });
+    }
     throw new ZohoError(
       apiName ? `${message} (field: ${apiName})` : message,
       200,

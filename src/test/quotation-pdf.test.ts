@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-presentation";
+import { canCreateQuotationPdf, needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-presentation";
+import { quotationRequestSchema } from "@/lib/quotation-request";
 
 vi.mock("server-only", () => ({}));
 
@@ -43,5 +44,19 @@ describe("quotation PDF route", () => {
     const presentation = quotationPresentation(items);
     expect(presentation.grandTotal).toBe(25000);
     expect(needsPdfTotalsPage(25, 120)).toBe(true);
+  });
+
+  it("allows saved quote PDFs to use mapped line snapshots without product IDs", () => {
+    const request = {
+      quoteId: "Q1", offerNo: "239/26-27", subject: "Offer",
+      items: [{ qty: 1 }],
+    };
+    expect(quotationRequestSchema.safeParse(request).success).toBe(true);
+    expect(quotationRequestSchema.safeParse({
+      ...request, quoteId: undefined, leadId: "L1",
+    }).success).toBe(false);
+    expect(canCreateQuotationPdf({
+      offerNo: "239/26-27", customer: "Customer", leadId: "", items: [{}],
+    }, true)).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mapQuote, quoteLineItemsField } from "@/lib/zoho/mappers";
+import { canCreateQuotationPdf } from "@/lib/quotation-presentation";
 
 const cacheMode = vi.hoisted(() => ({ roundTrip: false }));
 
@@ -29,6 +30,7 @@ const leadRecord = {
 const quoteFields = {
   fields: [
     { api_name: "Subject", data_type: "text" },
+    { api_name: "Status", pick_list_values: [{ actual_value: "Draft" }, { actual_value: "Sent" }] },
     { api_name: "Quoted_Items", data_type: "subform", subform_fields: [
       { api_name: "Product_Name", data_type: "lookup" },
       { api_name: "Quantity", data_type: "integer" },
@@ -174,6 +176,7 @@ describe("Zoho quotation creation", () => {
       items: [{ productId: "product-1", model: "Cassette AC", qty: 2, price: 122000, discount: 4000 }],
     });
     expect(mapped.customer).not.toBe(mapped.subject);
+    expect(canCreateQuotationPdf(mapped, true)).toBe(true);
   });
 
   it("requests and maps the schema-selected line-item field when loading a saved quote", async () => {
@@ -768,5 +771,46 @@ describe("Zoho quotation creation", () => {
         Net_Total: 120000,
       }],
     }));
+  });
+
+  it("uses the Zoho count endpoint and supports owner-scoped quotation totals", async () => {
+    const zoho = vi.fn(async (_method: string, _path: string, options?: { query?: Record<string, string> }) => ({
+      count: options?.query?.criteria ? 7 : 23,
+    }));
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: vi.fn(),
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.countQuotes?.()).resolves.toBe(23);
+    await expect(zohoRepository.countQuotes?.("manager-1")).resolves.toBe(7);
+    expect(zoho).toHaveBeenCalledWith("GET", "/Quotes/actions/count", { query: undefined });
+    expect(zoho).toHaveBeenCalledWith("GET", "/Quotes/actions/count", {
+      query: { criteria: "(Owner.id:equals:manager-1)" },
+    });
+  });
+
+  it("marks saved quotations Sent using the configured Status picklist value", async () => {
+    const write = vi.fn(async () => "quote-1");
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return quoteFields;
+      if (path === "/settings/layouts") return { layouts: [] };
+      return {};
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: vi.fn(),
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await zohoRepository.markQuoteSent("quote-1");
+    expect(write).toHaveBeenCalledWith("PUT", "/Quotes/quote-1", { Status: "Sent" });
   });
 });

@@ -411,22 +411,34 @@ export async function createQuoteAction(input: unknown) {
   });
 }
 
-const quotationSentSchema = z.object({ leadId: id });
+const quotationSentSchema = z.object({ leadId: id.optional(), quoteId: id.optional() }).refine(
+  (value) => !!value.leadId || !!value.quoteId,
+  { message: "Quotation is missing." },
+);
 
 export async function markQuotationSentAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("quotations");
-    const { leadId } = quotationSentSchema.parse(input);
-    const lead = await ownLeadOrThrow(user, leadId);
-    if (lead.status !== "Quotation Sent") {
-      if (!canAdvanceLeadStatus(lead.status, "Quotation Sent")) {
-        throw new ForbiddenError("A closed lead cannot be marked as quotation sent.");
-      }
-      await crm().updateLead(lead.id, { status: "Quotation Sent" }, user, lead);
-      await invalidate("leads", "quotes", "performance");
-      revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
+    const { leadId: requestedLeadId, quoteId } = quotationSentSchema.parse(input);
+    const repository = crm();
+    const quote = quoteId ? await repository.getQuote(quoteId) : null;
+    if (quoteId && (!quote || visibleFor(user, [quote]).length === 0)) {
+      throw new ForbiddenError("You can only update your own quotations.");
     }
-    return { status: "Quotation Sent" as const };
+    if (quote) await repository.markQuoteSent(quote.id);
+    const leadId = requestedLeadId || quote?.leadId;
+    if (leadId) {
+      const lead = await ownLeadOrThrow(user, leadId);
+      if (lead.status !== "Quotation Sent") {
+        if (!canAdvanceLeadStatus(lead.status, "Quotation Sent")) {
+          throw new ForbiddenError("A closed lead cannot be marked as quotation sent.");
+        }
+        await repository.updateLead(lead.id, { status: "Quotation Sent" }, user, lead);
+      }
+    }
+    await invalidate("leads", "quotes", "performance");
+    revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
+    return { status: "Quotation Sent" as const, quoteStatus: "Sent" as const };
   });
 }
 

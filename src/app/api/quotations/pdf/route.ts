@@ -77,7 +77,7 @@ export async function POST(request: NextRequest) {
   const linkedLeadId = savedQuote?.leadId || parsed.leadId || "";
   const [linkedLead, products] = await Promise.all([
     linkedLeadId ? repository.getLead(linkedLeadId) : Promise.resolve(null),
-    repository.listProducts(),
+    savedQuote?.items?.length ? Promise.resolve([]) : repository.listProducts(),
   ]);
   if (!linkedLead && !savedQuote) {
     return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
@@ -96,23 +96,23 @@ export async function POST(request: NextRequest) {
   };
   const offerNo = savedQuote?.offerNo || parsed.offerNo;
   const subject = savedQuote?.subject || parsed.subject;
-  const quoteItems = savedQuote?.items?.length && savedQuote.items.every((item) => item.productId)
+  const items = savedQuote?.items?.length
     ? savedQuote.items.map((item) => ({
-        productId: item.productId!,
+        model: item.model,
+        description: item.description ?? "",
+        unit: item.unit,
         qty: item.qty,
+        price: item.price,
         discount: item.discount ?? 0,
       }))
-    : parsed.items;
-
-  const byId = new Map(products.map((product) => [product.id, product]));
-  const items = quoteItems.map((row, index) => {
-    const product = byId.get(row.productId);
-    if (!product) throw new Error(`Product not found at row ${index + 1}.`);
-    return {
-      model: product.model, description: product.description ?? "", unit: product.unit,
-      qty: row.qty, price: product.price, discount: row.discount ?? 0,
-    };
-  });
+    : parsed.items.map((row, index) => {
+        const product = products.find((candidate) => candidate.id === row.productId);
+        if (!product) throw new Error(`Product not found at row ${index + 1}.`);
+        return {
+          model: product.model, description: product.description ?? "", unit: product.unit,
+          qty: row.qty, price: product.price, discount: row.discount ?? 0,
+        };
+      });
   const presentation = quotationPresentation(items);
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);

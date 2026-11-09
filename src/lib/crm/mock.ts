@@ -150,9 +150,18 @@ export const mockRepository: CrmRepository = {
   async listQuotesPage(page) {
     const quotes = [...state.quotes].sort((a, b) => b.date.localeCompare(a.date));
     const start = (Math.max(1, Math.floor(page)) - 1) * 200;
-    return { quotes: quotes.slice(start, start + 200), hasMore: quotes.length > start + 200 };
+    return { quotes: quotes.slice(start, start + 200), hasMore: quotes.length > start + 200, count: quotes.length };
+  },
+  async countQuotes(ownerId) {
+    const quotes = ownerId ? state.quotes.filter((quote) => quote.ownerId === ownerId) : state.quotes;
+    return quotes.length;
   },
   async getQuote(id) { return state.quotes.find((quote) => quote.id === id) ?? null; },
+  async markQuoteSent(id) {
+    const quote = state.quotes.find((item) => item.id === id);
+    if (!quote) throw new Error("Quotation not found");
+    quote.status = "Sent";
+  },
   async createQuote(input, actor, executive) {
     const lead = state.leads.find((l) => l.id === input.leadId);
     if (!lead) throw new Error("Lead not found");

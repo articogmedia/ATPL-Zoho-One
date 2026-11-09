@@ -16,10 +16,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid quotation page." }, { status: 400 });
   }
   try {
-    const result = await crm().listQuotesPage(page);
+    const repository = crm();
+    const result = await repository.listQuotesPage(page);
+    const quotes = visibleFor(user, result.quotes);
+    const count = page === 1 && repository.countQuotes
+      ? await repository.countQuotes(user.role === "Sales Executive" ? user.id : undefined).catch((error: unknown) => {
+        console.error("[api] quotation count unavailable", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      })
+      : undefined;
     return NextResponse.json({
-      quotes: visibleFor(user, result.quotes),
+      quotes,
       hasMore: result.hasMore,
+      count: count ?? (user.role === "Sales Executive" ? quotes.length : result.count),
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const reference = newErrorReference();

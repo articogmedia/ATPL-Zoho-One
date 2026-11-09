@@ -590,9 +590,14 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
         />
       )}
-      {action?.type === "call" && <CallLeadModal lead={action.lead} onClose={() => setAction(null)} onPendingChange={(pending) => setPendingLeadId(pending ? action.lead.id : null)} onOptimistic={(status, followUp) => {
+      {action?.type === "call" && <CallLeadModal lead={action.lead} onClose={() => setAction(null)} onPendingChange={(pending) => setPendingLeadId(pending ? action.lead.id : null)} onOptimistic={(status, followUp, remarks) => {
         const before = leadRows.find((lead) => lead.id === action.lead.id) ?? action.lead;
-        const after = { ...before, status, ...(followUp ? { followUp } : {}) };
+        const after = {
+          ...before,
+          status,
+          ...(followUp ? { followUp } : {}),
+          ...(remarks?.trim() ? { remarks: [before.remarks, remarks.trim()].filter(Boolean).join("\n") } : {}),
+        };
         optimisticCalls.current.set(action.lead.id, after);
         updateLeadOptimistically(before, after);
       }} onRollback={() => {

@@ -12,7 +12,7 @@ import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { addLeadAction, createQuoteAction, getLeadSourcesAction, getQuoteDetailAction, markQuotationSentAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
-import { splitQuotationItems } from "@/lib/quotation-presentation";
+import { canCreateQuotationPdf, splitQuotationItems } from "@/lib/quotation-presentation";
 import { formatINR, quoteTotals, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
@@ -28,7 +28,7 @@ type WizardState = {
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
 type QuotationCustomer = Pick<Lead, "id" | "name" | "company" | "phone" | "area" | "source" | "status" | "assignedTo">
   & Partial<Pick<Lead, "assignedToId" | "ownerId" | "remarks" | "createdOn" | "address" | "touchedBy" | "followUp" | "followUpTime">>;
-type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
 function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep }: {
   step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; hasSavedQuote: boolean; onStep: (step: 1 | 2 | 3) => void;
@@ -46,7 +46,7 @@ function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep 
   </nav>;
 }
 
-export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQuotesCount, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
   const router = useRouter();
   const refreshSilently = () => {
     startTransition(() => router.refresh());
@@ -135,12 +135,18 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
   useEffect(() => {
     setCustomerListHasMore(initialCustomersHasMore);
   }, [initialCustomersHasMore]);
+  useEffect(() => {
+    if (initialSavedQuotesCount !== undefined) {
+      setSavedQuotesCount((count) => Math.max(count ?? 0, initialSavedQuotesCount));
+    }
+  }, [initialSavedQuotesCount]);
   const [adding, setAdding] = useState(false);
   const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
   const [pending, start] = useTransition();
   const [customerRetryable, setCustomerRetryable] = useState(false);
   const [quoteSaveError, setQuoteSaveError] = useState("");
   const [savedQuotes, setSavedQuotes] = useState<Quotation[]>([]);
+  const [savedQuotesCount, setSavedQuotesCount] = useState<number | null>(initialSavedQuotesCount ?? null);
   const [savedQuotesPage, setSavedQuotesPage] = useState(1);
   const [savedQuotesHasMore, setSavedQuotesHasMore] = useState(false);
   const [loadingMoreQuotes, setLoadingMoreQuotes] = useState(false);
@@ -423,6 +429,8 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
       }] : [];
     });
     const saved = { ...res.data, items: savedItems };
+    const alreadyCounted = savedQuotes.some((quote) => quote.id === saved.id);
+    setSavedQuotesCount((count) => Math.max((count ?? 0) + (alreadyCounted ? 0 : 1), savedQuotes.length + (alreadyCounted ? 0 : 1)));
     setSavedQuotes((current) => [saved, ...current.filter((quote) => quote.id !== saved.id)]);
     setWizard((current) => ({ ...current, offerNo: saved.offerNo, subject, step: 3, savedQuotation: saved, quotationSent: false }));
     toast.success("Quotation saved as Draft");
@@ -431,10 +439,16 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
 
   const markQuotationSent = async () => {
     if (!lead || wizard.quotationSent) return;
-    const result = await markQuotationSentAction({ leadId: lead.id });
+    const result = await markQuotationSentAction({
+      leadId: lead.id,
+      ...(wizard.savedQuotation?.id ? { quoteId: wizard.savedQuotation.id } : {}),
+    });
     if (!result.ok) throw new Error(result.error);
-    setWizard((current) => ({ ...current, quotationSent: true }));
-    toast.success("Lead stage updated to Quotation Sent");
+    setWizard((current) => ({
+      ...current,
+      quotationSent: true,
+      savedQuotation: current.savedQuotation ? { ...current.savedQuotation, status: "Sent" } : undefined,
+    }));
     refreshSilently();
   };
 
@@ -462,9 +476,11 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     setLoadingMoreQuotes(true);
     void fetch("/api/quotations?page=1")
       .then(async (response) => {
-        const result = await response.json() as { quotes?: Quotation[]; hasMore?: boolean; error?: string };
+        const result = await response.json() as { quotes?: Quotation[]; hasMore?: boolean; count?: number; error?: string };
         if (!response.ok) throw new Error(result.error || "Unable to load quotations.");
-        setSavedQuotes(result.quotes ?? []);
+        const quotes = result.quotes ?? [];
+        setSavedQuotes((current) => [...quotes, ...current.filter((quote) => !quotes.some((item) => item.id === quote.id))]);
+        setSavedQuotesCount((count) => Math.max(count ?? 0, result.count ?? 0, quotes.length));
         setSavedQuotesPage(1);
         setSavedQuotesHasMore(result.hasMore === true);
         savedQuotesLoaded.current = true;
@@ -478,9 +494,12 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     setLoadingMoreQuotes(true);
     try {
       const response = await fetch(`/api/quotations?page=${savedQuotesPage + 1}`);
-      const result = await response.json() as { quotes?: Quotation[]; hasMore?: boolean; error?: string };
+      const result = await response.json() as { quotes?: Quotation[]; hasMore?: boolean; count?: number; error?: string };
       if (!response.ok) throw new Error(result.error || "Unable to load more quotations.");
-      setSavedQuotes((current) => [...current, ...(result.quotes ?? []).filter((quote) => !current.some((item) => item.id === quote.id))]);
+      const incoming = result.quotes ?? [];
+      const newQuotes = incoming.filter((quote) => !savedQuotes.some((item) => item.id === quote.id));
+      setSavedQuotes((current) => [...current, ...incoming.filter((quote) => !current.some((item) => item.id === quote.id))]);
+      setSavedQuotesCount((count) => Math.max(count ?? 0, result.count ?? 0, savedQuotes.length + newQuotes.length));
       setSavedQuotesPage((page) => page + 1);
       setSavedQuotesHasMore(result.hasMore === true);
     } catch (error) {
@@ -569,11 +588,19 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
       createdOn: readOnlyQuote.date,
       touchedBy: [],
     };
+    const markSavedQuoteSent = async () => {
+      const result = await markQuotationSentAction({
+        quoteId: readOnlyQuote.id,
+        ...(readOnlyQuote.leadId ? { leadId: readOnlyQuote.leadId } : {}),
+      });
+      if (!result.ok) throw new Error(result.error);
+      setReadOnlyQuote((current) => current ? { ...current, status: "Sent" } : current);
+    };
     return <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Create Quotation</h1>
         <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
-          <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
+          <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
         </Button>
       </div>
       <Offer
@@ -584,7 +611,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
         subject={readOnlyQuote.subject || offerSubject((readOnlyQuote.items ?? []).map((item) => item.model))}
         setSubject={() => undefined}
         onBack={() => setReadOnlyQuote(null)}
-        onMarkSent={async () => undefined}
+        onMarkSent={markSavedQuoteSent}
         readOnly
         editableOfferNo={false}
         customer={readOnlyQuote.customer}
@@ -602,22 +629,22 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <h1 className="text-2xl font-bold">Create Quotation</h1>
       <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
-        <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
+        <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
       </Button>
     </div>
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
-    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedQuoteId={wizard.savedQuotation.id} />
+    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedQuoteId={wizard.savedQuotation.id} status={wizard.quotationSent ? "Sent" : wizard.savedQuotation.status ?? "Draft"} />
     {savedDialog}
   </div>;
 
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
   return (
-    <div className={`space-y-6 ${lead && productsValid ? "pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
+    <div className={`min-w-0 space-y-6 ${lead && productsValid ? "pb-[calc(14rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Create Quotation</h1>
         <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
-          <History className="h-4 w-4" /> Saved quotations ({savedQuotes.length})
+          <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
         </Button>
       </div>
       <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
@@ -653,16 +680,16 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
             {lead && <div className="rounded-lg bg-secondary p-3 text-secondary-foreground">
               <div className="font-semibold">{lead.company || lead.name}</div><div className="text-sm">{lead.name} · {lead.phone} · {lead.area}</div>
             </div>}
-            <div className="flex gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
-                <input className={`${fieldClass} pl-10`} placeholder="Search name, company, mobile, area" value={q} onChange={(e) => setQ(e.target.value)} />
+                <input className={`${fieldClass} min-h-11 pl-10`} placeholder="Search name, company, mobile, area" value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
               <Button type="button" variant="outline" onClick={() => {
                 const firstSource = leadSources[0];
                 if (firstSource) setNl((current) => ({ ...current, source: firstSource }));
                 setAdding(true);
-              }}><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
+              }} className="h-11 w-11 shrink-0 px-0 sm:w-auto sm:px-4"><UserPlus className="h-5 w-5" /><span className="hidden sm:inline">New customer</span></Button>
             </div>
             {customerSearchPending && localMatches.length === 0 && <p role="status" className="text-sm text-muted-foreground">Searching…</p>}
             {customerSearchError && <p role="alert" className="text-sm text-destructive">{customerSearchError}</p>}
@@ -670,9 +697,11 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
             <ul className="max-h-[min(55vh,32rem)] divide-y overflow-y-auto rounded-lg border">
               {matches.map((l) => (
                 <li key={l.id}>
-                  <button type="button" aria-pressed={leadId === l.id} className={`w-full p-3 text-left hover:bg-secondary ${leadId === l.id ? "bg-secondary" : ""}`} onClick={() => selectCustomer(String(l.id).trim())}>
-                    <div className="font-medium">{l.company || l.name}</div>
-                    <div className="text-sm text-muted-foreground">{l.name} · {l.phone} · {l.area}</div>
+                  <button type="button" aria-pressed={leadId === l.id} className={`min-h-16 w-full px-3 py-2 text-left hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${leadId === l.id ? "bg-secondary" : ""}`} onClick={() => selectCustomer(String(l.id).trim())}>
+                    <div className="break-words font-medium">{l.name}</div>
+                    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 text-sm text-muted-foreground">
+                      <span className="break-words">{l.company || l.area}</span><span className="whitespace-nowrap">{l.phone}</span>
+                    </div>
                   </button>
                 </li>
               ))}
@@ -697,8 +726,8 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
           {productsValid && <Button type="button" variant="outline" className="shrink-0" disabled={pending} onClick={previewOffer}>Retry save</Button>}
         </div>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
-        <div className="hidden overflow-x-auto lg:block">
-          <table className="w-full text-sm">
+        <div className="hidden min-w-0 lg:block">
+          <table className="w-full table-fixed text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
               <tr><th className="w-12 p-2">S.No</th><th className="p-2">Product</th><th className="w-20 p-2">Unit</th><th className="w-28 p-2">Qty</th><th className="w-32 p-2 text-right">Rate</th><th className="w-36 p-2 text-right">Discount</th><th className="w-36 p-2 text-right">Amount</th><th className="w-12" /></tr>
             </thead>
@@ -734,12 +763,14 @@ export function QuotationsClient({ leads, initialCustomersHasMore, leadSources: 
         </div>
         <Button variant="outline" size="lg" className="w-full border-dashed sm:w-auto" disabled={rows.length >= 50 || !products.length}
           onClick={() => setRows([...rows, { productId: "", qty: 1, discount: 0 }])}><Plus className="h-5 w-5" /> Add item</Button>
-        <Totals t={t} />
+        <div className="hidden sm:block"><Totals t={t} /></div>
+        <div className={`fixed inset-x-0 bottom-[calc(8rem+env(safe-area-inset-bottom))] z-20 p-3 sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
+          <div className="mx-auto max-w-md"><Totals t={t} /></div>
+        </div>
         <div className={`fixed inset-x-0 bottom-16 z-20 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-sm sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
-          <div className="mx-auto flex max-w-md items-center gap-3">
-            <div className="min-w-0 flex-1"><div className="text-xs text-muted-foreground">Grand total</div><div className="truncate font-bold">{formatINR(t.total)}</div></div>
-            <Button type="button" variant="outline" onClick={() => setStep(1)}>Back</Button>
-            <Button type="button" size="lg" className="shrink-0" disabled={pending || !productsValid} onClick={previewOffer}>Preview</Button>
+          <div className="mx-auto flex max-w-md gap-2">
+            <Button type="button" variant="outline" className="h-12 flex-1" onClick={() => setStep(1)}>Back</Button>
+            <Button type="button" size="lg" className="h-12 flex-1" disabled={pending || !productsValid} onClick={previewOffer}>Preview</Button>
           </div>
         </div>
         <div className="hidden gap-3 sm:flex">
@@ -895,8 +926,8 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   const renderPart = (part: Item[], title: string, gst: string, startIndex = 0) => (
     <section className="mt-4">
       <div className="border-y border-border py-2 text-center font-bold">{title}</div>
-      <table className="w-full border-collapse text-[9px]">
-        <thead><tr>{["S.No", "Description", "Unit", "Qty", ...(hasDiscount ? ["Discount (Rs)"] : []), "Basic Rate (Rs)", "Amount (Rs)"].map((heading) => <th key={heading} className="border border-border px-1 py-2">{heading}</th>)}</tr></thead>
+      <table className="w-full table-fixed border-collapse text-[9px]">
+        <thead><tr>{["S.No", "Description", "Unit", "Qty", ...(hasDiscount ? ["Discount (Rs)"] : []), "Basic Rate (Rs)", "Amount (Rs)"].map((heading) => <th key={heading} className="break-words border border-border px-1 py-2">{heading}</th>)}</tr></thead>
         <tbody>{part.map((item, index) => (
           <tr key={`${item.model}-${index}`} className="border border-border">
             <td className="border border-border px-1 py-2 text-center">{startIndex + index + 1}</td>
@@ -914,14 +945,11 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     </section>
   );
   const shortMessage = `Offer ${offerNo} for ${customer}\nGrand total: ${formatINR(t.total)}\n${COMPANY.name}`;
-  const phoneDigits = lead.phone.replace(/\D/g, "");
-  const waPhone = phoneDigits.startsWith("91") && phoneDigits.length === 12
-    ? phoneDigits.slice(2)
-    : phoneDigits.startsWith("0") && phoneDigits.length === 11
-      ? phoneDigits.slice(1)
-      : phoneDigits.slice(-10);
-  const canCreatePdf = !!offerNo.trim() && !!customer.trim() && (!!lead.id.trim() || !!savedQuoteId) &&
-    items.length > 0 && items.every((item) => !!item.productId);
+  const phoneDigits = lead.phone.replace(/[\s()-]/g, "").replace(/\D/g, "");
+  const waPhone = /^\d{10}$/.test(phoneDigits)
+    ? phoneDigits
+    : /^91\d{10}$/.test(phoneDigits) ? phoneDigits.slice(2) : "";
+  const canCreatePdf = canCreateQuotationPdf({ offerNo, customer, leadId: lead.id, items }, !!savedQuoteId);
   const [downloading, setDownloading] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const missingBlobHintShown = useRef(false);
@@ -1002,95 +1030,42 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
     }
   };
   const shareOnWhatsApp = async () => {
-    if (downloading || !canCreatePdf) return;
+    if (downloading || !waPhone) return;
     if (!/^\d{10}$/.test(waPhone)) {
       toast.error("No valid mobile number is available for this customer.");
       return;
     }
-    const mobile = window.matchMedia("(max-width: 767px)").matches || "ontouchstart" in window;
-    const whatsappWindow = mobile ? null : window.open("about:blank", "_blank");
-    if (whatsappWindow) whatsappWindow.opener = null;
-    const openWhatsApp = (url: string) => {
-      if (mobile) {
-        window.location.assign(url);
-        return true;
-      }
-      if (whatsappWindow && !whatsappWindow.closed) {
-        whatsappWindow.location.replace(url);
-        return true;
-      }
-      return !!window.open(url, "_blank", "noopener");
+    const openWhatsApp = (message: string) => {
+      const url = `https://wa.me/91${waPhone}?text=${encodeURIComponent(message)}`;
+      if (window.matchMedia("(max-width: 767px)").matches) window.location.assign(url);
+      else window.open(url, "_blank", "noopener");
     };
     const markSentInBackground = () => {
       void onMarkSent().catch((error: unknown) =>
-        toast.warning(error instanceof Error ? error.message : "The PDF is ready, but the lead status could not be updated."),
+        toast.warning(error instanceof Error ? error.message : "WhatsApp opened, but the quotation status could not be updated."),
       );
     };
     setDownloading(true);
+    let showBlobHint = false;
     try {
-      const publicUrl = await prepareShareUrl();
-      const message = `${shortMessage}\nPDF: ${publicUrl}`;
-      if (navigator.share && navigator.canShare) {
-        const fileName = `offer-${offerNo.replace("/", "-")}.pdf`;
-        const fileSupportProbe = new File([], fileName, { type: "application/pdf" });
-        if (navigator.canShare({ files: [fileSupportProbe] })) {
-          const pdfResponse = await fetch(publicUrl);
-          if (!pdfResponse.ok) throw new Error(`Could not download the prepared PDF (HTTP ${pdfResponse.status}).`);
-          const file = new File([await pdfResponse.blob()], fileName, { type: "application/pdf" });
-          try {
-            await navigator.share({ files: [file], title: file.name, text: shortMessage });
-            whatsappWindow?.close();
-            markSentInBackground();
-            return;
-          } catch (error) {
-            if (error instanceof DOMException && error.name === "AbortError") {
-              whatsappWindow?.close();
-              return;
-            }
-            console.warn("[quotations] native file share failed; opening WhatsApp with the PDF link", error);
-          }
-        }
-      }
-      const wa = `https://wa.me/91${waPhone}?text=${encodeURIComponent(message)}`;
-      if (!openWhatsApp(wa)) throw new Error("WhatsApp could not be opened. Copy the PDF link and share it manually.");
-      markSentInBackground();
-      toast.success("Quotation PDF link is ready to share in WhatsApp.");
-    } catch (error) {
-      if (error instanceof SharePreparationError && error.status === 503 && error.message.includes("BLOB_READ_WRITE_TOKEN")) {
+      let message = shortMessage;
+      if (canCreatePdf) {
         try {
-          const file = await buildPdfFile();
-          if (navigator.share && navigator.canShare?.({ files: [file] })) {
-            try {
-              await navigator.share({ files: [file], title: `Offer ${offerNo}`, text: shortMessage });
-              whatsappWindow?.close();
-              markSentInBackground();
-              toast.success("Quotation PDF shared.");
-              return;
-            } catch (shareError) {
-              if (shareError instanceof DOMException && shareError.name === "AbortError") {
-                whatsappWindow?.close();
-                return;
-              }
-              console.warn("[quotations] native file share failed; downloading PDF for WhatsApp", shareError);
-            }
-          }
-          downloadFile(file);
-          if (!missingBlobHintShown.current) {
-            missingBlobHintShown.current = true;
-            toast.success("PDF downloaded. Attach it in WhatsApp.");
-          }
-          const manualMessage = `${shortMessage}\nPlease see the attached quotation PDF.`;
-          const whatsappUrl = `https://wa.me/91${waPhone}?text=${encodeURIComponent(manualMessage)}`;
-          if (!openWhatsApp(whatsappUrl)) toast.warning("Open WhatsApp and attach the downloaded file.");
-          markSentInBackground();
-          return;
-        } catch (fallbackError) {
-          whatsappWindow?.close();
-          toast.error(fallbackError instanceof Error ? fallbackError.message : "Could not prepare the quotation PDF.");
-          return;
+          const publicUrl = await prepareShareUrl();
+          message = `${shortMessage}\nPDF: ${publicUrl}`;
+        } catch (error) {
+          if (!(error instanceof SharePreparationError && error.status === 503 && error.message.includes("BLOB_READ_WRITE_TOKEN"))) throw error;
+          downloadFile(await buildPdfFile());
+          showBlobHint = !missingBlobHintShown.current;
+          missingBlobHintShown.current = true;
         }
       }
-      whatsappWindow?.close();
+      openWhatsApp(message);
+      markSentInBackground();
+      toast.success(`WhatsApp opened for ${customer}`, showBlobHint
+        ? { description: "PDF downloaded; attach it to the chat." }
+        : undefined);
+    } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not share the quotation PDF.");
     } finally {
       setDownloading(false);
@@ -1108,14 +1083,27 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   };
 
   return (
-    <div className="space-y-4 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:pb-6">
-      <div className="no-print grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-        <Button variant="outline" className="w-full sm:w-auto" onClick={onBack}><ArrowLeft className="h-5 w-5" /> {readOnly ? "Back to Create Quotation" : "Back to Products"}</Button>
-        <Button className="h-12 w-full sm:w-auto" onClick={downloadPdf} disabled={downloading || !canCreatePdf}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
-        <Button variant="outline" title={!waPhone ? "No mobile number is available for this customer" : undefined} className="h-12 w-full bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900 sm:w-auto" onClick={shareOnWhatsApp} disabled={downloading || !canCreatePdf || !waPhone}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
-        {shareUrl && <Button type="button" variant="outline" className="h-12 w-full sm:w-auto" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
+    <div className="min-w-0 space-y-4 pb-[calc(9rem+env(safe-area-inset-bottom))] sm:pb-6">
+      <div className="no-print flex min-w-0 items-center justify-between gap-2">
+        <Button type="button" variant="ghost" className="h-11 shrink-0 px-2" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Back</Button>
+        {shareUrl && <Button type="button" variant="outline" className="h-11 sm:hidden" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
+        <div className="hidden min-w-0 flex-wrap justify-end gap-2 sm:flex">
+          <Button className="h-12" onClick={downloadPdf} disabled={downloading || !canCreatePdf}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
+          <Button variant="outline" title={!waPhone ? "No mobile number is available for this customer" : undefined} className="h-12 bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={shareOnWhatsApp} disabled={downloading || !waPhone}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
+          {shareUrl && <Button type="button" variant="outline" className="h-12" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
+        </div>
       </div>
-      <article className="print-area offer-document mx-auto max-w-full overflow-hidden rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
+      <div className="no-print fixed inset-x-0 bottom-16 z-30 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-lg sm:hidden">
+        <div className="mx-auto flex max-w-md gap-2">
+          <Button className="h-12 min-w-0 flex-1 whitespace-nowrap" onClick={downloadPdf} disabled={downloading || !canCreatePdf}>
+            <Printer className="h-5 w-5 shrink-0" /> {downloading ? "Preparing…" : "Download PDF"}
+          </Button>
+          <Button variant="outline" title={!waPhone ? "No mobile number is available for this customer" : undefined} className="h-12 min-w-0 flex-1 whitespace-nowrap bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={shareOnWhatsApp} disabled={downloading || !waPhone}>
+            <WhatsAppIcon className="h-5 w-5 shrink-0" /> {downloading ? "Preparing…" : "WhatsApp"}
+          </Button>
+        </div>
+      </div>
+      <article className="print-area offer-document mx-auto min-w-0 max-w-full rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-300 pb-4">
           <Image src="/brand/atpl-logo.png" alt="Air Trendz" width={150} height={60} sizes="150px" quality={100} className="h-auto max-w-full object-contain" priority />
           <div className="max-w-full text-right">
@@ -1173,7 +1161,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           <div><span className="font-bold">EQUIPMENT REQUIRED</span>{items.filter((item) => !/^B\s*-\s*/i.test(item.model)).map((item) => <div key={item.model}>{item.model} / {item.qty} / {item.unit}</div>)}</div>
           <div className="font-bold">Total Units: {items.reduce((sum, item) => sum + item.qty, 0)}</div>
         </section>
-        <div className="max-w-full overflow-x-auto">
+        <div className="min-w-0 max-w-full">
           {renderPart(splitParts.equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst)}
           {splitParts.ancillary.length > 0 && renderPart(splitParts.ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, splitParts.equipment.length)}
         </div>

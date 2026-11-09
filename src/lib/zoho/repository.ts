@@ -5,7 +5,7 @@ import { after } from "next/server";
 import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User, type Visit } from "@/lib/domain";
 import { cached, invalidate, patchCachedValues, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
-import type { CrmRepository } from "@/lib/crm/repository";
+import type { CrmRepository, LogCallInput } from "@/lib/crm/repository";
 import { hosts, zoho, zohoList, zohoWrite, ZohoError, ZOHO_CRM_API_VERSION } from "./client";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
@@ -56,6 +56,10 @@ type QuoteFieldMetadata = {
   pick_list_values?: { actual_value?: string; display_value?: string }[];
   subform_fields?: QuoteLineItemFieldMetadata[];
   fields?: QuoteLineItemFieldMetadata[];
+  is_dependent?: boolean;
+  depends_on?: string | { api_name?: string };
+  dependent_on?: string | { api_name?: string };
+  dependent_fields?: (string | { api_name?: string })[];
 };
 
 type QuoteLineItemFieldMetadata = {
@@ -298,6 +302,134 @@ const taskSchema = () => cached("zoho:task-fields", LONG, async () => {
   };
 });
 
+const recordFields = (module: "Calls" | "Leads") => cached(`zoho:${module.toLowerCase()}-fields`, LONG, async () => {
+  const response = await zoho<{ fields?: QuoteFieldMetadata[] }>("GET", "/settings/fields", {
+    query: { module },
+  });
+  return response?.fields ?? [];
+});
+
+function picklistValue(field: QuoteFieldMetadata, outcome?: LogCallInput["outcome"]): string | undefined {
+  const values = field.pick_list_values?.map((item) => item.actual_value ?? item.display_value ?? "").filter(Boolean) ?? [];
+  if (!values.length) return undefined;
+  if (outcome && /(?:call|outgoing_call)_?status/i.test(field.api_name ?? "")) {
+    const preferred = outcome === "Connected"
+      ? /completed|answered|connected|success/i
+      : /not connected|no answer|busy|not reached|failed/i;
+    const match = values.find((value) => preferred.test(value));
+    if (match) return match;
+  }
+  return values[0];
+}
+
+function completeRecordFromMetadata(
+  input: Record<string, unknown>,
+  fields: QuoteFieldMetadata[],
+  outcome?: LogCallInput["outcome"],
+  module?: "Calls" | "Leads",
+): Record<string, unknown> {
+  const record = { ...input };
+  const dependentNames = new Set(fields.flatMap((field) => (field.dependent_fields ?? []).map((item) =>
+    typeof item === "string" ? item : item.api_name ?? "",
+  )));
+  for (const field of fields) {
+    const name = field.api_name;
+    if (!name) continue;
+    const isRequired = field.required || field.system_mandatory || field.is_mandatory;
+    const isCallStatus = /^(?:Call_Status|Outgoing_Call_Status)$/i.test(name);
+    const isDependent = field.is_dependent === true || dependentNames.has(name) ||
+      Boolean(field.depends_on || field.dependent_on) ||
+      (module === "Calls" && /^Call_Purpose$/i.test(name));
+    const values = field.pick_list_values?.map((item) => item.actual_value ?? item.display_value ?? "").filter(Boolean) ?? [];
+    const currentValue = record[name];
+    if (typeof currentValue === "string" && values.length) {
+      const configured = values.find((value) => value.toLowerCase() === currentValue.toLowerCase());
+      const value = configured ?? picklistValue(field, outcome);
+      if (value !== undefined) record[name] = value;
+    } else if ((isRequired || isDependent || isCallStatus) && (currentValue === undefined || currentValue === "")) {
+      const value = picklistValue(field, outcome);
+      if (value !== undefined) record[name] = value;
+    }
+  }
+  return record;
+}
+
+function zohoErrorFieldNames(error: ZohoError): string[] {
+  const details = error.details ?? {};
+  const names = [details.api_name, error.field];
+  if (typeof details.json_path === "string") {
+    names.push(/\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(details.json_path)?.[1]);
+  }
+  if (typeof details.dependee === "string") names.push(details.dependee);
+  return [...new Set(names.filter((name): name is string => typeof name === "string" && !!name))];
+}
+
+function logMissingZohoField(error: unknown, module: "Calls" | "Leads", payload: Record<string, unknown>) {
+  if (!(error instanceof ZohoError) || !["DEPENDENT_FIELD_MISSING", "REQUIRED_FIELD_MISSING"].includes(error.code ?? "")) return;
+  const details = error.details ?? {};
+  console.error("[zoho] required/dependent field missing", {
+    operation: error.operation,
+    module,
+    code: error.code,
+    payloadKeys: Object.keys(payload),
+    api_name: details.api_name,
+    json_path: details.json_path,
+    dependee: details.dependee,
+    reference: error.reference,
+  });
+}
+
+function logCallRecordFailure(error: unknown, operation: string, module: "Calls" | "Leads", payload: Record<string, unknown>) {
+  const zohoError = error instanceof ZohoError ? error : undefined;
+  console.error("[zoho] call outcome write failed", {
+    operation,
+    module,
+    status: zohoError?.status,
+    code: zohoError?.code,
+    payloadKeys: Object.keys(payload),
+    api_name: zohoError?.details?.api_name,
+    json_path: zohoError?.details?.json_path,
+    dependee: zohoError?.details?.dependee,
+    reference: zohoError?.reference,
+  });
+}
+
+async function writeWithMetadataFallback(
+  method: "POST" | "PUT",
+  path: string,
+  module: "Calls" | "Leads",
+  input: Record<string, unknown>,
+  fields: QuoteFieldMetadata[],
+  outcome?: LogCallInput["outcome"],
+  opts: { trigger?: string[] } = {},
+): Promise<string> {
+  let record = completeRecordFromMetadata(input, fields, outcome, module);
+  try {
+    return await zohoWrite(method, path, record, opts);
+  } catch (error) {
+    logMissingZohoField(error, module, record);
+    if (!(error instanceof ZohoError) || !["DEPENDENT_FIELD_MISSING", "REQUIRED_FIELD_MISSING"].includes(error.code ?? "")) {
+      throw error;
+    }
+    let changed = false;
+    for (const name of zohoErrorFieldNames(error)) {
+      const field = fields.find((candidate) => candidate.api_name === name);
+      const value = field && picklistValue(field, outcome);
+      if (value !== undefined && record[name] !== value) {
+        record = { ...record, [name]: value };
+        changed = true;
+      }
+    }
+    if (!changed) throw error;
+    try {
+      return await zohoWrite(method, path, record, opts);
+    } catch (retryError) {
+      logMissingZohoField(retryError, module, record);
+      throw retryError;
+    }
+  }
+}
+
 async function taskRows(): Promise<ZTask[]> {
   let fields: string[];
   try {
@@ -506,7 +638,7 @@ function scheduleSideEffects(
 async function quotePage(page: number) {
   const schema = await quoteSchema();
   return cached(`quotes:page:${page}`, SHORT, async () => {
-    const response = await zoho<{ data?: ZQuote[]; info?: { more_records?: boolean } }>("GET", "/Quotes", {
+    const response = await zoho<{ data?: ZQuote[]; info?: { more_records?: boolean; count?: number } }>("GET", "/Quotes", {
       query: {
         fields: QUOTE_FIELDS.join(","),
         per_page: 200,
@@ -516,7 +648,7 @@ async function quotePage(page: number) {
       },
     });
     const quotes = (response?.data ?? []).map((record) => mapQuote(record, new Map(), undefined, schema.fieldNames));
-    return { quotes, hasMore: response?.info?.more_records === true };
+    return { quotes, hasMore: response?.info?.more_records === true, count: response?.info?.count };
   }, { keepStale: true });
 }
 
@@ -1048,24 +1180,60 @@ export const zohoRepository: CrmRepository = {
       user.id.trim() && user.name.trim().toLowerCase().replace(/\s+/g, " ").startsWith(`${actorName.split(" ")[0]} `),
     );
     const callOwner = emailMatch ?? exactNameMatch ?? (firstNameMatches.length === 1 ? firstNameMatches[0] : undefined);
+    const [callFields, leadFields] = await Promise.all([
+      recordFields("Calls").catch((error: unknown) => {
+        console.error("[zoho] Calls field metadata unavailable", {
+          module: "Calls",
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+        });
+        return [];
+      }),
+      recordFields("Leads").catch((error: unknown) => {
+        console.error("[zoho] Leads field metadata unavailable", {
+          module: "Leads",
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+        });
+        return [];
+      }),
+    ]);
     const status = CALL_STATUS_BY_OUTCOME[input.outcome];
-    await zohoWrite("POST", "/Calls", {
+    const description = [lead.remarks.trim(), input.remarks.trim()].filter(Boolean).join("\n");
+    const leadPayload = completeRecordFromMetadata({
+      Lead_Status: WRITE_LEAD_STATUS[status],
+      ...(input.remarks.trim() ? { Description: description } : {}),
+    }, leadFields, undefined, "Leads");
+    await writeWithMetadataFallback("PUT", `/Leads/${leadId}`, "Leads", leadPayload, leadFields, undefined, { trigger: ["workflow"] });
+    const historyWarning = await addHistoryNoteBestEffort(
+      leadId,
+      "Call logged",
+      `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name} at ${new Date().toISOString()})`,
+      { operation: "call outcome" },
+    );
+    const callPayload = completeRecordFromMetadata({
       Subject: `${input.outcome} - ${lead.name}`,
       ...relatedToLead(leadId), Call_Type: "Outbound",
       [FIELD.call.result]: input.outcome,
       [FIELD.call.startTime]: zohoDateTime(),
       Description: input.remarks || undefined,
       ...(callOwner?.id.trim() ? { Owner: { id: callOwner.id.trim() } } : {}),
-    });
-    const sideEffects: [string, () => Promise<unknown>][] = [
-      ["lead status", () => zohoWrite("PUT", `/Leads/${leadId}`, { Lead_Status: WRITE_LEAD_STATUS[status] }, { trigger: ["workflow"] })],
-      ["history note", () => addHistoryNoteBestEffort(
-        leadId,
-        "Call logged",
-        `${input.outcome}${input.remarks ? `: ${input.remarks}` : ""} (by ${actor.name} at ${new Date().toISOString()})`,
-        { operation: "call outcome" },
-      )],
-    ];
+    }, callFields, input.outcome, "Calls");
+    let callLogPending = false;
+    try {
+      await writeWithMetadataFallback("POST", "/Calls", "Calls", callPayload, callFields, input.outcome);
+    } catch (error) {
+      callLogPending = true;
+      logCallRecordFailure(error, "POST /Calls", "Calls", callPayload);
+      scheduleSideEffects("call log retry", [["Call record retry", async () => {
+        try {
+          await writeWithMetadataFallback("POST", "/Calls", "Calls", callPayload, callFields, input.outcome);
+        } catch (retryError) {
+          logCallRecordFailure(retryError, "POST /Calls background retry", "Calls", callPayload);
+        }
+      }]]);
+    }
+    const sideEffects: [string, () => Promise<unknown>][] = [];
     if (input.followUp) {
       sideEffects.push(["follow-up task", async () => {
         const owner = lead.assignedTo ? await userByName(lead.assignedTo) : callOwner;
@@ -1081,7 +1249,7 @@ export const zohoRepository: CrmRepository = {
     }
     scheduleSideEffects("call outcome", sideEffects, () => invalidate("leads", "users", "visits"));
     await invalidate("leads", "users", "visits");
-    return {};
+    return { ...(historyWarning ? { historyWarning } : {}), ...(callLogPending ? { callLogPending: true } : {}) };
   },
 
   async listCalls(): Promise<CallActivity[]> {
@@ -1150,6 +1318,18 @@ export const zohoRepository: CrmRepository = {
   async listQuotesPage(page) {
     return quotePage(Math.max(1, Math.floor(page)));
   },
+  async countQuotes(ownerId) {
+    const ownerFilter = ownerId?.trim();
+    return cached(`quotes:count:${ownerFilter || "all"}`, SHORT, async () => {
+      const response = await zoho<{ count?: number }>("GET", "/Quotes/actions/count", {
+        query: ownerFilter ? { criteria: `(Owner.id:equals:${ownerFilter})` } : undefined,
+      });
+      if (typeof response?.count !== "number" || !Number.isFinite(response.count)) {
+        throw new ZohoError("Zoho did not return a quotation count.", undefined, "INVALID_QUOTE_COUNT", undefined, undefined, "GET /Quotes/actions/count");
+      }
+      return response.count;
+    });
+  },
 
   async getQuote(id) {
     const schema = await quoteSchema();
@@ -1182,6 +1362,16 @@ export const zohoRepository: CrmRepository = {
     const products = await this.listProducts();
     const map = new Map(lead ? [[lead.id, lead]] : []);
     return mapQuote(record, map, new Map(products.map((product) => [product.id, product])), schema.fieldNames);
+  },
+
+  async markQuoteSent(id) {
+    const schema = await quoteSchema();
+    const statusField = schema.fieldsByName.get("Status");
+    const sentValue = statusField?.pick_list_values
+      ?.map((item) => item.actual_value ?? item.display_value ?? "")
+      .find((value) => value.toLowerCase() === "sent") ?? "Sent";
+    await zohoWrite("PUT", `/Quotes/${encodeURIComponent(id)}`, { Status: sentValue });
+    await invalidate("quotes");
   },
 
   async createQuote(input, actor, executive) {

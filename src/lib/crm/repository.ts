@@ -35,13 +35,15 @@ export interface CrmRepository {
   deleteLead(id: string): Promise<void>;
   getLeadHistory(id: string): Promise<LeadUpdate[]>;
   getLeadTimeline(id: string): Promise<LeadTimelineItem[]>;
-  logCall(input: LogCallInput, actor: User): Promise<{ historyWarning?: string; partialWarning?: string }>;
+  logCall(input: LogCallInput, actor: User): Promise<{ historyWarning?: string; partialWarning?: string; callLogPending?: boolean }>;
   listCalls(): Promise<CallActivity[]>;
 
   listProducts(): Promise<Product[]>;
   listQuotes(): Promise<Quotation[]>;
-  listQuotesPage(page: number): Promise<{ quotes: Quotation[]; hasMore: boolean }>;
+  listQuotesPage(page: number): Promise<{ quotes: Quotation[]; hasMore: boolean; count?: number }>;
+  countQuotes?(ownerId?: string): Promise<number>;
   getQuote(id: string): Promise<Quotation | null>;
+  markQuoteSent(id: string): Promise<void>;
   createQuote(input: NewQuote, actor: User, executive: string): Promise<Quotation>;
 
   listVisits(): Promise<Visit[]>;

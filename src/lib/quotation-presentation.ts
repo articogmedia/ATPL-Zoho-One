@@ -1,5 +1,14 @@
 import { quoteTotals } from "@/lib/domain";
 
+export function canCreateQuotationPdf(
+  quotation: { offerNo: string; customer: string; leadId: string; items?: readonly { productId?: string }[] },
+  savedQuote = false,
+) {
+  return !!quotation.offerNo.trim() && !!quotation.customer.trim() &&
+    (!!quotation.leadId.trim() || savedQuote) && !!quotation.items?.length &&
+    (savedQuote || quotation.items.every((item) => !!item.productId));
+}
+
 export type QuotationPresentationItem = {
   model: string;
   description?: string;

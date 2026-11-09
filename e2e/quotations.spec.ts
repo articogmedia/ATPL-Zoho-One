@@ -3,23 +3,8 @@ import { readFile } from "node:fs/promises";
 
 for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 }]) {
   test(`product picker and preview work at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
-    const mobileProject = testInfo.project.name === "Pixel 7" || testInfo.project.name === "iPhone 14";
-    const mobileShare = viewport.width < 640 || mobileProject;
+    const mobileViewport = viewport.width < 768;
     await page.setViewportSize(viewport);
-    await page.addInitScript((nativeFileShare) => {
-      Object.defineProperty(navigator, "canShare", {
-        configurable: true,
-        value: (data: ShareData) => nativeFileShare && !!data.files?.length,
-      });
-      if (nativeFileShare) {
-        Object.defineProperty(navigator, "share", {
-          configurable: true,
-          value: async (data: ShareData) => {
-            Object.defineProperty(window, "__atplSharedFileCount", { configurable: true, value: data.files?.length ?? 0 });
-          },
-        });
-      }
-    }, mobileShare);
     await page.goto("/login");
     await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
     await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
@@ -27,6 +12,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await expect(page.getByRole("heading", { name: "Create Quotation" })).toBeVisible();
     const savedQuotesButton = page.getByRole("button", { name: /Saved quotations/ });
     await expect(savedQuotesButton).toBeVisible();
+    await expect(savedQuotesButton).toHaveText(/Saved quotations \(\d+\)/);
+    const savedCountBefore = Number((await savedQuotesButton.textContent())?.match(/\((\d+)\)/)?.[1]);
     const savedQuotesRoute = (route: import("@playwright/test").Route) => route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -77,6 +64,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await expect(offer.getByText("Ship To")).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
     await expect(offerHeading).toBeInViewport();
+    await expect(savedQuotesButton).toHaveText(`Saved quotations (${savedCountBefore + 1})`);
 
     const pdfResponsePromise = page.waitForResponse((response) =>
       response.url().includes("/api/quotations/pdf") && response.request().method() === "POST",
@@ -104,44 +92,41 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
       whatsappUrls.push(route.request().url());
       return route.fulfill({ status: 200, body: "ok" });
     });
-    if (mobileShare) {
+    if (mobileViewport) {
       await page.route("https://public.blob.vercel-storage.com/**", (route) => route.fulfill({
         status: 200,
         contentType: "application/pdf",
         body: "%PDF-1.4\nshare fixture",
       }));
     }
-    const whatsappPopupPromise = mobileShare ? undefined : page.waitForEvent("popup");
+    const whatsappPopupPromise = mobileViewport ? undefined : page.waitForEvent("popup");
     const shareResponsePromise = page.waitForResponse((response) =>
       response.url().includes("/api/quotations/share") && response.request().method() === "POST",
     );
     await page.getByRole("button", { name: "WhatsApp" }).click();
     const shareResponse = await shareResponsePromise;
     expect(shareResponse.status()).toBe(200);
-    if (mobileShare) {
-      await expect.poll(() => page.evaluate(() =>
-        (window as typeof window & { __atplSharedFileCount?: number }).__atplSharedFileCount,
-      )).toBe(1);
+    if (mobileViewport) {
+      await expect.poll(() => page.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
     } else {
       const whatsappPopup = await whatsappPopupPromise!;
       expect(await shareResponse.json()).toMatchObject({
         url: "https://public.blob.vercel-storage.com/quotes/test-unpredictable.pdf",
       });
       await expect.poll(() => whatsappPopup.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
-      expect(decodeURIComponent(whatsappUrls[0] ?? whatsappPopup.url()))
-        .toContain("Offer ");
+      const message = decodeURIComponent(new URL(whatsappUrls[0] ?? whatsappPopup.url()).searchParams.get("text") ?? "");
+      expect(message).toContain("Offer ");
+      expect(message).toContain("Grand total:");
+      expect(message).toContain("PDF: https://public.blob.vercel-storage.com/quotes/test-unpredictable.pdf");
+      await expect(page.getByText(/WhatsApp opened for /)).toBeVisible();
+      await expect(offer.getByText("Sent", { exact: true })).toBeVisible();
     }
   });
 }
 
-test("saved quotation keeps customer details and can download and share its PDF", async ({ page }, testInfo) => {
-  const mobileProject = testInfo.project.name === "Pixel 7" || testInfo.project.name === "iPhone 14";
+test("saved quotation keeps customer details and can download and share its PDF", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
-  if (mobileProject) {
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "canShare", { configurable: true, value: () => false });
-    });
-  }
+  const mobileViewport = page.viewportSize()?.width === 390;
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
   await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
@@ -168,16 +153,22 @@ test("saved quotation keeps customer details and can download and share its PDF"
     body: JSON.stringify({ error: "BLOB_READ_WRITE_TOKEN is missing" }),
   }));
   const pdfDownload = page.waitForEvent("download");
-  const whatsappPopup = mobileProject ? undefined : page.waitForEvent("popup");
+  const whatsappPopup = mobileViewport ? undefined : page.waitForEvent("popup");
   await page.getByRole("button", { name: "WhatsApp" }).click();
   const download = await pdfDownload;
   expect(download.suggestedFilename()).toMatch(/^offer-.*\.pdf$/);
-  if (mobileProject) {
+  if (mobileViewport) {
     await expect.poll(() => page.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
   } else {
     const popup = await whatsappPopup!;
     await expect.poll(() => popup.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
     await expect(page.getByRole("heading", { name: "Create Quotation" })).toBeVisible();
+    const message = decodeURIComponent(new URL(whatsappUrls[0] ?? popup.url()).searchParams.get("text") ?? "");
+    expect(message).toContain("Sri Lakshmi Textiles");
+    expect(message).toContain("Grand total:");
+    expect(message).not.toContain("PDF:");
+    await expect(page.getByText(/WhatsApp opened for /)).toBeVisible();
+    await expect(offer.getByText("Sent", { exact: true })).toBeVisible();
   }
   expect(whatsappUrls).toHaveLength(1);
 });
@@ -220,4 +211,50 @@ test("new quotation customer can be cancelled or created and selected", async ({
   await expect(page.locator("#offer-heading")).toBeVisible();
   await expect(page.locator("article.offer-document").getByText(/^\d+\/\d{2}-\d{2}$/)).toBeVisible();
   await expect(page.locator("article.offer-document")).toContainText(customerName);
+});
+
+test("quotation wizard and preview fit target widths", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium", "Runs one screenshot matrix regardless of device project.");
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/quotations");
+
+  const widths = [360, 390, 430, 768, 1280];
+  const expectNoHorizontalOverflow = async () => {
+    const dimensions = await page.evaluate(() => ({
+      viewport: document.documentElement.clientWidth,
+      document: document.documentElement.scrollWidth,
+      body: document.body.scrollWidth,
+    }));
+    expect(dimensions.document, `document overflows at ${dimensions.viewport}px`).toBeLessThanOrEqual(dimensions.viewport);
+    expect(dimensions.body, `body overflows at ${dimensions.viewport}px`).toBeLessThanOrEqual(dimensions.viewport);
+  };
+  const captureAtWidths = async (state: string) => {
+    for (const width of widths) {
+      await page.setViewportSize({ width, height: width < 500 ? 844 : 900 });
+      await expectNoHorizontalOverflow();
+      await page.screenshot({ path: testInfo.outputPath(`${state}-${width}.png`), fullPage: true });
+    }
+  };
+
+  await captureAtWidths("customer-wizard");
+  await page.locator("#quote-step-customer ul button").first().click();
+  await page.getByRole("button", { name: "Item 1 product" }).click();
+  const picker = page.getByRole("dialog", { name: "Choose product" });
+  await picker.getByRole("option").first().click();
+  await captureAtWidths("product-wizard");
+  await page.getByRole("button", { name: "Preview Offer" }).click();
+  await expect(page.locator("#offer-heading")).toBeVisible();
+  await captureAtWidths("quotation-preview");
+
+  for (const width of widths.filter((value) => value <= 430)) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const name of ["Download PDF", "WhatsApp"]) {
+      const box = await page.getByRole("button", { name, exact: true }).boundingBox();
+      expect(box?.height).toBe(48);
+    }
+    await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+  }
 });
