@@ -7,6 +7,7 @@ import { canAccess, hourIST, visibleFor, type Section, type User } from "@/lib/d
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { withPageTimeout } from "@/lib/page-timeout";
 import { PageLoadError } from "@/components/PageLoadError";
+import { WarmCacheOnce } from "./WarmCacheOnce";
 
 export const metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
@@ -56,6 +57,7 @@ export default async function Home() {
   endPagePerf(perf);
   return (
     <>
+      <WarmCacheOnce />
       <section className="mb-6 rounded-xl bg-primary p-5 text-primary-foreground shadow-elegant sm:p-6">
         <p className="text-sm font-medium opacity-80">{user.role}</p>
         <h1 className="mt-1 text-[28px] font-bold leading-tight">{part}, {user.name}</h1>

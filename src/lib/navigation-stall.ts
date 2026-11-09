@@ -7,6 +7,17 @@ export type NavigationClick = {
   download: boolean;
 };
 
+export const NAVIGATION_WATCHDOG_MS = 4_000;
+
+export function startNavigationWatchdog(
+  href: string,
+  onStall: (href: string) => void,
+  timeoutMs = NAVIGATION_WATCHDOG_MS,
+): () => void {
+  const timer = setTimeout(() => onStall(href), timeoutMs);
+  return () => clearTimeout(timer);
+}
+
 export function trackableNavigation(
   click: NavigationClick,
   currentHref: string,

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { trackableNavigation } from "@/lib/navigation-stall";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { NAVIGATION_WATCHDOG_MS, startNavigationWatchdog, trackableNavigation } from "@/lib/navigation-stall";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const currentHref = "https://portal.example/leads?tab=mine";
 const click = (href: string, overrides: Partial<Parameters<typeof trackableNavigation>[0]> = {}) =>
@@ -18,6 +22,30 @@ describe("stalled-navigation eligibility", () => {
     expect(click("/quotations?lead=123")).toEqual({
       href: "https://portal.example/quotations?lead=123",
       routeKey: "/quotations?lead=123",
+    });
+  });
+
+  describe("navigation watchdog", () => {
+    it("falls back to the requested URL after four seconds", () => {
+      vi.useFakeTimers();
+      const onStall = vi.fn();
+      startNavigationWatchdog("/quotations", onStall);
+
+      vi.advanceTimersByTime(NAVIGATION_WATCHDOG_MS - 1);
+      expect(onStall).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(onStall).toHaveBeenCalledOnce();
+      expect(onStall).toHaveBeenCalledWith("/quotations");
+    });
+
+    it("does not fall back after navigation completes", () => {
+      vi.useFakeTimers();
+      const onStall = vi.fn();
+      const cancel = startNavigationWatchdog("/quotations", onStall);
+      cancel();
+      vi.advanceTimersByTime(NAVIGATION_WATCHDOG_MS);
+      expect(onStall).not.toHaveBeenCalled();
     });
   });
 

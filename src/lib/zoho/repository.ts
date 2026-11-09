@@ -561,7 +561,7 @@ const leads = cache(async function leads(): Promise<Lead[]> {
       const followUp = followUps.get(lead.id);
       return followUp ? { ...lead, followUp: followUp.date, followUpTime: followUp.time } : lead;
     }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
-  });
+  }, { keepStale: true });
 });
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));
 
@@ -1426,7 +1426,7 @@ export const zohoRepository: CrmRepository = {
         ownerId: String(call.Owner?.id ?? "").trim(),
         date: call.Call_Start_Time?.slice(0, 10) ?? "",
       }));
-    });
+    }, { keepStale: true });
   },
 
   async listProducts() {
@@ -1794,7 +1794,7 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listVisits() {
-    return cached("visits", SHORT, loadVisits);
+    return cached("visits", SHORT, loadVisits, { keepStale: true });
   },
   getVisitsWarning() { return taskMetadataWarning; },
   async getVisit(id) {

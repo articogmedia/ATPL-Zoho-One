@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, RotateCw } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
-import { trackableNavigation } from "@/lib/navigation-stall";
+import { startNavigationWatchdog, trackableNavigation } from "@/lib/navigation-stall";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
 
@@ -23,8 +23,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   const routeKey = `${path}?${searchParams.toString()}`;
   const router = useRouter();
   const [newVersionAvailable, setNewVersionAvailable] = useState(false);
-  const [stalledNavigation, setStalledNavigation] = useState<{ href: string } | null>(null);
-  const pendingNavigation = useRef<{ routeKey: string; href: string; timer: number } | null>(null);
+  const pendingNavigation = useRef<{ href: string; cancelWatchdog: () => void } | null>(null);
   const lastWarmAt = useRef(0);
   const currentPath = useRef(path);
   currentPath.current = path;
@@ -34,9 +33,8 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
     const clearNavigation = () => {
       const current = pendingNavigation.current;
       if (!current) return;
-      window.clearTimeout(current.timer);
+      current.cancelWatchdog();
       pendingNavigation.current = null;
-      setStalledNavigation(null);
     };
     const onNavigationClick = (event: MouseEvent) => {
       const clicked = event.target instanceof Element ? event.target : null;
@@ -53,14 +51,13 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       if (!navigation) return;
       clearNavigation();
       const state: NonNullable<typeof pendingNavigation.current> = {
-        routeKey: navigation.routeKey,
         href: navigation.href,
-        timer: 0,
+        cancelWatchdog: () => {},
       };
-      state.timer = window.setTimeout(() => {
-        if (pendingNavigation.current === state) setStalledNavigation({ href: state.href });
-      }, 20_000);
       pendingNavigation.current = state;
+      state.cancelWatchdog = startNavigationWatchdog(state.href, (href) => {
+        if (pendingNavigation.current === state) window.location.assign(href);
+      });
     };
     const clearOnBrowserNavigation = () => clearNavigation();
     const versionMismatch = (message: string) => {
@@ -80,8 +77,6 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
     window.addEventListener("error", onError);
     window.addEventListener("pageshow", clearOnBrowserNavigation);
     window.addEventListener("popstate", clearOnBrowserNavigation);
-    window.addEventListener("focus", clearOnBrowserNavigation);
-    document.addEventListener("visibilitychange", clearOnBrowserNavigation);
     return () => {
       clearNavigation();
       document.removeEventListener("click", onNavigationClick);
@@ -89,16 +84,13 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       window.removeEventListener("error", onError);
       window.removeEventListener("pageshow", clearOnBrowserNavigation);
       window.removeEventListener("popstate", clearOnBrowserNavigation);
-      window.removeEventListener("focus", clearOnBrowserNavigation);
-      document.removeEventListener("visibilitychange", clearOnBrowserNavigation);
     };
   }, []);
 
   useEffect(() => {
     const current = pendingNavigation.current;
-    if (current) window.clearTimeout(current.timer);
+    if (current) current.cancelWatchdog();
     pendingNavigation.current = null;
-    setStalledNavigation(null);
   }, [routeKey]);
 
   useEffect(() => {
@@ -119,7 +111,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
         window.dispatchEvent(new Event("atpl:leads-refresh"));
       }
     };
-    warm();
+    lastWarmAt.current = Date.now();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => document.removeEventListener("visibilitychange", onVisibilityChange);
   }, []);
@@ -144,7 +136,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   return (
     <div className="flex min-h-dvh w-full max-w-full overflow-x-hidden bg-muted">
       <aside className="hidden w-[240px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:h-dvh lg:overflow-y-auto">
-        <Link href="/home" prefetch className="flex items-center gap-2 px-6 py-6">
+        <Link href="/home" className="flex items-center gap-2 px-6 py-6">
           <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-white">
             <Image src="/brand/atpl-mark-96.webp" width={40} height={40} sizes="40px" quality={75} alt="ATPL mark" priority />
           </span>
@@ -154,11 +146,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           </div>
         </Link>
         <nav className="mt-2 flex flex-col gap-1 px-3">
-          <Link href="/home" prefetch className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
+          <Link href="/home" className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
             <PendingNavContent icon={Home} label="Home" />
           </Link>
           {items.map((n) => (
-            <Link key={n.to} href={n.to} prefetch
+            <Link key={n.to} href={n.to}
               className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors ${path === n.to ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
               <PendingNavContent icon={n.icon} label={n.label} />
             </Link>
@@ -168,7 +160,7 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
 
       <div className="flex min-w-0 flex-1 flex-col lg:ml-[240px]">
         <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-card/95 px-4 backdrop-blur md:px-8">
-          <Link href="/home" prefetch className="flex min-w-0 items-center gap-2 lg:hidden">
+          <Link href="/home" className="flex min-w-0 items-center gap-2 lg:hidden">
               <span className="grid h-10 w-10 place-items-center rounded-lg bg-white shadow-sm">
                 <Image src="/brand/atpl-mark-96.webp" width={40} height={40} sizes="40px" quality={75} alt="ATPL mark" />
               </span>
@@ -189,16 +181,6 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           </div>
         </header>
         <main className="mx-auto min-w-0 w-full max-w-[1280px] flex-1 overflow-visible px-4 pb-28 pt-5 md:px-8 md:pb-10">
-          {stalledNavigation && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
-            <span>Taking longer than usual, retry.</span>
-            <div className="flex gap-2">
-              <Button type="button" variant="outline" className="h-10" onClick={() => {
-                const href = pendingNavigation.current?.href;
-                if (!href) return;
-                router.push(href);
-              }}>Retry</Button>
-            </div>
-          </div>}
           {newVersionAvailable && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
             <span className="inline-flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" />A new version is available. Reload to continue safely.</span>
             <Button type="button" variant="outline" className="h-10" onClick={() => window.location.reload()}><RotateCw className="h-4 w-4" /> Reload</Button>
@@ -211,11 +193,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
 
       {items.length > 0 && (
         <nav className="fixed inset-x-0 bottom-0 z-30 grid min-h-[64px] border-t border-border bg-card px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0,1fr))` }}>
-          <Link href="/home" prefetch className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
+          <Link href="/home" className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
             <PendingNavContent icon={Home} label="Home" vertical />
           </Link>
           {items.map((n) => (
-            <Link key={n.to} href={n.to} prefetch
+            <Link key={n.to} href={n.to}
               className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
               <PendingNavContent icon={n.icon} label={n.short} vertical />
             </Link>
