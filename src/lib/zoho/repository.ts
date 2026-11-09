@@ -3,7 +3,7 @@ import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
 import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User, type Visit } from "@/lib/domain";
-import { cached, invalidate, patchCachedValues, setCachedValue } from "@/lib/cache";
+import { cached, getCachedValue, invalidate, patchCachedValues, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository, LogCallInput } from "@/lib/crm/repository";
 import { hosts, zoho, zohoList, zohoWrite, ZohoError, ZOHO_CRM_API_VERSION } from "./client";
@@ -554,6 +554,21 @@ const leads = cache(async function leads(): Promise<Lead[]> {
 });
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));
 
+async function findRecentLeadByPhoneCreatedBy(phone: string, actorId: string): Promise<Lead | null> {
+  const normalizedPhone = normalizePhone(phone);
+  const response = await zoho<{ data?: ZLead[] }>("GET", "/Leads/search", {
+    query: { fields: LEAD_DETAIL_FIELDS.join(","), phone: normalizedPhone, per_page: 200 },
+  });
+  const cutoff = Date.now() - 2 * 60_000;
+  const recent = (response?.data ?? []).find((record) =>
+    leadPhoneMatch(record, normalizedPhone) !== null &&
+    String(record.Created_By?.id ?? "") === String(actorId) &&
+    Date.parse(record.Created_Time ?? "") >= cutoff,
+  );
+  if (!recent) return null;
+  return mapLead(recent, await assignableIds());
+}
+
 async function addNote(leadId: string, title: string, content: string) {
   const parentId = leadId.trim();
   if (!parentId) throw new ZohoError("Cannot create a note without a Zoho Lead ID.", 400, "INVALID_LEAD_REFERENCE", "Parent_Id");
@@ -608,22 +623,28 @@ function scheduleSideEffects(
   effects: [name: string, task: () => Promise<unknown>][],
   onComplete?: () => Promise<void>,
 ) {
-  const run = async () => {
-    await Promise.all(effects.map(async ([name, task]) => {
+  const retryEffect = async (name: string, task: () => Promise<unknown>) => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         await task();
+        return;
       } catch (error) {
-        console.error(`[zoho] deferred ${operation} side effect failed`, {
+        console.error(`[zoho] deferred ${operation} side effect ${attempt === 0 ? "retrying" : "failed"}`, {
           sideEffect: name,
+          attempt: attempt + 1,
           message: error instanceof Error ? error.message : String(error),
           status: error instanceof ZohoError ? error.status : undefined,
           code: error instanceof ZohoError ? error.code : undefined,
           field: error instanceof ZohoError ? error.field : undefined,
           details: error instanceof ZohoError ? error.details : undefined,
         });
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 600));
       }
-    }));
-    await onComplete?.();
+    }
+  };
+  const run = async () => {
+    await Promise.all(effects.map(([name, task]) => retryEffect(name, task)));
+    if (onComplete) await retryEffect("cache update", onComplete);
   };
   try {
     after(run);
@@ -905,7 +926,13 @@ export const zohoRepository: CrmRepository = {
     try {
     const executiveCreatesLead = actor.role === "Sales Executive";
     const [existing, metadata, owner] = await Promise.all([
-      forceCreate ? Promise.resolve(null) : this.findLeadByPhone(input.phone),
+      forceCreate ? Promise.resolve(null) : (async () => {
+        const cachedLeads = await getCachedValue<Lead[]>("leads");
+        const normalizedPhone = normalizePhone(input.phone);
+        const localMatch = cachedLeads?.find((lead) => normalizePhone(lead.phone) === normalizedPhone);
+        if (localMatch) return { lead: localMatch, matchedField: "Mobile" as const };
+        return this.findLeadByPhone(input.phone);
+      })(),
       leadSchema(),
       executiveCreatesLead ? userById(actor.id) : assignTo ? userById(assignTo) : Promise.resolve(null),
     ]);
@@ -948,7 +975,21 @@ export const zohoRepository: CrmRepository = {
       if (metadata.areaField) record[metadata.areaField] = input.area.trim();
       else console.warn("[zoho] Area omitted because Leads has no City or Area field", { requestedField: "City/Area" });
     }
-    const id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
+    let id: string;
+    try {
+      id = await zohoWrite("POST", "/Leads", record, { trigger: ["workflow"] });
+    } catch (error) {
+      const recent = await findRecentLeadByPhoneCreatedBy(input.phone, actor.id).catch((lookupError: unknown) => {
+        console.error("[zoho] recent lead retry lookup failed", {
+          phoneSuffix: normalizePhone(input.phone).slice(-4),
+          actorId: actor.id,
+          message: lookupError instanceof Error ? lookupError.message : String(lookupError),
+        });
+        return null;
+      });
+      if (recent) return recent;
+      throw error;
+    }
     const secondaryWrites: [string, () => Promise<unknown>][] = [
       ["history note", () => addNote(id, "Lead created", `Lead created from ${input.source} by ${actor.name}`)],
     ];
@@ -964,13 +1005,19 @@ export const zohoRepository: CrmRepository = {
         })],
       );
     }
-    scheduleSideEffects("lead creation", secondaryWrites, () => invalidate("leads", "users", "visits"));
-    return {
+    const createdLead: Lead = {
       id, name: input.name.trim(), company: input.company.trim() || input.name.trim(), phone: mobile,
       area: input.area.trim(), source: input.source, status: owner ? ASSIGNED_STAGE : "Fresh Lead",
       assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id,
       remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [actor.name],
     };
+    scheduleSideEffects("lead creation", secondaryWrites, async () => {
+      await patchCachedValues("leads", (value) => Array.isArray(value)
+        ? [createdLead, ...value.filter((lead) => (lead as Lead).id !== createdLead.id)]
+        : undefined, SHORT);
+      await invalidate("users", "visits");
+    });
+    return createdLead;
     } finally {
       release();
       if (leadCreateLocks.get(phoneKey) === chain) leadCreateLocks.delete(phoneKey);

@@ -15,6 +15,7 @@ type CacheEntry = {
 };
 type CacheStats = { hits: number; misses: number; staleHits: number };
 type CacheStore = { inflight: Map<string, Promise<unknown>>; values: Map<string, CacheEntry>; generations: Map<string, number> };
+type IdempotencyEntry = { expiresAt: number; result: Promise<unknown> };
 
 const STALE_TTL_MS = 60 * 60_000;
 const g = globalThis as unknown as {
@@ -22,9 +23,12 @@ const g = globalThis as unknown as {
   __atplCacheRedisWarningLogged?: boolean;
   __atplCacheRedisUnavailableUntil?: number;
   __atplCacheStats?: CacheStats;
+  __atplMutationResults?: Map<string, IdempotencyEntry>;
 };
 const store = (g.__atplCache ??= { inflight: new Map(), values: new Map(), generations: new Map() });
 const stats = (g.__atplCacheStats ??= { hits: 0, misses: 0, staleHits: 0 });
+const mutationResults = (g.__atplMutationResults ??= new Map());
+const IDEMPOTENCY_TTL_SECONDS = 600;
 
 const tagFor = (key: string) => {
   const tag = ["leads", "users", "products", "quotes", "visits"].find((candidate) => key.startsWith(candidate));
@@ -56,7 +60,7 @@ async function redisCommand(args: string[]): Promise<unknown | undefined> {
   try {
     const response = await fetch(config.url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+      headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
       body: JSON.stringify(args),
       cache: "no-store",
       signal: AbortSignal.timeout(800),
@@ -78,13 +82,101 @@ async function redisCommand(args: string[]): Promise<unknown | undefined> {
   }
 }
 
+function idempotencyRedisKey(key: string) {
+  return `atpl:mutation:${createHash("sha256").update(key).digest("hex")}`;
+}
+
+function parseIdempotencyResult(value: unknown): { state: "pending" } | { state: "complete"; result: unknown } | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || !("state" in parsed)) return undefined;
+    const record = parsed as { state?: unknown; result?: unknown };
+    if (record.state === "pending") return { state: "pending" };
+    if (record.state === "complete" && "result" in record) return { state: "complete", result: record.result };
+    return undefined;
+  } catch (error) {
+    console.error("[mutation] idempotency result could not be decoded", {
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+    return undefined;
+  }
+}
+
+/** Replays completed mutation results for ten minutes and coalesces concurrent retries. */
+export async function withIdempotency<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const normalizedKey = key.trim();
+  if (!normalizedKey) return task();
+  const current = mutationResults.get(normalizedKey);
+  if (current && current.expiresAt > Date.now()) return current.result as Promise<T>;
+  if (current) mutationResults.delete(normalizedKey);
+
+  let resolveLocal!: (result: T) => void;
+  let rejectLocal!: (error: unknown) => void;
+  const localResult = new Promise<T>((resolve, reject) => {
+    resolveLocal = resolve;
+    rejectLocal = reject;
+  });
+  void localResult.catch(() => undefined);
+  const entry: IdempotencyEntry = {
+    expiresAt: Date.now() + IDEMPOTENCY_TTL_SECONDS * 1000,
+    result: localResult,
+  };
+  mutationResults.set(normalizedKey, entry);
+
+  const redisKey = idempotencyRedisKey(normalizedKey);
+  let useRedis = Boolean(redisConfig());
+  try {
+    if (useRedis) {
+      const claim = await redisCommand([
+        "SET", redisKey, JSON.stringify({ state: "pending" }), "EX", String(IDEMPOTENCY_TTL_SECONDS), "NX",
+      ]);
+      if (claim === undefined) {
+        useRedis = false;
+      } else if (claim !== "OK") {
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const remote = await redisCommand(["GET", redisKey]);
+          if (remote === undefined) {
+            useRedis = false;
+            break;
+          }
+          const cached = parseIdempotencyResult(remote);
+          if (cached?.state === "complete") {
+            resolveLocal(cached.result as T);
+            return cached.result as T;
+          }
+          if (!cached) {
+            useRedis = false;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        if (useRedis) throw new TypeError("Network error while waiting for the original change.");
+      }
+    }
+
+    const value = await task();
+    const serialized = JSON.stringify({ state: "complete", result: value });
+    if (serialized === undefined) throw new TypeError("Mutation result is not JSON serializable.");
+    if (useRedis) await redisCommand(["SET", redisKey, serialized, "EX", String(IDEMPOTENCY_TTL_SECONDS)]);
+    resolveLocal(value);
+    return value;
+  } catch (error) {
+    if (useRedis) await redisCommand(["DEL", redisKey]);
+    rejectLocal(error);
+    if (mutationResults.get(normalizedKey) === entry) mutationResults.delete(normalizedKey);
+    throw error;
+  }
+}
+
 async function redisPipeline(commands: string[][]): Promise<void> {
   const config = redisConfig();
   if (!config || (g.__atplCacheRedisUnavailableUntil ?? 0) > Date.now() || !commands.length) return;
   try {
     const response = await fetch(`${config.url}/pipeline`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+      headers: { Authorization: "Bearer " + config.token, "Content-Type": "application/json" },
       body: JSON.stringify(commands),
       cache: "no-store",
       signal: AbortSignal.timeout(800),

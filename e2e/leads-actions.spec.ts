@@ -120,6 +120,107 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   await expect(allLeadsRow).toHaveCount(0);
 });
 
+test("Add Lead retries a dropped server-action request without duplicating the lead", async ({ page }) => {
+  const phone = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
+  const leadName = `Dropped Request Lead ${phone.slice(-4)}`;
+  let actionRequests = 0;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/leads");
+  await page.route("**/leads", async (route) => {
+    if (route.request().method() === "POST" && route.request().headers()["next-action"]) {
+      actionRequests += 1;
+      if (actionRequests === 1) {
+        await route.abort("failed");
+        return;
+      }
+    }
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByLabel("Lead name *").fill(leadName);
+  await page.getByLabel("Mobile number *").fill(phone);
+  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+
+  const row = page.getByTestId("mobile-lead-card").filter({ hasText: leadName });
+  await expect(row).toBeVisible();
+  await expect(row).toContainText("Saving…");
+  await expect(row).not.toContainText("Not saved", { timeout: 20_000 });
+  await expect(page.getByText("Lead added", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(row).toHaveCount(1);
+  expect(actionRequests).toBeGreaterThanOrEqual(2);
+
+  await page.reload();
+  await expect(page.getByTestId("mobile-lead-card").filter({ hasText: leadName })).toHaveCount(1);
+});
+
+test("Add Lead shows an optimistic saving row while the server is slow", async ({ page }) => {
+  const phone = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
+  const leadName = `Slow Request Lead ${phone.slice(-4)}`;
+  let delayed = false;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/leads");
+  await page.route("**/leads", async (route) => {
+    if (!delayed && route.request().method() === "POST" && route.request().headers()["next-action"]) {
+      delayed = true;
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByLabel("Lead name *").fill(leadName);
+  await page.getByLabel("Mobile number *").fill(phone);
+  const submittedAt = Date.now();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+
+  const row = page.getByTestId("mobile-lead-card").filter({ hasText: leadName });
+  await expect(row).toContainText("Saving…");
+  expect(Date.now() - submittedAt).toBeLessThan(2_000);
+  await expect(page.getByText("Lead added", { exact: true })).toBeVisible({ timeout: 15_000 });
+});
+
+test("Add Lead resumes an interrupted request when the page becomes visible", async ({ page }) => {
+  const phone = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
+  const leadName = `Resumed Request Lead ${phone.slice(-4)}`;
+  let actionRequests = 0;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.goto("/leads");
+  await page.route("**/leads", async (route) => {
+    if (route.request().method() === "POST" && route.request().headers()["next-action"]) {
+      actionRequests += 1;
+      if (actionRequests === 1) await new Promise((resolve) => setTimeout(resolve, 2_500));
+    }
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByLabel("Lead name *").fill(leadName);
+  await page.getByLabel("Mobile number *").fill(phone);
+  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await expect(page.getByTestId("mobile-lead-card").filter({ hasText: leadName })).toContainText("Saving…");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+
+  await expect(page.getByText("Lead added", { exact: true })).toBeVisible({ timeout: 15_000 });
+  expect(actionRequests).toBeGreaterThanOrEqual(2);
+  await page.reload();
+  await expect(page.getByTestId("mobile-lead-card").filter({ hasText: leadName })).toHaveCount(1);
+});
+
 test("reassign immediately removes an owner from My Leads but keeps the lead in All Leads", async ({ page }) => {
   const mobile = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
   const leadText = `Reassignment Membership Lead ${mobile.slice(-4)}`;

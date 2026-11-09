@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth/guard";
 import { env } from "@/lib/env";
 
 export const preferredRegion = "bom1";
+export const maxDuration = 30;
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();

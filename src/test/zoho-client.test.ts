@@ -500,6 +500,49 @@ describe("Zoho hosts", () => {
 });
 
 describe("Zoho lead owner fallbacks", () => {
+  it("recovers a recent lead by the same creator after a lost POST response", async () => {
+    let searchCount = 0;
+    const recoveredRecord = {
+      id: "lead-created-before-network-drop",
+      Last_Name: "Recovered customer",
+      Company: "Recovered customer",
+      Mobile: "9999999997",
+      Lead_Source: "Direct Call",
+      Lead_Status: "Fresh Lead",
+      Created_Time: new Date().toISOString(),
+      Created_By: { id: "manager-1", name: "Manager" },
+    };
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return leadSourceSettings;
+      if (path === "/Leads/search") {
+        searchCount += 1;
+        return { data: searchCount <= 2 ? [] : [recoveredRecord] };
+      }
+      return { data: [] };
+    });
+    const write = vi.fn(async (_method: string, path: string) => {
+      if (path === "/Leads") throw new TypeError("Load failed");
+      return "note-1";
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: class extends Error {},
+      zoho,
+      zohoList: vi.fn(async () => []),
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.createLead(
+      { name: "Recovered customer", company: "", phone: "9999999997", area: "", source: "Direct Call", remarks: "" },
+      { id: "manager-1", name: "Manager", role: "Manager" },
+      null,
+    )).resolves.toMatchObject({ id: "lead-created-before-network-drop", phone: "9999999997" });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith("POST", "/Leads", expect.any(Object), { trigger: ["workflow"] });
+    expect(searchCount).toBe(3);
+  });
+
   it("assigns an executive-created lead to that executive and marks it Assigned to Sales", async () => {
     const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
       if (path === "/Leads") {

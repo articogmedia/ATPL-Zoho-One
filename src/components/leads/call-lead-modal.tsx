@@ -8,6 +8,7 @@ import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { Button } from "@/components/ui/button";
 import { fieldClass } from "@/components/ui-bits";
 import { normalizePhone, type CallOutcome, type LeadStatus } from "@/lib/domain";
+import { executeMutation, notifyMutationFailure } from "@/lib/use-mutation";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 
 const OUTCOMES: { value: CallOutcome; label: string; status: LeadStatus }[] = [
@@ -63,7 +64,7 @@ export function CallLeadModal({
     onClose();
     start(async () => {
       try {
-        const result = await logCallAction({
+        const result = await executeMutation(logCallAction, {
           leadId: lead.id,
           outcome: selected.value,
           remarks,
@@ -95,7 +96,7 @@ export function CallLeadModal({
       } catch (error) {
         onRollback?.();
         setRetryableError(true);
-        toast.error(error instanceof Error ? error.message : "Could not save the call outcome. Please retry.");
+        notifyMutationFailure(error);
       } finally {
         onPendingChange?.(false);
       }

@@ -13,7 +13,11 @@ export async function GET() {
   if (env().DATA_SOURCE !== "zoho") return new Response(null, { status: 204 });
   try {
     await warmZohoToken();
-    const cacheResults = await Promise.allSettled([crm().listProducts(), crm().listAssignableUsers()]);
+    const cacheResults = await Promise.allSettled([
+      crm().listProducts(),
+      crm().listAssignableUsers(),
+      crm().listLeadSources(),
+    ]);
     for (const result of cacheResults) {
       if (result.status === "rejected") {
         console.warn("[warm] a read-only cache could not be refreshed", {

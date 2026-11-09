@@ -7,6 +7,7 @@ import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useStat
 import type { ReactNode } from "react";
 import { CalendarClock, CalendarDays, CheckCircle2, ClipboardList, FileText, LoaderCircle, MapPin, Phone, Play, UserRound } from "lucide-react";
 import { toast } from "sonner";
+import { executeMutation, notifyMutationFailure } from "@/lib/use-mutation";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { fieldClass } from "@/components/ui-bits";
@@ -209,7 +210,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange, onMutationSucces
     setSavingAction(action);
     const rollback = onOptimisticChange(v.id, patch);
     try {
-      const result = await updateVisitAction({ id: v.id, ...patch });
+      const result = await executeMutation(updateVisitAction, { id: v.id, ...patch });
       if (!result.ok) {
         rollback();
         toast.error(result.error);
@@ -220,7 +221,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange, onMutationSucces
       setMode("none");
     } catch (error) {
       rollback();
-      toast.error(error instanceof Error ? error.message : "Could not update this task.");
+      notifyMutationFailure(error);
     } finally {
       setSavingAction(null);
     }

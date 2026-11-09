@@ -141,7 +141,7 @@ async function requestAccessToken(timeoutMs = 15_000): Promise<{ value: string; 
       method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
-    logPerf("zoho.token_refresh", Date.now() - started, { status: null });
+    logPerf("token_refresh", Date.now() - started, { status: null });
     const reference = newErrorReference();
     const zohoHosts = hosts();
     console.error("[zoho] token refresh transport failed", {
@@ -169,7 +169,7 @@ async function requestAccessToken(timeoutMs = 15_000): Promise<{ value: string; 
     access_token?: string; expires_in?: number; error?: string; error_description?: string;
     code?: string; message?: string; details?: Record<string, unknown>; field?: string;
   };
-  logPerf("zoho.token_refresh", Date.now() - started, { status: res.status });
+  logPerf("token_refresh", Date.now() - started, { status: res.status });
   console.info(`[zoho] token ${res.status} ${Date.now() - started}ms`);
   if (!res.ok || !json.access_token) {
     const message = json.error_description ?? json.message ?? json.error ?? `Zoho token refresh failed (${res.status})`;

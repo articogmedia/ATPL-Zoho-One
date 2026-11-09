@@ -77,6 +77,10 @@ rate limiting.
 The Hobby-compatible Vercel configuration does not schedule a Cron Job.
 `/api/warm` remains available and is also called by the login page to warm the
 shared Zoho token when a user opens the portal.
+The signed-in app also refreshes warm caches on foreground, at most once every
+five minutes. If a deployment needs warmth between active sessions, an external
+uptime monitor can issue a GET request to `https://<portal-host>/api/warm` every
+five minutes; no authentication is required for this read-only endpoint.
 
 For static portal login, set `ATPL_RESHMA_PASSWORD`, `ATPL_PAVAN_PASSWORD`, and
 `ATPL_SAIKIRAN_PASSWORD`. The static users in `src/lib/auth/users.ts` use the

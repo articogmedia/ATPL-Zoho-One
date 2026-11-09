@@ -10,6 +10,7 @@ import { SelectField } from "@/components/ui/select-field";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
+import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
 import { addLeadAction, createQuoteAction, getLeadSourcesAction, getQuoteDetailAction, markQuotationSentAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { canCreateQuotationPdf, splitQuotationItems } from "@/lib/quotation-presentation";
@@ -363,7 +364,14 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   };
 
   const saveNewLead = () => start(async () => {
-    const res = await addLeadAction({ ...nl, remarks: "Added from Create Quotation" });
+    let res: Awaited<ReturnType<typeof addLeadAction>>;
+    try {
+      res = await executeMutation(addLeadAction, { ...nl, remarks: "Added from Create Quotation" });
+    } catch (error) {
+      setCustomerRetryable(true);
+      notifyMutationFailure(error);
+      return;
+    }
     if (res.ok && res.data) {
       setCustomerRetryable(false);
       clearExpiredAction();
@@ -405,7 +413,15 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
     const subject = wizard.subject.trim() || offerSubject(items.map((item) => item.model));
     const selectedRows = rows.filter((row) => row.productId && byId.has(row.productId) &&
       validateQuoteLine(row.qty, row.discount, byId.get(row.productId)!.price) === null);
-    const res = await createQuoteAction({ leadId: lead.id, subject, items: selectedRows });
+    let res: Awaited<ReturnType<typeof createQuoteAction>>;
+    try {
+      res = await executeMutation(createQuoteAction, { leadId: lead.id, subject, items: selectedRows });
+    } catch (error) {
+      const message = friendlyMutationError(error);
+      setQuoteSaveError(message);
+      notifyMutationFailure(error);
+      return;
+    }
     if (!res.ok) {
       if (isSessionExpiredMessage(res.error)) {
         redirectForExpiredSession({
@@ -447,7 +463,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
 
   const markQuotationSent = async () => {
     if (!lead || wizard.quotationSent) return;
-    const result = await markQuotationSentAction({
+    const result = await executeMutation(markQuotationSentAction, {
       leadId: lead.id,
       ...(wizard.savedQuotation?.id ? { quoteId: wizard.savedQuotation.id } : {}),
     });
@@ -600,7 +616,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       touchedBy: linkedLead?.touchedBy ?? [],
     };
     const markSavedQuoteSent = async () => {
-      const result = await markQuotationSentAction({
+      const result = await executeMutation(markQuotationSentAction, {
         quoteId: readOnlyQuote.id,
         ...(readOnlyQuote.leadId ? { leadId: readOnlyQuote.leadId } : {}),
       });
@@ -1057,9 +1073,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       else window.open(url, "_blank", "noopener");
     };
     const markSentInBackground = () => {
-      void onMarkSent().catch((error: unknown) =>
-        toast.warning(error instanceof Error ? error.message : "WhatsApp opened, but the quotation status could not be updated."),
-      );
+      void onMarkSent().catch(notifyMutationFailure);
     };
     setDownloading(true);
     let showBlobHint = false;

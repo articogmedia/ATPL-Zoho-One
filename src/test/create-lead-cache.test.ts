@@ -113,6 +113,115 @@ describe("Zoho create-lead flow", () => {
     );
   });
 
+  it("replays the same Add Lead result for a repeated idempotency key", async () => {
+    const createLead = vi.fn(async () => ({
+      id: "lead-idempotent",
+      name: "Retry customer",
+      company: "Retry customer",
+      phone: "9876543210",
+      area: "",
+      source: "Meta Ads",
+      status: "Fresh Lead",
+      assignedTo: null,
+      remarks: "",
+      createdOn: "2026-11-06",
+      address: "",
+      touchedBy: ["Manager"],
+    }));
+    vi.doMock("next/cache", () => ({
+      revalidateTag: vi.fn(),
+      revalidatePath: vi.fn(),
+      unstable_cache: (load: () => unknown) => load,
+    }));
+    vi.doMock("@/lib/auth/guard", () => ({
+      ForbiddenError: class extends Error {},
+      requireActionUser: vi.fn(async () => ({ id: "manager-1", name: "Manager", role: "Manager" })),
+    }));
+    vi.doMock("@/lib/crm", () => ({ crm: () => ({ createLead }) }));
+
+    const { addLeadAction } = await import("@/app/actions/crm");
+    const payload = {
+      name: "Retry customer",
+      company: "",
+      phone: "9876543210",
+      area: "",
+      source: "Meta Ads",
+      remarks: "",
+      idempotencyKey: "a0d4c362-4e16-46e5-ae2d-a904a1670d43",
+    };
+    const first = await addLeadAction(payload);
+    const retry = await addLeadAction(payload);
+
+    expect(first).toEqual(retry);
+    expect(createLead).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the duplicate-customer path for a different key with the same phone", async () => {
+    class MockZohoError extends Error {
+      readonly code = "DUPLICATE_LEAD";
+      readonly status = 409;
+      readonly field = undefined;
+      readonly details = undefined;
+      readonly operation = undefined;
+      readonly reference = undefined;
+    }
+    const created = {
+      id: "lead-first",
+      name: "First customer",
+      company: "First customer",
+      phone: "9876543210",
+      area: "",
+      source: "Meta Ads",
+      status: "Fresh Lead",
+      assignedTo: null,
+      remarks: "",
+      createdOn: "2026-11-06",
+      address: "",
+      touchedBy: ["Manager"],
+    };
+    const createLead = vi.fn()
+      .mockResolvedValueOnce(created)
+      .mockRejectedValueOnce(new MockZohoError("Duplicate lead"));
+    const findLeadByPhone = vi.fn(async () => ({
+      lead: { ...created, assignedTo: null },
+      matchedField: "Mobile" as const,
+    }));
+    vi.doMock("next/cache", () => ({
+      revalidateTag: vi.fn(),
+      revalidatePath: vi.fn(),
+      unstable_cache: (load: () => unknown) => load,
+    }));
+    vi.doMock("@/lib/auth/guard", () => ({
+      ForbiddenError: class extends Error {},
+      requireActionUser: vi.fn(async () => ({ id: "manager-1", name: "Manager", role: "Manager" })),
+    }));
+    vi.doMock("@/lib/crm", () => ({ crm: () => ({ createLead, findLeadByPhone }) }));
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      hosts: () => ({ api: "https://www.zohoapis.in" }),
+      zoho: vi.fn(),
+      zohoList: vi.fn(),
+      zohoWrite: vi.fn(),
+    }));
+
+    const { addLeadAction } = await import("@/app/actions/crm");
+    const basePayload = {
+      name: "First customer",
+      company: "",
+      phone: "9876543210",
+      area: "",
+      source: "Meta Ads",
+      remarks: "",
+    };
+    const first = await addLeadAction({ ...basePayload, idempotencyKey: "a0d4c362-4e16-46e5-ae2d-a904a1670d44" });
+    const second = await addLeadAction({ ...basePayload, idempotencyKey: "a0d4c362-4e16-46e5-ae2d-a904a1670d45" });
+
+    expect(first).toMatchObject({ ok: true, data: { id: "lead-first" } });
+    expect(second).toMatchObject({ ok: false, duplicate: { id: "lead-first" } });
+    expect(createLead).toHaveBeenCalledTimes(2);
+    expect(findLeadByPhone).toHaveBeenCalledWith("9876543210");
+  });
+
   it("shows a safe non-production reason for plain server errors", async () => {
     vi.doMock("next/cache", () => ({
       revalidateTag: vi.fn(),
@@ -139,8 +248,9 @@ describe("Zoho create-lead flow", () => {
 
     expect(result).toMatchObject({ ok: false });
     if (!result.ok) {
-      expect(result.error).toContain("TypeError:");
-      expect(result.error).toContain("access_token=[REDACTED]");
+      expect(result.error).toContain("Unable to complete this request");
+      expect(result.error).not.toContain("TypeError:");
+      expect(result.error).not.toContain("access_token");
       expect(result.error).not.toContain("private-value");
       expect(result.error).not.toContain("request failed before a CRM response");
     }

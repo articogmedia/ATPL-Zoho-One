@@ -1,9 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
-import { getCachedValue, invalidate, setCachedValue } from "@/lib/cache";
+import { getCachedValue, invalidate, setCachedValue, withIdempotency } from "@/lib/cache";
 import type { LeadPatch } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { hosts, ZohoError } from "@/lib/zoho/client";
@@ -33,6 +34,15 @@ function isZohoFailure(error: unknown): error is ZohoError {
 
 function revalidateCrmPaths(...paths: string[]) {
   for (const path of new Set(paths)) revalidatePath(path);
+}
+
+function scheduleActionCompletionLog(elapsedMs: number, status: "completed" | "failed") {
+  const log = () => console.info(`[action] ${status} ${elapsedMs}ms`);
+  try {
+    after(async () => { log(); });
+  } catch {
+    queueMicrotask(log);
+  }
 }
 
 const LEAD_MUTATION_PATHS = ["/leads", "/visits", "/home", "/performance"];
@@ -67,59 +77,98 @@ function reportActionFailure(action: string, error: unknown, fallback: string, e
     zohoDetails: zohoFailure?.details,
     zohoOperation: zohoFailure?.operation,
   });
-  const isProduction = process.env.NODE_ENV === "production";
-  const safeReason = !isProduction && !zohoFailure && error instanceof Error
-    ? ` (${error.name}: ${error.message
-      .replace(/\b(access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password)\b\s*[:=]\s*\S+/gi, "$1=[REDACTED]")
-      .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
-      .replace(/\btoken\s+[A-Za-z0-9._-]{16,}/gi, "token [REDACTED]")
-      .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
-      .slice(0, 180)})`
-    : "";
   return zohoFailure
     ? friendlyZohoError(zohoFailure.status, zohoFailure.code, zohoFailure.message, zohoFailure.field, reference, zohoFailure.operation, zohoFailure.details)
     : error instanceof Error && /timeout|timed out|abort/i.test(`${error.message} ${String(error.cause ?? "")}`)
       ? `Zoho timed out, please try again. (Ref: ${reference})`
-      : `${fallback}${safeReason} (Ref: ${reference})`;
+      : `${fallback} (Ref: ${reference})`;
 }
 
 /** Turns any failure into a safe message for the browser; details stay in the server log. */
-async function run<T>(fn: () => Promise<T>, duplicatePhone?: () => string): Promise<ActionResult<T>> {
+async function run<T>(
+  fn: () => Promise<T>,
+  duplicatePhone?: () => string,
+  mutation?: { input: unknown; action: string; section: "leads" | "quotations" | "visits" },
+): Promise<ActionResult<T>> {
   const started = Date.now();
-  try {
-    const data = await fn();
-    console.info(`[action] completed ${Date.now() - started}ms`);
-    return { ok: true, data };
-  } catch (err) {
-    console.info(`[action] failed ${Date.now() - started}ms`);
-    if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
-    if (err instanceof ForbiddenError) return { ok: false, error: err.message };
-    if (err instanceof z.ZodError) return { ok: false, error: err.issues[0]?.message ?? "Please check the form values." };
-    if (isZohoFailure(err)) {
-      const error = reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.", Date.now() - started);
-      if ((err.code === "DUPLICATE_DATA" || err.code === "DUPLICATE_LEAD") && duplicatePhone) {
-        const duplicateLookupPhone = duplicatePhone();
-        if (duplicateLookupPhone) {
-          try {
-            const existing = await crm().findLeadByPhone(duplicateLookupPhone);
-            if (existing) {
-              return {
-                ok: false,
-                error,
-                duplicate: { id: existing.lead.id, name: existing.lead.name, owner: existing.lead.assignedTo ?? "Unassigned", status: existing.lead.status, matchedField: existing.matchedField },
-              };
+  const execute = async (): Promise<ActionResult<T>> => {
+    try {
+      const data = await fn();
+      scheduleActionCompletionLog(Date.now() - started, "completed");
+      return { ok: true, data };
+    } catch (err) {
+      scheduleActionCompletionLog(Date.now() - started, "failed");
+      if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
+      if (err instanceof ForbiddenError) return { ok: false, error: err.message };
+      if (err instanceof z.ZodError) return { ok: false, error: err.issues[0]?.message ?? "Please check the form values." };
+      if (isZohoFailure(err)) {
+        const error = reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.", Date.now() - started);
+        if ((err.code === "DUPLICATE_DATA" || err.code === "DUPLICATE_LEAD") && duplicatePhone) {
+          const duplicateLookupPhone = duplicatePhone();
+          if (duplicateLookupPhone) {
+            try {
+              const existing = await crm().findLeadByPhone(duplicateLookupPhone);
+              if (existing) {
+                return {
+                  ok: false,
+                  error,
+                  duplicate: { id: existing.lead.id, name: existing.lead.name, owner: existing.lead.assignedTo ?? "Unassigned", status: existing.lead.status, matchedField: existing.matchedField },
+                };
+              }
+            } catch (lookupError) {
+              reportActionFailure("duplicate lead lookup", lookupError, "Could not verify the duplicate lead.", Date.now() - started);
             }
-          } catch (lookupError) {
-            reportActionFailure("duplicate lead lookup", lookupError, "Could not verify the duplicate lead.", Date.now() - started);
           }
         }
+        return { ok: false, error };
       }
-      return { ok: false, error };
+      return {
+        ok: false,
+        error: reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.", Date.now() - started),
+      };
     }
+  };
+  if (!mutation) return execute();
+  const rawKey = mutation.input && typeof mutation.input === "object" && "idempotencyKey" in mutation.input
+    ? (mutation.input as { idempotencyKey?: unknown }).idempotencyKey
+    : undefined;
+  if (typeof rawKey !== "string" || !z.string().uuid().safeParse(rawKey).success) return execute();
+  try {
+    const user = await requireActionUser(mutation.section);
+    return await withIdempotency(`${mutation.action}:${user.id}:${rawKey}`, execute);
+  } catch (error) {
+    if (error instanceof ForbiddenError) return { ok: false, error: error.message };
+    if (error instanceof z.ZodError) return { ok: false, error: error.issues[0]?.message ?? "Please check the form values." };
     return {
       ok: false,
-      error: reportActionFailure("CRM action", err, "Unable to complete this request. Please contact support.", Date.now() - started),
+      error: reportActionFailure(mutation.action, error, "Unable to complete this request. Please contact support.", Date.now() - started),
     };
+  }
+}
+
+function scheduleCrmEffects(action: string, invalidations: string[], paths: string[]) {
+  const work = async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await invalidate(...invalidations);
+        revalidateCrmPaths(...paths);
+        return;
+      } catch (error) {
+        console.error(`[action] deferred ${action} cache update ${attempt === 0 ? "retrying" : "failed"}`, {
+          attempt: attempt + 1,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+    }
+  };
+  try {
+    after(work);
+  } catch (error) {
+    console.error(`[action] could not schedule ${action} cache update`, {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    void work();
   }
 }
 
@@ -174,10 +223,9 @@ export async function addLeadAction(input: unknown) {
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
     if (assigneeId && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     const lead = await crm().createLead(data, user, assigneeId, forceCreate);
-    await invalidate("leads", "visits");
-    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
+    scheduleCrmEffects("lead create", ["visits"], LEAD_MUTATION_PATHS);
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
-  }, () => submittedPhone);
+  }, () => submittedPhone, { input, action: "add-lead", section: "leads" });
 }
 
 export async function getAssignableUsersAction() {
@@ -228,8 +276,7 @@ export async function updateLeadAction(input: unknown) {
       status: p.status, remarks: p.remarks, followUp: p.followUp,
     };
     const updated = await crm().updateLead(p.id, patch, user, current);
-    await invalidate("visits");
-    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
+    scheduleCrmEffects("lead edit", ["visits"], LEAD_MUTATION_PATHS);
     return {
       zohoUrl: zohoLeadUrl(p.id),
       lead: updated ?? {
@@ -243,7 +290,7 @@ export async function updateLeadAction(input: unknown) {
         ...(p.followUp ? { followUp: p.followUp } : {}),
       },
     };
-  }, () => submittedPhone);
+  }, () => submittedPhone, { input, action: "edit-lead", section: "leads" });
 }
 
 const reassignLeadSchema = z.object({ id, assignedToId: id });
@@ -258,7 +305,7 @@ export async function reassignLeadAction(input: unknown) {
     const assignee = (await crm().listAssignableUsers()).find((member) => String(member.id) === String(p.assignedToId));
     if (!assignee) throw new ForbiddenError("Choose an active team member.");
     const assignment = await crm().assignLead(p.id, p.assignedToId, user);
-    await invalidate("leads", "visits");
+    scheduleCrmEffects("lead reassign", ["visits"], LEAD_MUTATION_PATHS);
     if (cachedLeads) {
       const updatedLeads = cachedLeads.map((lead) => lead.id === p.id
         ? {
@@ -271,9 +318,8 @@ export async function reassignLeadAction(input: unknown) {
         : lead);
       await setCachedValue("leads", 60_000, updatedLeads);
     }
-    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
     return { ...assignment, zohoUrl: zohoLeadUrl(p.id) };
-  });
+  }, undefined, { input, action: "reassign-lead", section: "leads" });
 }
 
 export async function getAssignmentWarningsAction(input: unknown) {
@@ -294,9 +340,8 @@ export async function deleteLeadAction(input: unknown) {
     const p = deleteLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
     await crm().deleteLead(p.id);
-    await invalidate("leads", "visits");
-    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
-  });
+    scheduleCrmEffects("lead delete", ["leads", "visits"], LEAD_MUTATION_PATHS);
+  }, undefined, { input, action: "delete-lead", section: "leads" });
 }
 
 export async function saveLeadUpdateAction(input: unknown) {
@@ -310,8 +355,7 @@ export async function saveLeadUpdateAction(input: unknown) {
     }
     const patch: LeadPatch = { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo };
     const updated = await crm().updateLead(p.id, patch, user, current);
-    await invalidate("visits");
-    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
+    scheduleCrmEffects("lead update", ["visits"], LEAD_MUTATION_PATHS);
     return {
       zohoUrl: zohoLeadUrl(p.id),
       lead: updated ?? {
@@ -321,7 +365,7 @@ export async function saveLeadUpdateAction(input: unknown) {
         ...(p.assignedTo !== undefined ? { assignedTo: p.assignedTo } : {}),
       },
     };
-  });
+  }, undefined, { input, action: "save-lead-update", section: "leads" });
 }
 
 export async function getLeadHistoryAction(leadId: string): Promise<ActionResult<LeadUpdate[]>> {
@@ -350,21 +394,19 @@ export async function logCallAction(input: unknown) {
       throw new ForbiddenError("Call Back Later requires a follow-up date.");
     }
     const result = await crm().logCall(data, user);
-    await invalidate("leads", "visits", "performance");
-    revalidateCrmPaths(...WORK_MUTATION_PATHS);
+    scheduleCrmEffects("call outcome", ["leads", "visits", "performance"], WORK_MUTATION_PATHS);
     return result;
-  });
+  }, undefined, { input, action: "log-call-outcome", section: "leads" });
 }
 
-export async function fixAssignedLeadsAction() {
+export async function fixAssignedLeadsAction(input?: unknown) {
   return run(async () => {
     const user = await requireActionUser("leads");
     if (user.role !== "Manager") throw new ForbiddenError("Only managers can fix assigned leads.");
     const changed = await crm().fixAssignedLeads(user);
-    await invalidate("leads", "visits");
-    revalidateCrmPaths(...LEAD_MUTATION_PATHS);
+    scheduleCrmEffects("fix assigned leads", ["leads", "visits"], LEAD_MUTATION_PATHS);
     return { changed };
-  });
+  }, undefined, { input, action: "fix-assigned-leads", section: "leads" });
 }
 
 export async function listFixableAssignedLeadsAction() {
@@ -403,10 +445,9 @@ export async function createQuoteAction(input: unknown) {
     const executive = lead.assignedTo ?? user.name;
     const repository = crm();
     const quote = await repository.createQuote({ ...q, offerNo: "" }, user, executive);
-    await invalidate("quotes", "leads", "performance");
-    revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
+    scheduleCrmEffects("create quote", ["quotes", "leads", "performance"], QUOTE_MUTATION_PATHS);
     return quote;
-  });
+  }, undefined, { input, action: "create-quote", section: "quotations" });
 }
 
 const quotationSentSchema = z.object({ leadId: id.optional(), quoteId: id.optional() }).refine(
@@ -434,10 +475,9 @@ export async function markQuotationSentAction(input: unknown) {
         await repository.updateLead(lead.id, { status: "Quotation Sent" }, user, lead);
       }
     }
-    await invalidate("leads", "quotes", "performance");
-    revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
+    scheduleCrmEffects("mark quotation sent", ["leads", "quotes", "performance"], QUOTE_MUTATION_PATHS);
     return { status: "Quotation Sent" as const, quoteStatus: "Sent" as const };
-  });
+  }, undefined, { input, action: "mark-quotation-sent", section: "quotations" });
 }
 
 export async function getQuoteDetailAction(rawId: string): Promise<ActionResult<import("@/lib/domain").Quotation>> {
@@ -483,13 +523,12 @@ export async function scheduleVisitAction(input: unknown) {
     if (!executive || !(await assignableNames()).includes(executive)) throw new ForbiddenError("Choose a team member.");
     const cachedVisits = await getCachedValue<Visit[]>("visits");
     const createdVisit = await crm().createVisit({ ...v, executive }, user);
-    await invalidate("visits", "leads");
+    scheduleCrmEffects("schedule visit", ["visits", "leads"], WORK_MUTATION_PATHS);
     if (cachedVisits) {
       await setCachedValue("visits", 60_000, [createdVisit, ...cachedVisits.filter((visit) => visit.id !== createdVisit.id)]);
     }
-    revalidateCrmPaths(...WORK_MUTATION_PATHS);
     return createdVisit;
-  });
+  }, undefined, { input, action: "schedule-visit", section: "visits" });
 }
 
 const visitPatchSchema = z.object({
@@ -510,7 +549,7 @@ export async function updateVisitAction(input: unknown) {
     }
     const cachedVisits = await getCachedValue<Visit[]>("visits");
     await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user, visit);
-    await invalidate("visits", "leads");
+    scheduleCrmEffects("update visit", ["visits", "leads"], WORK_MUTATION_PATHS);
     if (cachedVisits) {
       const patch = {
         ...(p.status ? { status: p.status as VisitStatus, done: p.status === "Completed" } : {}),
@@ -521,6 +560,5 @@ export async function updateVisitAction(input: unknown) {
       };
       await setCachedValue("visits", 60_000, cachedVisits.map((item) => item.id === p.id ? { ...item, ...patch } : item));
     }
-    revalidateCrmPaths(...WORK_MUTATION_PATHS);
-  });
+  }, undefined, { input, action: "update-visit", section: "visits" });
 }

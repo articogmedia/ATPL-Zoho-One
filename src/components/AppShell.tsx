@@ -102,6 +102,12 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   }, [routeKey]);
 
   useEffect(() => {
+    const refreshAfterRetry = () => router.refresh();
+    window.addEventListener("atpl:mutation-recovered", refreshAfterRetry);
+    return () => window.removeEventListener("atpl:mutation-recovered", refreshAfterRetry);
+  }, [router]);
+
+  useEffect(() => {
     const warm = () => {
       lastWarmAt.current = Date.now();
       void fetch("/api/warm", { method: "GET", cache: "no-store" }).catch(() => undefined);
