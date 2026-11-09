@@ -40,7 +40,7 @@ export type ZQuotedItem = {
   Unit?: string;
   Usage_Unit?: string;
 };
-export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Grand_Total?: number; Valid_Till?: string; Mobile?: string; Phone?: string; Customer_Name?: string; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
+export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Sub_Total?: number | string | null; Discount?: number | string | null; Tax?: number | string | null; Adjustment?: number | string | null; Grand_Total?: number; Valid_Till?: string; Mobile?: string; Phone?: string; Customer_Name?: string; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
 export type QuoteLineItemsField = "Quoted_Items" | "Product_Details";
 
 export function quoteLineItemsField(fieldNames: Iterable<string>): QuoteLineItemsField {
@@ -291,6 +291,7 @@ export function mapQuote(
     executive: cleanZohoDisplayName(z.Owner?.name),
     ownerId: ownerId(z.Owner?.id),
     total: z.Grand_Total ?? 0,
+    tax: Number.isFinite(Number(z.Tax ?? 0)) ? Number(z.Tax ?? 0) : 0,
     gstBreakdown: snapshot.gstBreakdown,
     date: day(z.Created_Time),
     status: String(z.Status ?? "Draft"),

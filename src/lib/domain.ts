@@ -138,6 +138,7 @@ export type Quotation = {
   date: string;
   status?: string;
   ownerId?: string;
+  tax?: number;
   items?: QuoteItem[];
   gstBreakdown?: QuoteGstBreakdown;
 };

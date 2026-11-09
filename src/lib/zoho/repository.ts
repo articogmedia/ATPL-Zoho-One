@@ -36,7 +36,7 @@ const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_I
 const NOTE_FIELDS = ["Note_Title", "Note_Content", "Created_Time", "Owner", "Created_By"];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result", "Description"];
 const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", "Description"];
-const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", "Description", ...Object.values(FIELD.quote)];
+const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Sub_Total", "Discount", "Tax", "Adjustment", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", "Description", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users and field metadata
@@ -262,6 +262,16 @@ function quoteLineItemsPayload(
     return newItem;
   });
 }
+
+function isTaxFieldWriteFailure(error: unknown): error is ZohoError {
+  if (!(error instanceof ZohoError) || ![400, 422].includes(error.status ?? 0)) return false;
+  const details = error.details ?? {};
+  const fieldReferences = [error.field, details.api_name, details.json_path, details.field]
+    .filter((value): value is string => typeof value === "string");
+  return fieldReferences.some((value) => /(?:^|[^A-Za-z0-9_])Tax(?:$|[^A-Za-z0-9_])/i.test(value))
+    || /\bTax\b/i.test(error.message);
+}
+
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
   const exactValue = zohoLeadSource(source, sourceValues, false);
   if (!exactValue) {
@@ -1609,7 +1619,10 @@ export const zohoRepository: CrmRepository = {
       Subject: `Offer - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
       [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata),
-      Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
+      Sub_Total: totals.subtotal,
+      Discount: totals.discount,
+      Tax: totals.gst,
+      Adjustment: 0,
     };
     if (snapshotField?.api_name) quoteRecord[snapshotField.api_name] = customerSnapshot;
     else if (schema.fieldNames.has("Description") && schema.fieldsByName.get("Description")?.read_only !== true) {
@@ -1726,7 +1739,21 @@ export const zohoRepository: CrmRepository = {
             .map((field) => field.api_name).filter(Boolean),
           payloadKeys: Object.keys(quoteRecord),
         });
-        return zohoWrite("POST", "/Quotes", quoteRecord);
+        try {
+          return await zohoWrite("POST", "/Quotes", quoteRecord);
+        } catch (error) {
+          if (!isTaxFieldWriteFailure(error)) throw error;
+          console.error("[zoho] Quotes Tax field was rejected; retrying quote with GST as Adjustment to preserve the portal total", {
+            operation: "POST /Quotes",
+            field: error.field ?? error.details?.api_name ?? error.details?.json_path,
+            code: error.code,
+            gstAmount: totals.gst,
+            quotePayloadKeys: Object.keys(quoteRecord),
+          });
+          const fallbackRecord: Record<string, unknown> = { ...quoteRecord, Adjustment: totals.gst };
+          delete fallbackRecord.Tax;
+          return zohoWrite("POST", "/Quotes", fallbackRecord);
+        }
       };
       let offerNo = allocate(currentOfferNos);
       try {
