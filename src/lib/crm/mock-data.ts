@@ -503,6 +503,30 @@ export const MOCK_QUOTES: Quotation[] = [
     "items": [
       { "productId": "P2", "model": "2 TR Split AC", "unit": "Nos", "qty": 2, "price": 57000 }
     ]
+  },
+  {
+    "id": "Q2004",
+    "offerNo": "228/26-27",
+    "leadId": "L101",
+    "customer": "Sri Lakshmi Textiles",
+    "executive": "Anil",
+    "date": "2026-10-20",
+    "total": 122000,
+    "items": [
+      { "productId": "P3", "model": "3 TR 4-Way Cassette AC", "unit": "Nos", "qty": 1, "price": 122000 }
+    ]
+  },
+  {
+    "id": "Q2005",
+    "offerNo": "229/26-27",
+    "leadId": "L103",
+    "customer": "Hotel Paradise Inn",
+    "executive": "Anil",
+    "date": "2026-10-19",
+    "total": 57000,
+    "items": [
+      { "productId": "P2", "model": "2 TR Split AC", "unit": "Nos", "qty": 1, "price": 57000 }
+    ]
   }
 ];
 

@@ -4,9 +4,10 @@ export function canCreateQuotationPdf(
   quotation: { offerNo: string; customer: string; leadId: string; items?: readonly { productId?: string }[] },
   savedQuote = false,
 ) {
-  return !!quotation.offerNo.trim() && !!quotation.customer.trim() &&
-    (!!quotation.leadId.trim() || savedQuote) && !!quotation.items?.length &&
-    (savedQuote || quotation.items.every((item) => !!item.productId));
+  if (!quotation.offerNo.trim() || !quotation.items?.length) return false;
+  if (savedQuote) return true;
+  return !!quotation.customer.trim() && !!quotation.leadId.trim() &&
+    quotation.items.every((item) => !!item.productId);
 }
 
 export type QuotationPresentationItem = {

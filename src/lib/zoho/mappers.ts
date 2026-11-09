@@ -47,6 +47,51 @@ export function quoteLineItemsField(fieldNames: Iterable<string>): QuoteLineItem
   const names = new Set(fieldNames);
   return names.has("Quoted_Items") ? "Quoted_Items" : "Product_Details";
 }
+
+export type QuoteCustomerSnapshot = {
+  leadId?: string;
+  name?: string;
+  phone?: string;
+  company?: string;
+  area?: string;
+  address?: string;
+};
+
+export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapshot {
+  const raw = record.Customer_Snapshot ?? record.Customer_Details ?? record.Customer_Info ?? record.Description;
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const value = parsed as Record<string, unknown>;
+      const text = (key: string) => typeof value[key] === "string" ? value[key].trim() : "";
+      return {
+        leadId: text("leadId") || undefined,
+        name: text("name") || undefined,
+        phone: text("phone") || undefined,
+        company: text("company") || undefined,
+        area: text("area") || undefined,
+        address: text("address") || undefined,
+      };
+    }
+  } catch {
+    const values = Object.fromEntries(raw.split(/\r?\n/).flatMap((line) => {
+      const match = /^\s*(lead\s*id|customer\s*name|phone|mobile|company|area|address)\s*:\s*(.*?)\s*$/i.exec(line);
+      const key = match?.[1];
+      const value = match?.[2];
+      return key && value ? [[key.toLowerCase().replace(/\s+/g, ""), value]] : [];
+    }));
+    return {
+      leadId: values.leadid || undefined,
+      name: values.customername || undefined,
+      phone: values.phone || values.mobile || undefined,
+      company: values.company || undefined,
+      area: values.area || undefined,
+      address: values.address || undefined,
+    };
+  }
+  return {};
+}
 export type ZTask = { id: string; Subject?: string; Status?: string; Due_Date?: string; Owner?: Ref; Who_Id?: Ref; What_Id?: Ref; Description?: string; Mobile?: string; Phone?: string; [k: string]: unknown };
 export type ZCall = { id: string; Subject?: string; Call_Start_Time?: string; Call_Type?: string; Owner?: Ref; What_Id?: Ref; [k: string]: unknown };
 export type ZEvent = { Event_Title?: string; Start_DateTime?: string; Created_Time?: string; Owner?: Ref; Description?: string };
@@ -186,6 +231,7 @@ export function mapQuote(
   const referencedLeadId = ref?.id ?? textLeadId;
   const account = z.Account_Name && typeof z.Account_Name === "object" ? z.Account_Name as Ref : undefined;
   const contact = z.Contact_Name && typeof z.Contact_Name === "object" ? z.Contact_Name as Ref : undefined;
+  const snapshot = parseQuoteCustomerSnapshot(z);
   const subjectMatch = /^Offer\s+(.+?)\s+-\s+(.+)$/.exec(String(z.Subject ?? "").trim());
   const offerNo = String(z[FIELD.quote.offerNo] ?? "").trim() || subjectMatch?.[1] || "";
   const customerRefName = contact?.name || account?.name || ref?.name || String(z.Customer_Name ?? "").trim();
@@ -195,14 +241,24 @@ export function mapQuote(
       (!!z.Mobile && candidate.phone.replace(/\D/g, "").slice(-10) === String(z.Mobile).replace(/\D/g, "").slice(-10)) ||
       (!!z.Phone && candidate.phone.replace(/\D/g, "").slice(-10) === String(z.Phone).replace(/\D/g, "").slice(-10)),
     );
-  const leadId = lead?.id ?? referencedLeadId ?? "";
-  const customer = (lead ? lead.company || lead.name : "") || customerRefName;
+  const directLead = referencedLeadId ? leadsById.get(referencedLeadId) : undefined;
+  const leadId = directLead?.id ?? lead?.id ?? (referencedLeadId || snapshot.leadId || "");
+  const leadName = lead?.name !== "(no name)" ? lead?.name : "";
+  const contactName = directLead?.name && directLead.name !== "(no name)"
+    ? directLead.name
+    : snapshot.name || contact?.name || leadName || "";
+  const company = directLead?.company || snapshot.company || account?.name || lead?.company || "";
+  const customer = directLead?.company || snapshot.company || customerRefName || lead?.company || contactName;
   return {
     id: String(z.id).trim(),
     offerNo,
     leadId,
     customer,
-    phone: lead?.phone || String(z.Mobile ?? z.Phone ?? ""),
+    contactName,
+    company,
+    phone: directLead?.phone || snapshot.phone || lead?.phone || String(z.Mobile ?? z.Phone ?? ""),
+    area: directLead?.area || snapshot.area || lead?.area || "",
+    address: directLead?.address || snapshot.address || lead?.address || "",
     subject: String(z.Subject ?? ""),
     validTill: day(z.Valid_Till),
     executive: cleanZohoDisplayName(z.Owner?.name),

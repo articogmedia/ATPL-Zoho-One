@@ -1,4 +1,4 @@
-import { canAdvanceLeadStatus, quoteTotals, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
+import { canAdvanceLeadStatus, nextOfferNo, quoteTotals, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 
 export function advanceMockLeadStatus(lead: Lead, target: "Site Visit Scheduled" | "Quotation Sent"): boolean {
@@ -147,6 +147,7 @@ export const mockRepository: CrmRepository = {
 
   async listProducts() { return MOCK_PRODUCTS; },
   async listQuotes() { return [...state.quotes].sort((a, b) => b.date.localeCompare(a.date)); },
+  async suggestOfferNo() { return nextOfferNo(state.quotes.map((quote) => quote.offerNo), today()); },
   async listQuotesPage(page) {
     const quotes = [...state.quotes].sort((a, b) => b.date.localeCompare(a.date));
     const start = (Math.max(1, Math.floor(page)) - 1) * 200;
@@ -156,7 +157,19 @@ export const mockRepository: CrmRepository = {
     const quotes = ownerId ? state.quotes.filter((quote) => quote.ownerId === ownerId) : state.quotes;
     return quotes.length;
   },
-  async getQuote(id) { return state.quotes.find((quote) => quote.id === id) ?? null; },
+  async getQuote(id) {
+    const quote = state.quotes.find((item) => item.id === id);
+    if (!quote) return null;
+    const lead = state.leads.find((item) => item.id === quote.leadId);
+    return {
+      ...quote,
+      contactName: quote.contactName || lead?.name,
+      company: quote.company || lead?.company,
+      phone: quote.phone || lead?.phone,
+      area: quote.area || lead?.area,
+      address: quote.address || lead?.address,
+    };
+  },
   async markQuoteSent(id) {
     const quote = state.quotes.find((item) => item.id === id);
     if (!quote) throw new Error("Quotation not found");
@@ -165,14 +178,17 @@ export const mockRepository: CrmRepository = {
   async createQuote(input, actor, executive) {
     const lead = state.leads.find((l) => l.id === input.leadId);
     if (!lead) throw new Error("Lead not found");
+    const offerNo = nextOfferNo(state.quotes.map((quote) => quote.offerNo), today());
     const items = input.items.map((i) => {
       const p = MOCK_PRODUCTS.find((x) => x.id === i.productId);
       if (!p) throw new Error("Unknown product");
       return { productId: p.id, model: p.model, description: p.description, unit: p.unit, qty: i.qty, price: p.price, discount: Math.min(p.price * i.qty, Math.max(0, i.discount)) };
     });
     const q: Quotation = {
-      id: `Q${2001 + state.quotes.length}`, offerNo: input.offerNo, leadId: lead.id,
-      customer: lead.company || lead.name, executive, date: today(), total: quoteTotals(items).total, status: "Draft", items,
+      id: `Q${2001 + state.quotes.length}`, offerNo, leadId: lead.id,
+      customer: lead.company || lead.name, contactName: lead.name,
+      company: lead.company, phone: lead.phone, area: lead.area, address: lead.address,
+      executive, date: today(), total: quoteTotals(items).total, status: "Draft", items,
     };
     state.quotes.unshift(q);
     note(lead.id, actor.name, `Quotation ${q.offerNo} created`);

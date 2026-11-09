@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
-import { nextOfferNo, todayIST, uniqueProducts } from "@/lib/domain";
+import { uniqueProducts } from "@/lib/domain";
 import type { Product, User } from "@/lib/domain";
 import { QuotationsClient } from "./QuotationsClient";
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
@@ -30,6 +30,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
   let customerPage: Awaited<ReturnType<NonNullable<typeof repo.listLeadsPage>>>;
   let presetLead: Awaited<ReturnType<typeof repo.getLead>> = null;
   let products: Product[];
+  let suggestedOfferNo: string;
   let leadSources: Awaited<ReturnType<typeof repo.listLeadSources>> = [];
   let savedQuotesCount: number | undefined;
   let leadSourcesUnavailable = false;
@@ -42,7 +43,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
     })
     : Promise.resolve(undefined);
   try {
-    [customerPage, products, leadSources, presetLead, savedQuotesCount] = await withPageTimeout(Promise.all([
+    [customerPage, products, leadSources, presetLead, savedQuotesCount, suggestedOfferNo] = await withPageTimeout(Promise.all([
       repo.listLeadsPage
         ? repo.listLeadsPage(1, 30, user.role === "Sales Executive" ? user.id : undefined)
         : repo.listLeads().then((rows) => ({ leads: rows.slice(0, 30), total: rows.length, hasMore: rows.length > 30 })),
@@ -61,6 +62,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
         return null;
       }) : Promise.resolve(null),
       savedQuotesCountPromise,
+      repo.suggestOfferNo(),
     ]));
   } catch (error) {
     console.error("[page] quotations data load failed", {
@@ -98,7 +100,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
     leadSources={leadSources}
     leadSourcesUnavailable={leadSourcesUnavailable || leadSources.length === 0}
     products={uniqueProducts(products)}
-    suggestedOfferNo={nextOfferNo([], todayIST())}
+    suggestedOfferNo={suggestedOfferNo}
     presetLeadId={presetLead && !presetLeadError ? String(presetLead.id).trim() : ""}
     presetLeadError={presetLeadError}
   />;

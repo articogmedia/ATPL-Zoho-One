@@ -126,7 +126,11 @@ export type Quotation = {
   offerNo: string;
   leadId: string;
   customer: string;
+  contactName?: string;
+  company?: string;
   phone?: string;
+  area?: string;
+  address?: string;
   subject?: string;
   validTill?: string;
   executive: string;

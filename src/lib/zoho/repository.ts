@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User, type Visit } from "@/lib/domain";
+import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User, type Visit } from "@/lib/domain";
 import { cached, invalidate, patchCachedValues, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository, LogCallInput } from "@/lib/crm/repository";
@@ -10,7 +10,7 @@ import { hosts, zoho, zohoList, zohoWrite, ZohoError, ZOHO_CRM_API_VERSION } fro
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
-  quoteLineItemsField, type QuoteLineItemsField, type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
+  parseQuoteCustomerSnapshot, quoteLineItemsField, type QuoteCustomerSnapshot, type QuoteLineItemsField, type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
 import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitRecord, mapSiteVisitUpdate } from "./site-visits";
 import { zohoDateTime } from "./date-time";
@@ -36,7 +36,7 @@ const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_I
 const NOTE_FIELDS = ["Note_Title", "Note_Content", "Created_Time", "Owner", "Created_By"];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result", "Description"];
 const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", "Description"];
-const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", ...Object.values(FIELD.quote)];
+const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", "Description", ...Object.values(FIELD.quote)];
 
 const SHORT = 60_000;   // transactional lists
 const LONG = 600_000;   // users, products, and field metadata
@@ -636,6 +636,7 @@ function scheduleSideEffects(
 }
 
 async function quotePage(page: number) {
+  await ensureUniqueQuoteNumbers();
   const schema = await quoteSchema();
   return cached(`quotes:page:${page}`, SHORT, async () => {
     const response = await zoho<{ data?: ZQuote[]; info?: { more_records?: boolean; count?: number } }>("GET", "/Quotes", {
@@ -650,6 +651,111 @@ async function quotePage(page: number) {
     const quotes = (response?.data ?? []).map((record) => mapQuote(record, new Map(), undefined, schema.fieldNames));
     return { quotes, hasMore: response?.info?.more_records === true, count: response?.info?.count };
   }, { keepStale: true });
+}
+
+let quoteWriteLock: Promise<void> = Promise.resolve();
+let lastQuoteUniquenessCheck = 0;
+let quoteUniquenessCheck: Promise<void> | undefined;
+
+async function withQuoteWriteLock<T>(task: () => Promise<T>): Promise<T> {
+  const previous = quoteWriteLock;
+  let release!: () => void;
+  quoteWriteLock = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+  }
+}
+
+function customerSnapshotField(fields: QuoteFieldMetadata[]): QuoteFieldMetadata | undefined {
+  const candidates = fields.filter((field) => {
+    const name = field.api_name?.toLowerCase() ?? "";
+    const label = field.field_label?.toLowerCase() ?? "";
+    const textField = /^(text|string|singleline|single_line|textarea|multiline)$/i.test(field.data_type ?? "");
+    return textField && !field.read_only &&
+      (/^customer_(snapshot|details|info|profile)$/.test(name) ||
+        /customer\s+(snapshot|details|information|profile)/.test(label));
+  });
+  return candidates[0];
+}
+
+function quoteRecordSnapshot(lead: Lead): QuoteCustomerSnapshot {
+  return {
+    leadId: lead.id,
+    name: lead.name,
+    phone: lead.phone,
+    company: lead.company,
+    area: lead.area,
+    address: lead.address,
+  };
+}
+
+async function allQuoteRecords(): Promise<{ schema: Awaited<ReturnType<typeof quoteSchema>>; records: ZQuote[] }> {
+  const schema = await quoteSchema();
+  const snapshotField = customerSnapshotField(schema.fields)?.api_name;
+  const fields = ["Subject", "Created_Time", FIELD.quote.offerNo, ...(snapshotField ? [snapshotField] : [])]
+    .filter((name, index, list) => list.indexOf(name) === index)
+    .filter((name) => name === "Subject" || name === "Created_Time" || schema.fieldNames.has(name));
+  const records = await zohoList<ZQuote>("Quotes", fields, 100_000);
+  return { schema, records };
+}
+
+async function allOfferNumbers(): Promise<string[]> {
+  const { records } = await allQuoteRecords();
+  return records.map((record) => mapQuote(record, new Map()).offerNo).filter(Boolean);
+}
+
+async function repairDuplicateOfferNumbersUnlocked() {
+  const { schema, records } = await allQuoteRecords();
+  const grouped = new Map<string, ZQuote[]>();
+  for (const record of records) {
+    const offerNo = mapQuote(record, new Map()).offerNo;
+    if (!offerNo) continue;
+    grouped.set(offerNo, [...(grouped.get(offerNo) ?? []), record]);
+  }
+  const duplicates = [...grouped.values()].filter((group) => group.length > 1);
+  if (!duplicates.length) return;
+  const offerField = schema.fieldsByName.get(FIELD.quote.offerNo);
+  if (offerField?.read_only) {
+    throw new ZohoError("Duplicate quotation references exist, but the Zoho Offer_No field is read-only.", 400, "DUPLICATE_OFFER_NO_READ_ONLY", FIELD.quote.offerNo);
+  }
+  const used = [...grouped.keys()];
+  for (const group of duplicates) {
+    const oldestFirst = [...group].sort((a, b) => String(a.Created_Time ?? "").localeCompare(String(b.Created_Time ?? "")));
+    for (const duplicate of oldestFirst.slice(1)) {
+      let replacement = nextOfferNo(used, todayIST());
+      while (used.includes(replacement)) replacement = nextOfferNo([...used, replacement], todayIST());
+      used.push(replacement);
+      const oldSubject = String(duplicate.Subject ?? "");
+      const title = /^Offer\s+.+?\s+-\s+(.+)$/.exec(oldSubject)?.[1] ?? oldSubject.replace(/^Offer\s+/i, "");
+      const payload: Record<string, unknown> = { Subject: `Offer ${replacement}${title ? ` - ${title}` : ""}` };
+      if (schema.fieldNames.has(FIELD.quote.offerNo)) payload[FIELD.quote.offerNo] = replacement;
+      await zohoWrite("PUT", `/Quotes/${encodeURIComponent(String(duplicate.id))}`, payload);
+      console.warn("[zoho] repaired duplicate quotation reference", {
+        quoteId: duplicate.id,
+        previousOfferNo: mapQuote(duplicate, new Map()).offerNo,
+        replacementOfferNo: replacement,
+      });
+    }
+  }
+  await invalidate("quotes");
+}
+
+async function ensureUniqueQuoteNumbers() {
+  if (Date.now() - lastQuoteUniquenessCheck < 60_000) return;
+  quoteUniquenessCheck ??= withQuoteWriteLock(async () => {
+    if (Date.now() - lastQuoteUniquenessCheck < 60_000) return;
+    await repairDuplicateOfferNumbersUnlocked();
+    lastQuoteUniquenessCheck = Date.now();
+  }).finally(() => { quoteUniquenessCheck = undefined; });
+  await quoteUniquenessCheck;
+}
+
+export async function suggestedZohoOfferNo(): Promise<string> {
+  await ensureUniqueQuoteNumbers();
+  return nextOfferNo(await allOfferNumbers(), todayIST());
 }
 
 function isProductFieldSetError(error: unknown): boolean {
@@ -1318,6 +1424,9 @@ export const zohoRepository: CrmRepository = {
   async listQuotesPage(page) {
     return quotePage(Math.max(1, Math.floor(page)));
   },
+  async suggestOfferNo() {
+    return suggestedZohoOfferNo();
+  },
   async countQuotes(ownerId) {
     const ownerFilter = ownerId?.trim();
     return cached(`quotes:count:${ownerFilter || "all"}`, SHORT, async () => {
@@ -1334,32 +1443,72 @@ export const zohoRepository: CrmRepository = {
   async getQuote(id) {
     const schema = await quoteSchema();
     const lineItemsField = quoteLineItemsField(schema.fieldNames);
+    const snapshotField = customerSnapshotField(schema.fields)?.api_name;
     const response = await zoho<{ data?: ZQuote[] }>("GET", `/Quotes/${encodeURIComponent(id)}`, {
       query: { fields: [...new Set([
         ...QUOTE_FIELDS,
-        ...["Mobile", "Phone", "Customer_Name"].filter((field) => schema.fieldNames.has(field)),
+        ...["Mobile", "Phone", "Customer_Name", snapshotField].filter((field): field is string => !!field && schema.fieldNames.has(field)),
         lineItemsField,
       ])].join(",") },
     });
-    const record = response?.data?.[0];
-    if (!record) return null;
+    const originalRecord = response?.data?.[0];
+    if (!originalRecord) return null;
+    const record: ZQuote = snapshotField && typeof originalRecord[snapshotField] === "string"
+      ? { ...originalRecord, Customer_Snapshot: originalRecord[snapshotField] as string }
+      : originalRecord;
     const rawLead = record[FIELD.quote.lead];
     const leadId = rawLead && typeof rawLead === "object" && "id" in rawLead
       ? String(rawLead.id ?? "").trim()
       : typeof rawLead === "string" ? rawLead.trim() : "";
-    let lead = leadId ? await this.getLead(leadId) : null;
+    let lead: Lead | null = null;
+    if (leadId) {
+      try {
+        lead = await this.getLead(leadId);
+      } catch (error) {
+        console.warn("[zoho] quote Lead_Ref lookup failed; continuing with saved customer details", {
+          quoteId: id,
+          leadId,
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const snapshot = parseQuoteCustomerSnapshot(record);
     const lookupName = (value: unknown) =>
       value && typeof value === "object" ? String((value as { name?: string }).name ?? "").trim() : "";
-    const customerName = lookupName(record.Contact_Name) || lookupName(record.Account_Name);
-    const quotePhone = String(record.Mobile ?? record.Phone ?? "").trim();
+    const customerName = snapshot.name || lookupName(record.Contact_Name) || lookupName(record.Account_Name);
+    const quotePhone = String(snapshot.phone ?? record.Mobile ?? record.Phone ?? "").trim();
     if (!lead && customerName) {
-      const normalizedName = customerName.toLowerCase();
-      lead = (await this.listLeads()).find((candidate) =>
-        [candidate.name, candidate.company].some((value) => value.trim().toLowerCase() === normalizedName),
-      ) ?? null;
+      try {
+        const normalizedName = customerName.toLowerCase();
+        lead = (await this.listLeads()).find((candidate) =>
+          [candidate.name, candidate.company].some((value) => value.trim().toLowerCase() === normalizedName),
+        ) ?? null;
+      } catch (error) {
+        console.warn("[zoho] quote customer-name lookup failed; continuing with saved customer details", {
+          quoteId: id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
-    if (!lead && quotePhone) lead = (await this.findLeadByPhone(quotePhone))?.lead ?? null;
-    const products = await this.listProducts();
+    if (!lead && quotePhone) {
+      try {
+        lead = (await this.findLeadByPhone(quotePhone))?.lead ?? null;
+      } catch (error) {
+        console.warn("[zoho] quote customer-phone lookup failed; continuing with saved customer details", {
+          quoteId: id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const products = await this.listProducts().catch((error: unknown) => {
+      console.warn("[zoho] quote products unavailable; mapping saved item snapshots", {
+        quoteId: id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    });
     const map = new Map(lead ? [[lead.id, lead]] : []);
     return mapQuote(record, map, new Map(products.map((product) => [product.id, product])), schema.fieldNames);
   },
@@ -1395,12 +1544,21 @@ export const zohoRepository: CrmRepository = {
     const totals = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price, discount: l.discount })));
     const customer = lead.company || lead.name;
     const leadReference = leadReferenceField ? quoteLeadReference(leadReferenceField, lead.id) : undefined;
+    const snapshotField = customerSnapshotField(schema.fields);
+    const customerSnapshot = JSON.stringify(quoteRecordSnapshot(lead));
     const quoteRecord: Record<string, unknown> = {
-      Subject: `Offer ${input.offerNo} - ${input.subject?.trim() || customer}`,
+      Subject: `Offer - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
       [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata),
       Sub_Total: totals.subtotal, Discount: totals.discount, Grand_Total: totals.total,
     };
+    if (snapshotField?.api_name) quoteRecord[snapshotField.api_name] = customerSnapshot;
+    else if (schema.fieldNames.has("Description") && schema.fieldsByName.get("Description")?.read_only !== true) {
+      quoteRecord.Description = customerSnapshot;
+    }
+    for (const [field, value] of [["Customer_Name", lead.name], ["Mobile", lead.phone], ["Phone", lead.phone]] as const) {
+      if (schema.fieldNames.has(field) && schema.fieldsByName.get(field)?.read_only !== true) quoteRecord[field] = value;
+    }
     if (leadReference !== undefined) quoteRecord[FIELD.quote.lead] = leadReference;
     else {
       const reason = !leadReferenceField ? "field missing from Quotes metadata"
@@ -1413,16 +1571,7 @@ export const zohoRepository: CrmRepository = {
         reason,
         leadId: lead.id,
       });
-      if (schema.fieldNames.has("Description") && schema.fieldsByName.get("Description")?.read_only !== true) {
-        quoteRecord.Description = `Related lead ID: ${lead.id}`;
-      } else {
-        quoteRecord.Subject = `${quoteRecord.Subject} [Lead ID: ${lead.id}]`;
-      }
     }
-    if (schema.fieldNames.has(FIELD.quote.offerNo)) quoteRecord[FIELD.quote.offerNo] = input.offerNo;
-    else console.warn("[zoho] quote offer number custom field is unavailable; retaining it in Subject", {
-      requestedField: FIELD.quote.offerNo,
-    });
     if (schema.mandatoryFields.includes("Valid_Till") && !("Valid_Till" in quoteRecord)) {
       const validTill = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
       quoteRecord.Valid_Till = validTill;
@@ -1471,44 +1620,89 @@ export const zohoRepository: CrmRepository = {
         },
       );
     }
-    const zohoHosts = hosts();
-    console.info("[zoho] creating quote", {
-      operation: "POST /Quotes",
-      environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
-      apiHost: zohoHosts.api,
-      leadId: lead.id.trim(),
-      leadIdMatchesRequest: lead.id.trim() === requestedLeadId,
-      leadRefField: leadReferenceField?.api_name ?? null,
-      leadRefValue: leadReference ?? null,
-      leadRefValueType: leadReference === null ? "null" : Array.isArray(leadReference) ? "array" : typeof leadReference,
-      fieldMetadata: {
-        api_name: leadReferenceField?.api_name ?? null,
-        data_type: leadReferenceField?.data_type ?? null,
-        json_type: leadReferenceField?.json_type ?? null,
-        lookup_module_api_name: leadReferenceField?.lookup?.module?.api_name ?? null,
-        system_mandatory: leadReferenceField?.system_mandatory ?? null,
-        required: leadReferenceField?.required ?? null,
-        is_mandatory: leadReferenceField?.is_mandatory ?? null,
-        read_only: leadReferenceField?.read_only ?? null,
-        max_length: leadReferenceField?.max_length ?? null,
-      },
-      mandatoryLayout: schema.mandatoryLayout,
-      layoutRequiredFields: schema.layoutRequiredFields,
-      lineItemsField,
-      lineItemSubfields: (lineItemsMetadata?.subform_fields ?? lineItemsMetadata?.fields ?? [])
-        .map((field) => field.api_name).filter(Boolean),
-      payloadKeys: Object.keys(quoteRecord),
-      requestBody: { data: [quoteRecord] },
-    });
-    const id = await zohoWrite("POST", "/Quotes", {
-      ...quoteRecord,
+    const created = await withQuoteWriteLock(async () => {
+      await repairDuplicateOfferNumbersUnlocked();
+      const currentOfferNos = await allOfferNumbers();
+      const allocate = (used: string[]) => {
+        let candidate = nextOfferNo(used, todayIST());
+        if (used.includes(candidate)) candidate = nextOfferNo([...used, candidate], todayIST());
+        return candidate;
+      };
+      const assignOfferNo = (offerNo: string) => {
+        const leadIdSuffix = leadReference === undefined && !snapshotField && !("Description" in quoteRecord)
+          ? ` [Lead ID: ${lead.id}]`
+          : "";
+        quoteRecord.Subject = `Offer ${offerNo} - ${input.subject?.trim() || customer}${leadIdSuffix}`;
+        if (schema.fieldNames.has(FIELD.quote.offerNo)) quoteRecord[FIELD.quote.offerNo] = offerNo;
+        else console.warn("[zoho] quote offer number custom field is unavailable; retaining it in Subject", {
+          requestedField: FIELD.quote.offerNo,
+        });
+      };
+      const write = async (offerNo: string) => {
+        assignOfferNo(offerNo);
+        const zohoHosts = hosts();
+        console.info("[zoho] creating quote", {
+          operation: "POST /Quotes",
+          environment: env().ZOHO_SANDBOX === "true" ? "sandbox" : "live",
+          apiHost: zohoHosts.api,
+          leadId: lead.id.trim(),
+          leadIdMatchesRequest: lead.id.trim() === requestedLeadId,
+          leadRefField: leadReferenceField?.api_name ?? null,
+          leadRefValueType: leadReference === null ? "null" : Array.isArray(leadReference) ? "array" : typeof leadReference,
+          fieldMetadata: {
+            api_name: leadReferenceField?.api_name ?? null,
+            data_type: leadReferenceField?.data_type ?? null,
+            json_type: leadReferenceField?.json_type ?? null,
+            lookup_module_api_name: leadReferenceField?.lookup?.module?.api_name ?? null,
+            system_mandatory: leadReferenceField?.system_mandatory ?? null,
+            required: leadReferenceField?.required ?? null,
+            is_mandatory: leadReferenceField?.is_mandatory ?? null,
+            read_only: leadReferenceField?.read_only ?? null,
+            max_length: leadReferenceField?.max_length ?? null,
+          },
+          mandatoryLayout: schema.mandatoryLayout,
+          layoutRequiredFields: schema.layoutRequiredFields,
+          lineItemsField,
+          lineItemSubfields: (lineItemsMetadata?.subform_fields ?? lineItemsMetadata?.fields ?? [])
+            .map((field) => field.api_name).filter(Boolean),
+          payloadKeys: Object.keys(quoteRecord),
+        });
+        return zohoWrite("POST", "/Quotes", quoteRecord);
+      };
+      let offerNo = allocate(currentOfferNos);
+      try {
+        const id = await write(offerNo);
+        lastQuoteUniquenessCheck = Date.now();
+        return { id, offerNo };
+      } catch (error) {
+        if (!(error instanceof ZohoError) || error.code !== "DUPLICATE_DATA") throw error;
+        const latestOfferNos = await allOfferNumbers();
+        offerNo = allocate([...latestOfferNos, offerNo]);
+        const id = await write(offerNo);
+        lastQuoteUniquenessCheck = Date.now();
+        return { id, offerNo };
+      }
     });
     scheduleSideEffects("create quotation", [["history note", () => addHistoryNoteBestEffort(
-      lead.id, "Quotation created", `Quotation ${input.offerNo} created by ${actor.name}`,
-      { action: "create quote", quoteId: id },
+      lead.id, "Quotation created", `Quotation ${created.offerNo} created by ${actor.name}`,
+      { action: "create quote", quoteId: created.id },
     )]]);
     await invalidate("quotes", "leads");
-    return { id, offerNo: input.offerNo, leadId: lead.id, customer, executive, total: totals.total, status: "Draft", date: new Date().toISOString().slice(0, 10) };
+    return {
+      id: created.id,
+      offerNo: created.offerNo,
+      leadId: lead.id,
+      customer,
+      contactName: lead.name,
+      company: lead.company,
+      phone: lead.phone,
+      area: lead.area,
+      address: lead.address,
+      executive,
+      total: totals.total,
+      status: "Draft",
+      date: new Date().toISOString().slice(0, 10),
+    };
   },
 
   async listVisits() {

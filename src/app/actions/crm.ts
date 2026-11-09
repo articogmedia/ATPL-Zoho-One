@@ -10,7 +10,7 @@ import { hosts, ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, nextOfferNo, todayIST, visibleFor,
+  LEAD_SOURCES, LEAD_STATUSES, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, todayIST, visibleFor,
   normalizePhone, type CallOutcome, type Lead, type LeadSource, type LeadStatus, type LeadUpdate, type User, type Visit, type VisitStatus,
 } from "@/lib/domain";
 
@@ -402,9 +402,7 @@ export async function createQuoteAction(input: unknown) {
     const lead = await ownLeadOrThrow(user, q.leadId);
     const executive = lead.assignedTo ?? user.name;
     const repository = crm();
-    const existingQuotes = await repository.listQuotes();
-    const offerNo = nextOfferNo(existingQuotes.map((quote) => quote.offerNo), todayIST());
-    const quote = await repository.createQuote({ ...q, offerNo }, user, executive);
+    const quote = await repository.createQuote({ ...q, offerNo: "" }, user, executive);
     await invalidate("quotes", "leads", "performance");
     revalidateCrmPaths(...QUOTE_MUTATION_PATHS);
     return quote;
@@ -462,8 +460,7 @@ export async function getQuoteDetailAction(rawId: string): Promise<ActionResult<
 export async function suggestOfferNoAction(): Promise<string> {
   await requireActionUser("quotations");
   try {
-    const quotes = await crm().listQuotes();
-    return nextOfferNo(quotes.map((q) => q.offerNo), todayIST());
+    return await crm().suggestOfferNo();
   } catch (error) {
     throw new Error(reportActionFailure("suggest offer number", error, "Could not suggest an offer number."));
   }

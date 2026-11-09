@@ -42,6 +42,7 @@ const quoteFields = {
     ] },
     { api_name: "Offer_No" },
     { api_name: "Lead_Ref", data_type: "lookup", lookup: { module: { api_name: "Leads" } }, system_mandatory: true },
+    { api_name: "Description", data_type: "textarea" },
     { api_name: "Mobile", data_type: "phone" },
     { api_name: "Phone", data_type: "phone" },
     { api_name: "Customer_Name", data_type: "text" },
@@ -59,7 +60,7 @@ describe("Zoho quotation creation", () => {
       };
       return {};
     });
-    const list = vi.fn(async () => []);
+    const list = vi.fn(async (module: string) => module === "Quotes" ? [] : []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZOHO_CRM_API_VERSION: "v6",
       ZohoError: class extends Error {},
@@ -78,7 +79,44 @@ describe("Zoho quotation creation", () => {
       query: expect.objectContaining({ page: 1, per_page: 200 }),
     }));
     expect(zoho).not.toHaveBeenCalledWith("GET", "/Leads", expect.anything());
-    expect(list).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledWith("Quotes", expect.arrayContaining(["Offer_No"]), 100000);
+  });
+
+  it("repairs duplicate stored offer numbers before displaying the saved-quote list", async () => {
+    const records: Record<string, unknown>[] = [
+      { id: "quote-newer", Subject: "Offer 247/26-27 - Newer quote", Offer_No: "247/26-27", Created_Time: "2026-10-02T00:00:00Z" },
+      { id: "quote-older", Subject: "Offer 247/26-27 - Original quote", Offer_No: "247/26-27", Created_Time: "2026-10-01T00:00:00Z" },
+    ];
+    const write = vi.fn(async (_method: string, path: string, payload: Record<string, unknown>) => {
+      const id = decodeURIComponent(path.split("/").pop() ?? "");
+      const existing = records.find((record) => record.id === id);
+      if (existing) Object.assign(existing, payload);
+      return id;
+    });
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return { fields: quoteFields.fields };
+      if (path === "/settings/layouts") return { layouts: [] };
+      if (path === "/Quotes") return { data: records, info: { more_records: false, count: records.length } };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Quotes" ? records as never[] : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
+      ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    const page = await zohoRepository.listQuotesPage(1);
+
+    expect(write).toHaveBeenCalledWith("PUT", "/Quotes/quote-newer", expect.objectContaining({
+      Offer_No: expect.not.stringMatching(/^247\/26-27$/),
+    }));
+    expect(records.find((record) => record.id === "quote-older")?.Offer_No).toBe("247/26-27");
+    expect(new Set(page.quotes.map((quote) => quote.offerNo)).size).toBe(page.quotes.length);
   });
 
   it("does not probe alternate quote fields after a transport timeout", async () => {
@@ -92,11 +130,15 @@ describe("Zoho quotation creation", () => {
       if (path === "/Quotes") throw new MockZohoError("Zoho timed out", undefined, "NETWORK_TIMEOUT");
       return {};
     });
+    const list = vi.fn(async (module: string) => {
+      if (module === "Quotes") return await zoho("GET", "/Quotes") as never[];
+      return [];
+    });
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: MockZohoError,
       hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
       zoho,
-      zohoList: vi.fn(),
+      zohoList: list,
       zohoWrite: vi.fn(),
     }));
     const { zohoRepository } = await import("@/lib/zoho/repository");
@@ -170,12 +212,41 @@ describe("Zoho quotation creation", () => {
       offerNo: "249/26-27",
       leadId: "lead-1",
       customer: "Customer Co",
+      contactName: "Customer",
+      company: "Customer Co",
       phone: "9876543210",
       subject: "Offer 249/26-27 - AC package",
       validTill: "2026-12-15",
       items: [{ productId: "product-1", model: "Cassette AC", qty: 2, price: 122000, discount: 4000 }],
     });
     expect(mapped.customer).not.toBe(mapped.subject);
+    expect(canCreateQuotationPdf(mapped, true)).toBe(true);
+  });
+
+  it("maps a saved customer snapshot even when its Lead_Ref record is unavailable", () => {
+    const mapped = mapQuote({
+      id: "snapshot-quote",
+      Subject: "Offer 251/26-27 - AC package",
+      Description: JSON.stringify({
+        leadId: "deleted-lead",
+        name: "Ravi Kumar",
+        phone: "9876543210",
+        company: "Ravi Textiles",
+        area: "Secunderabad",
+        address: "12 Market Road",
+      }),
+      Quoted_Items: [{ Product_Name: { id: "product-1", name: "Cassette AC" }, Quantity: 1, List_Price: 122000 }],
+    }, new Map(), undefined, ["Quoted_Items"]);
+
+    expect(mapped).toMatchObject({
+      customer: "Ravi Textiles",
+      contactName: "Ravi Kumar",
+      company: "Ravi Textiles",
+      phone: "9876543210",
+      area: "Secunderabad",
+      address: "12 Market Road",
+      leadId: "deleted-lead",
+    });
     expect(canCreateQuotationPdf(mapped, true)).toBe(true);
   });
 
@@ -268,11 +339,64 @@ describe("Zoho quotation creation", () => {
 
     await expect(zohoRepository.getQuote("quote-phone")).resolves.toMatchObject({
       leadId: "lead-phone",
-      customer: "Unrelated Customer",
+      customer: "Different Account",
       phone: "9876543210",
       items: [{ productId: "product-1", model: "Cassette AC" }],
     });
     expect(zoho.mock.calls.some((call) => call[1] === "/Leads/search")).toBe(true);
+  });
+
+  it("falls back to the stored quote snapshot when Lead_Ref cannot be loaded", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status?: number, readonly code?: string) {
+        super(message);
+      }
+    }
+    const snapshot = {
+      leadId: "deleted-lead",
+      name: "Ravi Kumar",
+      phone: "9876543210",
+      company: "Ravi Textiles",
+      area: "Secunderabad",
+      address: "12 Market Road",
+    };
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return { fields: quoteFields.fields };
+      if (path === "/settings/layouts") return { layouts: [] };
+      if (path === "/Quotes/quote-snapshot") return {
+        data: [{
+          id: "quote-snapshot",
+          Subject: "Offer 252/26-27 - AC package",
+          Lead_Ref: { id: "deleted-lead", name: "Old Lead" },
+          Description: JSON.stringify(snapshot),
+          Quoted_Items: [{ Product_Name: { name: "Cassette AC" }, Quantity: 1, List_Price: 122000 }],
+        }],
+      };
+      if (path === "/Leads/deleted-lead") throw new MockZohoError("No permission or record deleted", 404, "NOT_FOUND");
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Products" ? [] : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
+      ZohoError: MockZohoError,
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: vi.fn(),
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.getQuote("quote-snapshot")).resolves.toMatchObject({
+      customer: "Ravi Textiles",
+      contactName: "Ravi Kumar",
+      company: "Ravi Textiles",
+      phone: "9876543210",
+      area: "Secunderabad",
+      address: "12 Market Road",
+      leadId: "deleted-lead",
+      items: [{ model: "Cassette AC", qty: 1, price: 122000 }],
+    });
   });
 
   it("writes the CRM Quoted_Items shape and keeps note failures from masking a saved quote", async () => {
@@ -334,7 +458,6 @@ describe("Zoho quotation creation", () => {
       leadId: "lead-1",
       leadIdMatchesRequest: true,
       leadRefField: "Lead_Ref",
-      leadRefValue: { id: "lead-1" },
       leadRefValueType: "object",
       fieldMetadata: expect.objectContaining({
         api_name: "Lead_Ref",
@@ -343,13 +466,11 @@ describe("Zoho quotation creation", () => {
         system_mandatory: true,
       }),
       payloadKeys: expect.arrayContaining(["Lead_Ref", "Quoted_Items"]),
-      requestBody: {
-        data: [expect.objectContaining({
-          Lead_Ref: { id: "lead-1" },
-          Quoted_Items: [expect.objectContaining({ Product_Name: { id: "product-1" } })],
-        })],
-      },
     }));
+    const writtenRecord = write.mock.calls.find((call) => call[1] === "/Quotes")?.[2] as Record<string, unknown>;
+    expect(JSON.parse(String(writtenRecord.Description))).toMatchObject({
+      leadId: "lead-1", name: "Customer", phone: "9876543210", company: "Customer Co",
+    });
     expect(errorLog).toHaveBeenCalledWith("[zoho] primary change succeeded but history note failed", expect.objectContaining({
       action: "create quote",
       quoteId: "quote-1",
@@ -358,6 +479,100 @@ describe("Zoho quotation creation", () => {
     }));
     errorLog.mockRestore();
     infoLog.mockRestore();
+  });
+
+  it("allocates different offer numbers for back-to-back quote creates", async () => {
+    const records: Record<string, unknown>[] = [];
+    const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
+      if (path === "/Quotes") {
+        records.push({ ...record, id: `quote-${records.length + 1}`, Created_Time: new Date().toISOString() });
+        return `quote-${records.length}`;
+      }
+      return "side-effect";
+    });
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return quoteFields;
+      if (path === "/settings/layouts") return { layouts: [] };
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => {
+      if (module === "Products") return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }];
+      if (module === "Quotes") return records as never[];
+      return [];
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
+      ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const input = {
+      offerNo: "247/26-27",
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    };
+    const actor = { id: "manager-1", name: "Manager", role: "Manager" as const };
+
+    const first = await zohoRepository.createQuote(input, actor, "Manager");
+    const second = await zohoRepository.createQuote(input, actor, "Manager");
+
+    expect(first.offerNo).not.toBe(second.offerNo);
+    expect([first.offerNo, second.offerNo]).toEqual(["239/26-27", "240/26-27"]);
+    expect(records.map((record) => record.Offer_No)).toEqual(["239/26-27", "240/26-27"]);
+  });
+
+  it("increments and retries once when Zoho reports an offer number collision", async () => {
+    class MockZohoError extends Error {
+      constructor(message: string, readonly status?: number, readonly code?: string) {
+        super(message);
+      }
+    }
+    const records: Record<string, unknown>[] = [];
+    const attempts: string[] = [];
+    const write = vi.fn(async (_method: string, path: string, record: Record<string, unknown>) => {
+      if (path === "/Quotes") {
+        attempts.push(String(record.Offer_No));
+        if (attempts.length === 1) throw new MockZohoError("Duplicate offer number", 400, "DUPLICATE_DATA");
+        records.push({ ...record, id: "quote-retried" });
+        return "quote-retried";
+      }
+      return "side-effect";
+    });
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return quoteFields;
+      if (path === "/settings/layouts") return { layouts: [] };
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => {
+      if (module === "Products") return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }];
+      if (module === "Quotes") return records as never[];
+      return [];
+    });
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
+      ZohoError: MockZohoError,
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.createQuote({
+      offerNo: "239/26-27",
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
+      offerNo: "240/26-27",
+    });
+    expect(attempts).toEqual(["239/26-27", "240/26-27"]);
   });
 
   it("writes the legacy Product_Details shape when that is the only line-item field in metadata", async () => {
@@ -438,8 +653,8 @@ describe("Zoho quotation creation", () => {
     }));
   });
 
-  it("omits an unusable lookup and keeps the lead ID in the subject", async () => {
-    const write = vi.fn(async () => "should-not-save");
+  it("omits an unusable lookup and keeps the lead ID in the customer snapshot", async () => {
+    const write = vi.fn(async (...args: unknown[]) => args[1] === "/Quotes" ? "should-not-save" : "side-effect");
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") {
         return { fields: quoteFields.fields.map((field) => field.api_name === "Lead_Ref"
@@ -473,14 +688,14 @@ describe("Zoho quotation creation", () => {
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
       leadId: "lead-1",
     });
-    expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
-      Subject: expect.stringContaining("[Lead ID: lead-1]"),
-    }));
+    const writtenRecord = write.mock.calls.find((call) => call[1] === "/Quotes")?.[2] as Record<string, unknown> | undefined;
+    expect(writtenRecord).toBeDefined();
+    expect(JSON.parse(String(writtenRecord?.Description))).toMatchObject({ leadId: "lead-1" });
     expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({ Lead_Ref: expect.anything() }));
   });
 
   it("creates the quote without guessing when Lead_Ref is missing from metadata", async () => {
-    const write = vi.fn(async () => "quote-absent");
+    const write = vi.fn(async (...args: unknown[]) => args[1] === "/Quotes" ? "quote-absent" : "side-effect");
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") return { fields: quoteFields.fields.filter((field) => field.api_name !== "Lead_Ref") };
       if (path === "/Leads/lead-1") return { data: [leadRecord] };
@@ -510,9 +725,9 @@ describe("Zoho quotation creation", () => {
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
       leadId: "lead-1",
     });
-    expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
-      Subject: expect.stringContaining("[Lead ID: lead-1]"),
-    }));
+    const writtenRecord = write.mock.calls.find((call) => call[1] === "/Quotes")?.[2] as Record<string, unknown> | undefined;
+    expect(writtenRecord).toBeDefined();
+    expect(JSON.parse(String(writtenRecord?.Description))).toMatchObject({ leadId: "lead-1" });
     expect(write).not.toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({ Lead_Ref: expect.anything() }));
   });
 
@@ -752,14 +967,14 @@ describe("Zoho quotation creation", () => {
       items: [{ productId: "product-1", qty: 1, discount: 2000 }],
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
       id: "quote-serialized",
-      offerNo: "242/26-27",
+      offerNo: "239/26-27",
       leadId: "lead-1",
       customer: "Customer Co",
     });
 
     expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
-      Subject: "Offer 242/26-27 - Cache round-trip offer",
-      Offer_No: "242/26-27",
+      Subject: "Offer 239/26-27 - Cache round-trip offer",
+      Offer_No: "239/26-27",
       Lead_Ref: { id: "lead-1" },
       Quoted_Items: [{
         Product_Name: { id: "product-1" },

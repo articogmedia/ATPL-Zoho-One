@@ -30,6 +30,14 @@ type QuotationCustomer = Pick<Lead, "id" | "name" | "company" | "phone" | "area"
   & Partial<Pick<Lead, "assignedToId" | "ownerId" | "remarks" | "createdOn" | "address" | "touchedBy" | "followUp" | "followUpTime">>;
 type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
+function normalizeWhatsAppPhone(value: string) {
+  const digits = value.replace(/\D/g, "");
+  const national = digits.length === 12 && digits.startsWith("91")
+    ? digits.slice(2)
+    : digits.length === 11 && digits.startsWith("0") ? digits.slice(1) : digits;
+  return /^\d{10}$/.test(national) ? national : "";
+}
+
 function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, onStep }: {
   step: 1 | 2 | 3; hasLead: boolean; productsValid: boolean; hasSavedQuote: boolean; onStep: (step: 1 | 2 | 3) => void;
 }) {
@@ -542,6 +550,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
           />
         </div>
       </div>
+      {loadingQuoteId && <p role="status" aria-live="polite" className="shrink-0 px-4 pb-3 text-sm text-muted-foreground">Loading quotation details…</p>}
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pt-0">
         {loadingMoreQuotes && !savedQuotes.length ? <p className="text-sm text-muted-foreground">Loading quotations…</p>
           : !savedQuotes.length ? <p className="text-sm text-muted-foreground">No quotations yet.</p>
@@ -573,20 +582,22 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   </div>;
 
   if (readOnlyQuote) {
-    const savedLead = myLeads.find((item) => item.id === readOnlyQuote.leadId) ?? {
+    const linkedLead = myLeads.find((item) => item.id === readOnlyQuote.leadId);
+    const savedLead: QuotationCustomer = {
+      ...linkedLead,
       id: readOnlyQuote.leadId,
-      name: readOnlyQuote.customer,
-      company: "",
-      phone: readOnlyQuote.phone ?? "",
-      area: "",
-      address: "",
-      source: "Direct Call" as LeadSource,
-      status: "Quotation Sent" as const,
-      assignedTo: readOnlyQuote.executive,
-      ownerId: readOnlyQuote.ownerId,
-      remarks: "",
-      createdOn: readOnlyQuote.date,
-      touchedBy: [],
+      name: readOnlyQuote.contactName || linkedLead?.name || readOnlyQuote.customer || "",
+      company: readOnlyQuote.company || linkedLead?.company || "",
+      phone: readOnlyQuote.phone || linkedLead?.phone || "",
+      area: readOnlyQuote.area || linkedLead?.area || "",
+      address: readOnlyQuote.address || linkedLead?.address || "",
+      source: linkedLead?.source ?? "Direct Call",
+      status: linkedLead?.status ?? "Quotation Sent",
+      assignedTo: linkedLead?.assignedTo ?? readOnlyQuote.executive,
+      ownerId: linkedLead?.ownerId ?? readOnlyQuote.ownerId,
+      remarks: linkedLead?.remarks ?? "",
+      createdOn: linkedLead?.createdOn ?? readOnlyQuote.date,
+      touchedBy: linkedLead?.touchedBy ?? [],
     };
     const markSavedQuoteSent = async () => {
       const result = await markQuotationSentAction({
@@ -905,7 +916,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; status?: string;
 }) {
   const t = quoteTotals(items);
-  const customer = savedCustomer ?? (lead.company || lead.name);
+  const customer = savedCustomer?.trim() || lead.company.trim() || lead.name.trim();
   const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date());
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
   const savedDateParts = offerDate?.split("-");
@@ -944,20 +955,19 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       <div className="mt-1 text-center text-[10px] font-semibold">{gst}</div>
     </section>
   );
-  const shortMessage = `Offer ${offerNo} for ${customer}\nGrand total: ${formatINR(t.total)}\n${COMPANY.name}`;
-  const phoneDigits = lead.phone.replace(/[\s()-]/g, "").replace(/\D/g, "");
-  const waPhone = /^\d{10}$/.test(phoneDigits)
-    ? phoneDigits
-    : /^91\d{10}$/.test(phoneDigits) ? phoneDigits.slice(2) : "";
+  const shortMessage = `Offer ${offerNo} for ${customer || "customer"}\nGrand total: ${formatINR(t.total)}\n${COMPANY.name}`;
+  const resolvedWaPhone = normalizeWhatsAppPhone(lead.phone);
   const canCreatePdf = canCreateQuotationPdf({ offerNo, customer, leadId: lead.id, items }, !!savedQuoteId);
   const [downloading, setDownloading] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
+  const [phoneEntryOpen, setPhoneEntryOpen] = useState(false);
+  const [phoneEntry, setPhoneEntry] = useState("");
   const missingBlobHintShown = useRef(false);
   const buildPdfFile = async (): Promise<File> => {
     if (!offerNo.trim()) throw new Error("Offer reference is missing.");
-    if (!customer.trim()) throw new Error("Customer name is missing.");
+    if (!customer.trim() && !savedQuoteId) throw new Error("Customer name is missing.");
     if (!lead.id.trim() && !savedQuoteId) throw new Error("Customer record is missing.");
-    if (!items.length || items.some((item) => !item.productId)) throw new Error("Add at least one valid product.");
+    if (!items.length || (!savedQuoteId && items.some((item) => !item.productId))) throw new Error("Add at least one valid product.");
     const response = await fetch("/api/quotations/pdf", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -984,7 +994,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   };
   const prepareShareUrl = async () => {
     if (!offerNo.trim()) throw new Error("Offer reference is missing.");
-    if (!customer.trim()) throw new Error("Customer name is missing.");
+    if (!customer.trim() && !savedQuoteId) throw new Error("Customer name is missing.");
     if (!lead.id.trim() && !savedQuoteId) throw new Error("Customer record is missing.");
     const response = await fetch("/api/quotations/share", {
       method: "POST",
@@ -1029,9 +1039,15 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
       setDownloading(false);
     }
   };
-  const shareOnWhatsApp = async () => {
-    if (downloading || !waPhone) return;
-    if (!/^\d{10}$/.test(waPhone)) {
+  const shareOnWhatsApp = async (phoneValue = resolvedWaPhone) => {
+    if (downloading) return;
+    const waPhone = normalizeWhatsAppPhone(phoneValue);
+    if (!waPhone && !phoneValue.trim()) {
+      setPhoneEntry("");
+      setPhoneEntryOpen(true);
+      return;
+    }
+    if (!waPhone) {
       toast.error("No valid mobile number is available for this customer.");
       return;
     }
@@ -1061,8 +1077,9 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
         }
       }
       openWhatsApp(message);
+      setPhoneEntryOpen(false);
       markSentInBackground();
-      toast.success(`WhatsApp opened for ${customer}`, showBlobHint
+      toast.success(`WhatsApp opened for ${customer || "customer"}`, showBlobHint
         ? { description: "PDF downloaded; attach it to the chat." }
         : undefined);
     } catch (error) {
@@ -1083,13 +1100,14 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   };
 
   return (
+    <>
     <div className="min-w-0 space-y-4 pb-[calc(9rem+env(safe-area-inset-bottom))] sm:pb-6">
       <div className="no-print flex min-w-0 items-center justify-between gap-2">
         <Button type="button" variant="ghost" className="h-11 shrink-0 px-2" onClick={onBack}><ArrowLeft className="h-5 w-5" /> Back</Button>
         {shareUrl && <Button type="button" variant="outline" className="h-11 sm:hidden" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
         <div className="hidden min-w-0 flex-wrap justify-end gap-2 sm:flex">
           <Button className="h-12" onClick={downloadPdf} disabled={downloading || !canCreatePdf}><Printer className="h-5 w-5" /> {downloading ? "Preparing…" : "Download PDF"}</Button>
-          <Button variant="outline" title={!waPhone ? "No mobile number is available for this customer" : undefined} className="h-12 bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={shareOnWhatsApp} disabled={downloading || !waPhone}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
+          <Button variant="outline" title={!resolvedWaPhone ? "Enter the customer's mobile number to continue" : undefined} className="h-12 bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={() => void shareOnWhatsApp()} disabled={downloading}><WhatsAppIcon className="h-5 w-5" /> {downloading ? "Preparing…" : "WhatsApp"}</Button>
           {shareUrl && <Button type="button" variant="outline" className="h-12" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
         </div>
       </div>
@@ -1098,7 +1116,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           <Button className="h-12 min-w-0 flex-1 whitespace-nowrap" onClick={downloadPdf} disabled={downloading || !canCreatePdf}>
             <Printer className="h-5 w-5 shrink-0" /> {downloading ? "Preparing…" : "Download PDF"}
           </Button>
-          <Button variant="outline" title={!waPhone ? "No mobile number is available for this customer" : undefined} className="h-12 min-w-0 flex-1 whitespace-nowrap bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={shareOnWhatsApp} disabled={downloading || !waPhone}>
+          <Button variant="outline" title={!resolvedWaPhone ? "Enter the customer's mobile number to continue" : undefined} className="h-12 min-w-0 flex-1 whitespace-nowrap bg-white text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={() => void shareOnWhatsApp()} disabled={downloading}>
             <WhatsAppIcon className="h-5 w-5 shrink-0" /> {downloading ? "Preparing…" : "WhatsApp"}
           </Button>
         </div>
@@ -1128,17 +1146,19 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           <div className="grid grid-cols-2 gap-3">
             <div className="offer-no-break">
               <div className="font-bold">Bill To</div>
-              <div className="mt-1">{lead.company.trim() || lead.name.trim() || "Customer details unavailable"}</div>
-              {lead.company.trim() && <div>{lead.name.trim()}</div>}
-              <div>{lead.address?.trim() || lead.area.trim() || lead.phone.trim()}</div>
-              {lead.address?.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
+              <div className="mt-1">{lead.name.trim() || customer.trim() || lead.company.trim() || "Customer details not saved with this quote"}</div>
+              {lead.company.trim() && lead.company.trim() !== lead.name.trim() && <div>{lead.company.trim()}</div>}
+              {lead.address?.trim() && <div>{lead.address.trim()}</div>}
+              {!lead.address?.trim() && lead.area.trim() && <div>{lead.area.trim()}</div>}
+              {lead.phone.trim() && <div>{lead.phone.trim()}</div>}
             </div>
             <div className="offer-no-break">
               <div className="font-bold">Ship To</div>
-              <div className="mt-1">{lead.company.trim() || lead.name.trim() || "Customer details unavailable"}</div>
-              {lead.company.trim() && <div>{lead.name.trim()}</div>}
-              <div>{lead.address?.trim() || lead.area.trim() || lead.phone.trim()}</div>
-              {lead.address?.trim() || lead.area.trim() ? <div>{lead.phone.trim()}</div> : null}
+              <div className="mt-1">{lead.name.trim() || customer.trim() || lead.company.trim() || "Customer details not saved with this quote"}</div>
+              {lead.company.trim() && lead.company.trim() !== lead.name.trim() && <div>{lead.company.trim()}</div>}
+              {lead.address?.trim() && <div>{lead.address.trim()}</div>}
+              {!lead.address?.trim() && lead.area.trim() && <div>{lead.area.trim()}</div>}
+              {lead.phone.trim() && <div>{lead.phone.trim()}</div>}
             </div>
           </div>
         </div>
@@ -1196,5 +1216,38 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
         </section>
       </article>
     </div>
+    {phoneEntryOpen && <div className="fixed inset-0 z-[60] grid place-items-center bg-black/40 p-4">
+      <form
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="quotation-phone-title"
+        className="w-full max-w-sm space-y-4 rounded-xl border border-border bg-card p-5 shadow-xl"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void shareOnWhatsApp(phoneEntry);
+        }}
+      >
+        <div>
+          <h2 id="quotation-phone-title" className="font-semibold">Enter a WhatsApp number</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Use a 10-digit Indian mobile number. You can include +91.</p>
+        </div>
+        <input
+          autoFocus
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          aria-label="WhatsApp phone number"
+          className={`${fieldClass} h-11`}
+          placeholder="+91 98765 43210"
+          value={phoneEntry}
+          onChange={(event) => setPhoneEntry(event.target.value)}
+        />
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" className="h-11" onClick={() => setPhoneEntryOpen(false)}>Cancel</Button>
+          <Button type="submit" className="h-11" disabled={downloading || !normalizeWhatsAppPhone(phoneEntry)}>Continue</Button>
+        </div>
+      </form>
+    </div>}
+    </>
   );
 }

@@ -6,11 +6,21 @@ import { quotationRequestSchema } from "@/lib/quotation-request";
 vi.mock("server-only", () => ({}));
 
 const currentUser = vi.fn();
+const quoteRepository = vi.hoisted(() => ({
+  getLead: vi.fn(),
+  getQuote: vi.fn(),
+  listProducts: vi.fn(),
+}));
 vi.mock("@/lib/auth/guard", () => ({ currentUser }));
-vi.mock("@/lib/crm", () => ({ crm: vi.fn(() => ({ getLead: vi.fn(() => Promise.resolve(null)), listProducts: vi.fn(() => []) })) }));
+vi.mock("@/lib/crm", () => ({ crm: vi.fn(() => quoteRepository) }));
 
 describe("quotation PDF route", () => {
-  beforeEach(() => currentUser.mockReset());
+  beforeEach(() => {
+    currentUser.mockReset();
+    quoteRepository.getLead.mockReset().mockResolvedValue(null);
+    quoteRepository.getQuote.mockReset().mockResolvedValue(null);
+    quoteRepository.listProducts.mockReset().mockResolvedValue([]);
+  });
 
   it("rejects unauthenticated requests", async () => {
     currentUser.mockResolvedValue(null);
@@ -58,5 +68,49 @@ describe("quotation PDF route", () => {
     expect(canCreateQuotationPdf({
       offerNo: "239/26-27", customer: "Customer", leadId: "", items: [{}],
     }, true)).toBe(true);
+    expect(canCreateQuotationPdf({
+      offerNo: "239/26-27", customer: "", leadId: "", items: [{}],
+    }, true)).toBe(true);
+    expect(canCreateQuotationPdf({
+      offerNo: "239/26-27", customer: "", leadId: "", items: [],
+    }, true)).toBe(false);
+  });
+
+  it("creates a saved quote PDF when both the customer snapshot and linked lead are unavailable", async () => {
+    currentUser.mockResolvedValue({ id: "U1", name: "Manager", role: "Manager" });
+    quoteRepository.getQuote.mockResolvedValue({
+      id: "Q1",
+      offerNo: "239/26-27",
+      leadId: "deleted-lead",
+      customer: "",
+      contactName: "",
+      company: "",
+      phone: "",
+      area: "",
+      address: "",
+      executive: "Manager",
+      ownerId: "U1",
+      subject: "AC quotation",
+      total: 122000,
+      date: "2026-10-29",
+      items: [{ model: "Cassette AC", unit: "Nos", qty: 1, price: 122000 }],
+    });
+    quoteRepository.getLead.mockRejectedValue(new Error("Lead deleted"));
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+    const request = new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "Q1",
+        offerNo: "239/26-27",
+        subject: "AC quotation",
+        items: [{ qty: 1 }],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/pdf");
+    expect(Buffer.from(await response.arrayBuffer()).subarray(0, 4).toString("ascii")).toBe("%PDF");
   });
 });

@@ -76,7 +76,18 @@ export async function POST(request: NextRequest) {
   }
   const linkedLeadId = savedQuote?.leadId || parsed.leadId || "";
   const [linkedLead, products] = await Promise.all([
-    linkedLeadId ? repository.getLead(linkedLeadId) : Promise.resolve(null),
+    linkedLeadId
+      ? repository.getLead(linkedLeadId).catch((error: unknown) => {
+        if (!savedQuote) throw error;
+        console.warn("[api] saved quote lead lookup failed; rendering from its stored customer details", {
+          quoteId: savedQuote.id,
+          status: error instanceof ZohoError ? error.status : undefined,
+          code: error instanceof ZohoError ? error.code : undefined,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      })
+      : Promise.resolve(null),
     savedQuote?.items?.length ? Promise.resolve([]) : repository.listProducts(),
   ]);
   if (!linkedLead && !savedQuote) {
@@ -85,13 +96,13 @@ export async function POST(request: NextRequest) {
   if (linkedLead && visibleFor(user, [linkedLead]).length === 0 && !savedQuote) {
     return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
   }
-  const lead = linkedLead ?? {
+  const lead = {
     id: linkedLeadId,
-    name: savedQuote!.customer,
-    company: "",
-    phone: savedQuote!.phone ?? "",
-    area: "",
-    address: "",
+    name: savedQuote?.contactName || linkedLead?.name || savedQuote?.customer || "",
+    company: savedQuote?.company || linkedLead?.company || "",
+    phone: savedQuote?.phone || linkedLead?.phone || "",
+    area: savedQuote?.area || linkedLead?.area || "",
+    address: savedQuote?.address || linkedLead?.address || "",
     source: "Direct Call" as const,
   };
   const offerNo = savedQuote?.offerNo || parsed.offerNo;
@@ -149,33 +160,36 @@ export async function POST(request: NextRequest) {
   text(page, offerNo, margin + 75, y, 10, bold);
   text(page, `DATE: ${formatOfferDate(todayIST())}`, 330, y, 8, bold);
   y -= 20;
-  text(page, "CLIENT", margin, y, 8, bold);
-  text(page, lead.company || lead.name, margin + 75, y, 9);
-  y -= 30;
+  const customerName = lead.name.trim() && lead.name.trim() !== "(no name)" ? lead.name.trim() : "";
+  const customerCompany = lead.company.trim();
+  const customerAddress = lead.address.trim() || lead.area.trim();
+  const hasCustomerDetails = !!(customerName || customerCompany || lead.phone.trim() || customerAddress);
+  if (hasCustomerDetails) {
+    text(page, "CLIENT", margin, y, 8, bold);
+    text(page, customerName || customerCompany, margin + 75, y, 9);
+    y -= 18;
+  }
   text(page, "STAGE", margin, y, 8, bold);
   text(page, "Draft", margin + 75, y, 9);
   y -= 18;
-  const billToCustomer = lead.company?.trim() || lead.name.trim() || "Customer details unavailable";
-  const billToContact = lead.name.trim() && lead.name.trim() !== billToCustomer ? lead.name.trim() : "";
-  const billToAddress = lead.address?.trim() || lead.area?.trim() || "";
-  const billToPhone = lead.phone.trim();
-  text(page, "BILL TO", margin, y, 8, bold);
-  text(page, billToCustomer, margin + 75, y, 8);
-  text(page, "SHIP TO", 320, y, 8, bold);
-  text(page, billToCustomer, 375, y, 8);
-  y -= 14;
-  text(page, "Contact", margin, y, 7, bold);
-  text(page, billToContact || lead.name || billToCustomer, margin + 75, y, 7);
-  text(page, billToContact || lead.name || billToCustomer, 375, y, 7);
-  y -= 14;
-  text(page, "Address", margin, y, 7, bold);
-  text(page, billToAddress || billToPhone || "-", margin + 75, y, 7);
-  text(page, billToAddress || billToPhone || "-", 375, y, 7);
-  y -= 12;
-  text(page, "Phone", margin, y, 7, bold);
-  text(page, billToPhone || "-", margin + 75, y, 7);
-  text(page, billToPhone || "-", 375, y, 7);
-  y -= 22;
+  if (hasCustomerDetails) {
+    text(page, "BILL TO", margin, y, 8, bold);
+    text(page, "SHIP TO", 320, y, 8, bold);
+    y -= 14;
+    for (const [label, value] of [
+      ["Name", customerName || customerCompany],
+      ...(customerCompany && customerCompany !== customerName ? [["Company", customerCompany]] : []),
+      ["Address", customerAddress],
+      ["Phone", lead.phone.trim()],
+    ] as [string, string][]) {
+      if (!value) continue;
+      text(page, label, margin, y, 7, bold);
+      text(page, value, margin + 75, y, 7);
+      text(page, value, 375, y, 7);
+      y -= 12;
+    }
+    y -= 10;
+  }
   text(page, "EQUIPMENT REQUIRED", margin, y, 9, bold);
   text(page, `Total Units: ${presentation.totalUnits}`, 430, y, 9, bold);
   y -= 18;

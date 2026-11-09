@@ -173,6 +173,81 @@ test("saved quotation keeps customer details and can download and share its PDF"
   expect(whatsappUrls).toHaveLength(1);
 });
 
+test("the newest five saved quotes work at 360px and 1280px without duplicate offer numbers", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  const whatsappUrls: string[] = [];
+  await page.context().route("https://wa.me/**", async (route) => {
+    whatsappUrls.push(route.request().url());
+    await route.fulfill({ status: 200, body: "WhatsApp chat fixture" });
+  });
+  await page.route("**/api/quotations/share", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ url: "https://public.blob.vercel-storage.com/quotes/saved-offer.pdf" }),
+  }));
+
+  for (const width of [360, 1280]) {
+    await page.setViewportSize({ width, height: width < 768 ? 800 : 800 });
+    for (let quoteIndex = 0; quoteIndex < 5; quoteIndex++) {
+      await page.goto("/quotations");
+      await page.getByRole("button", { name: /Saved quotations/ }).click();
+      const dialog = page.getByRole("dialog", { name: "Saved quotations" });
+      const cards = dialog.locator("article");
+      await expect.poll(() => cards.count(), { timeout: 20_000 }).toBeGreaterThan(0);
+      while (await cards.count() < 5) {
+        await dialog.getByRole("button", { name: "Load more quotations" }).click();
+        await expect.poll(() => cards.count(), { timeout: 20_000 }).toBeGreaterThan(0);
+      }
+      expect(await cards.count()).toBeGreaterThanOrEqual(5);
+      const references = (await cards.allInnerTexts()).map((text) => /Offer\s+(\d+\/\d{2}-\d{2})/.exec(text)?.[1]).filter(Boolean);
+      expect(new Set(references).size).toBe(references.length);
+
+      const card = cards.nth(quoteIndex);
+      const offerNo = /Offer\s+(\d+\/\d{2}-\d{2})/.exec(await card.innerText())?.[1];
+      expect(offerNo).toBeTruthy();
+      await card.getByRole("button", { name: "View" }).click();
+
+      const offer = page.locator("article.offer-document");
+      await expect(offer.getByText("Bill To")).toBeVisible();
+      const billTo = offer.getByText("Bill To").locator("..");
+      await expect(billTo).not.toContainText("Customer details not saved with this quote");
+      expect((await billTo.innerText()).replace(/\D/g, "")).toMatch(/\d{10}/);
+      await expect(page.getByRole("button", { name: "Download PDF" })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "WhatsApp" })).toBeEnabled();
+
+      const pdfResponsePromise = page.waitForResponse((response) =>
+        response.url().includes("/api/quotations/pdf") && response.request().method() === "POST",
+      );
+      const downloadPromise = page.waitForEvent("download");
+      await page.getByRole("button", { name: "Download PDF" }).click();
+      const [pdfResponse, download] = await Promise.all([pdfResponsePromise, downloadPromise]);
+      expect(pdfResponse.ok()).toBe(true);
+      expect(download.suggestedFilename()).toMatch(/^offer-.*\.pdf$/);
+      const filePath = await download.path();
+      if (!filePath) throw new Error("The saved quotation PDF was not written.");
+      const pdf = await readFile(filePath);
+      expect(pdf.subarray(0, 4).toString("ascii")).toBe("%PDF");
+
+      const popupPromise = width < 768 ? undefined : page.waitForEvent("popup");
+      const shareResponsePromise = page.waitForResponse((response) =>
+        response.url().includes("/api/quotations/share") && response.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "WhatsApp" }).click();
+      const shareResponse = await shareResponsePromise;
+      expect(shareResponse.ok()).toBe(true);
+      const chat = width < 768 ? page : await popupPromise!;
+      await expect.poll(() => chat.url()).toMatch(/^https:\/\/wa\.me\/91\d{10}\?text=/);
+      const message = decodeURIComponent(new URL(whatsappUrls[whatsappUrls.length - 1]!).searchParams.get("text") ?? "");
+      expect(message).toContain(`Offer ${offerNo}`);
+      expect(message).toContain("PDF: https://public.blob.vercel-storage.com/quotes/saved-offer.pdf");
+      if (width < 768) await page.goto("/quotations");
+      else await chat.close();
+    }
+  }
+});
+
 test("new quotation customer can be cancelled or created and selected", async ({ page }) => {
   const mobile = `8${Math.floor(Math.random() * 1_000_000_000).toString().padStart(9, "0")}`;
   const customerName = `E2E Quotation Customer ${mobile.slice(-4)}`;
