@@ -220,7 +220,27 @@ describe("Zoho quotation creation", () => {
       items: [{ productId: "product-1", model: "Cassette AC", qty: 2, price: 122000, discount: 4000 }],
     });
     expect(mapped.customer).not.toBe(mapped.subject);
+    expect(mapped.gstBreakdown).toBeUndefined();
     expect(canCreateQuotationPdf(mapped, true)).toBe(true);
+  });
+
+  it("maps the saved GST breakdown without recalculating it", () => {
+    const gstBreakdown = {
+      subtotal: 100, discount: 5, gst: 17.1, total: 112.1, rate: 0.18,
+      partA: { subtotal: 100, discount: 5, gst: 17.1, total: 112.1 },
+      partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+    };
+    const mapped = mapQuote({
+      id: "gst-quote",
+      Subject: "Offer 252/26-27 - AC package",
+      Grand_Total: 112.1,
+      Description: JSON.stringify({ name: "Customer", gstBreakdown }),
+      Quoted_Items: [{ Product_Name: { id: "p-1", name: "AC" }, Quantity: 1, List_Price: 100, Discount: 5 }],
+    }, new Map(), undefined, ["Quoted_Items"]);
+
+    expect(mapped.gstBreakdown).toEqual(gstBreakdown);
+    expect(mapped.total).toBe(112.1);
+    expect(mapped.items?.[0]?.price).toBe(100);
   });
 
   it("maps a saved customer snapshot even when its Lead_Ref record is unavailable", () => {
@@ -434,7 +454,12 @@ describe("Zoho quotation creation", () => {
       subject: "Cassette AC quotation",
       items: [{ productId: "product-1", qty: 2, discount: 4000 }],
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
-      id: "quote-1", offerNo: "239/26-27", leadId: "lead-1", customer: "Customer Co", total: 240000,
+      id: "quote-1", offerNo: "239/26-27", leadId: "lead-1", customer: "Customer Co", total: 283200,
+      gstBreakdown: {
+        subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18,
+        partA: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200 },
+        partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+      },
     });
 
     expect(write).toHaveBeenCalledWith("POST", "/Quotes", expect.objectContaining({
@@ -452,7 +477,7 @@ describe("Zoho quotation creation", () => {
       }],
       Sub_Total: 244000,
       Discount: 4000,
-      Grand_Total: 240000,
+      Grand_Total: 283200,
     }));
     expect(infoLog).toHaveBeenCalledWith("[zoho] creating quote", expect.objectContaining({
       leadId: "lead-1",
@@ -470,6 +495,7 @@ describe("Zoho quotation creation", () => {
     const writtenRecord = write.mock.calls.find((call) => call[1] === "/Quotes")?.[2] as Record<string, unknown>;
     expect(JSON.parse(String(writtenRecord.Description))).toMatchObject({
       leadId: "lead-1", name: "Customer", phone: "9876543210", company: "Customer Co",
+      gstBreakdown: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18 },
     });
     expect(errorLog).toHaveBeenCalledWith("[zoho] primary change succeeded but history note failed", expect.objectContaining({
       action: "create quote",

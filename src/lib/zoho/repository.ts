@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quoteTotals, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type User, type Visit } from "@/lib/domain";
+import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quotationGstBreakdown, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type QuoteGstBreakdown, type User, type Visit } from "@/lib/domain";
 import { cached, getCachedValue, invalidate, patchCachedValues, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
 import type { CrmRepository, LogCallInput } from "@/lib/crm/repository";
@@ -703,7 +703,7 @@ function customerSnapshotField(fields: QuoteFieldMetadata[]): QuoteFieldMetadata
   return candidates[0];
 }
 
-function quoteRecordSnapshot(lead: Lead): QuoteCustomerSnapshot {
+function quoteRecordSnapshot(lead: Lead, gstBreakdown?: QuoteGstBreakdown): QuoteCustomerSnapshot {
   return {
     leadId: lead.id,
     name: lead.name,
@@ -711,6 +711,7 @@ function quoteRecordSnapshot(lead: Lead): QuoteCustomerSnapshot {
     company: lead.company,
     area: lead.area,
     address: lead.address,
+    gstBreakdown,
   };
 }
 
@@ -1589,11 +1590,21 @@ export const zohoRepository: CrmRepository = {
       const discount = Math.min(p.price * i.qty, Math.max(0, i.discount));
       return { p, qty: i.qty, discount, amount: p.price * i.qty - discount };
     });
-    const totals = quoteTotals(lines.map((l) => ({ model: l.p.model, unit: l.p.unit, qty: l.qty, price: l.p.price, discount: l.discount })));
+    const savedItems = lines.map((line) => ({
+      productId: line.p.id,
+      model: line.p.model,
+      description: line.p.description,
+      unit: line.p.unit,
+      qty: line.qty,
+      price: line.p.price,
+      discount: line.discount,
+    }));
+    const gstBreakdown = quotationGstBreakdown(savedItems);
+    const totals = gstBreakdown;
     const customer = lead.company || lead.name;
     const leadReference = leadReferenceField ? quoteLeadReference(leadReferenceField, lead.id) : undefined;
     const snapshotField = customerSnapshotField(schema.fields);
-    const customerSnapshot = JSON.stringify(quoteRecordSnapshot(lead));
+    const customerSnapshot = JSON.stringify(quoteRecordSnapshot(lead, gstBreakdown));
     const quoteRecord: Record<string, unknown> = {
       Subject: `Offer - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
@@ -1750,6 +1761,8 @@ export const zohoRepository: CrmRepository = {
       total: totals.total,
       status: "Draft",
       date: new Date().toISOString().slice(0, 10),
+      items: savedItems,
+      gstBreakdown,
     };
   },
 

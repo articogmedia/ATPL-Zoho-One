@@ -1,3 +1,5 @@
+import { GST_RATE } from "./domain";
+
 /** Company details printed on quotations. Change here, not in components. */
 export const COMPANY = {
   name: "Air Trendz P Ltd",
@@ -16,8 +18,8 @@ export const OFFER_TEXT = {
     "We thank you very much for your enquiry. In this connection, in subsequent discussions had with you, we are pleased to submit herewith our offer for the subject works. Our detailed Bill of quantities are as follows",
   partA: "BOQ - PART A - EQUIPMENT SUPPLY",
   partB: "BOQ - PART B - ANCILLARY WORKS",
-  partAGst: "GST @ 18% included",
-  partBGst: "GST @ 18% EXTRA",
+  partAGst: `GST @ ${Math.round(GST_RATE * 100)}% included`,
+  partBGst: `GST @ ${Math.round(GST_RATE * 100)}% EXTRA`,
   note: "Pls note that the above quantities are tentative only, and final billing shall be based on actual measurements",
   excluded: [
     "In case of Cat walk requirement for outdoor unit, the same shall be in client scope",

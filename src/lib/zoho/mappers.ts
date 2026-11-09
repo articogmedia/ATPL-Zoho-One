@@ -1,4 +1,4 @@
-import type { Lead, LeadSource, LeadStatus, LeadUpdate, Product, Quotation, Role, User, Visit, VisitStatus } from "@/lib/domain";
+import type { Lead, LeadSource, LeadStatus, LeadUpdate, Product, Quotation, QuoteGstBreakdown, QuoteGstTotals, Role, User, Visit, VisitStatus } from "@/lib/domain";
 import { FIELD, READ_LEAD_STATUS, ROLE_BY_ZOHO_NAME, ROLE_KEYWORDS } from "./fields";
 
 /** Pure Zoho <-> portal mapping. No I/O, so it is fully unit-tested. */
@@ -55,6 +55,7 @@ export type QuoteCustomerSnapshot = {
   company?: string;
   area?: string;
   address?: string;
+  gstBreakdown?: QuoteGstBreakdown;
 };
 
 export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapshot {
@@ -65,6 +66,31 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const value = parsed as Record<string, unknown>;
       const text = (key: string) => typeof value[key] === "string" ? value[key].trim() : "";
+      const gstValue = value.gstBreakdown;
+      const number = (record: Record<string, unknown>, key: string) =>
+        typeof record[key] === "number" && Number.isFinite(record[key]) ? record[key] as number : undefined;
+      const totals = (part: unknown): QuoteGstTotals | undefined => {
+        if (!part || typeof part !== "object") return undefined;
+        const record = part as Record<string, unknown>;
+        const subtotal = number(record, "subtotal");
+        const discount = number(record, "discount");
+        const gst = number(record, "gst");
+        const total = number(record, "total");
+        return subtotal === undefined || discount === undefined || gst === undefined || total === undefined
+          ? undefined
+          : { subtotal, discount, gst, total };
+      };
+      let gstBreakdown: QuoteGstBreakdown | undefined;
+      if (gstValue && typeof gstValue === "object") {
+        const record = gstValue as Record<string, unknown>;
+        const base = totals(record);
+        const rate = number(record, "rate");
+        const partA = totals(record.partA);
+        const partB = totals(record.partB);
+        if (base && rate !== undefined && partA && partB) {
+          gstBreakdown = { ...base, rate, partA, partB };
+        }
+      }
       return {
         leadId: text("leadId") || undefined,
         name: text("name") || undefined,
@@ -72,6 +98,7 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
         company: text("company") || undefined,
         area: text("area") || undefined,
         address: text("address") || undefined,
+        gstBreakdown,
       };
     }
   } catch {
@@ -264,6 +291,7 @@ export function mapQuote(
     executive: cleanZohoDisplayName(z.Owner?.name),
     ownerId: ownerId(z.Owner?.id),
     total: z.Grand_Total ?? 0,
+    gstBreakdown: snapshot.gstBreakdown,
     date: day(z.Created_Time),
     status: String(z.Status ?? "Draft"),
     items: z[lineItemsField]?.map((item) => {

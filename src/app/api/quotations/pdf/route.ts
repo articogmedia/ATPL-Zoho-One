@@ -8,7 +8,7 @@ import { crm } from "@/lib/crm";
 import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT } from "@/lib/company";
-import { formatINR, quoteTotals, todayIST, visibleFor } from "@/lib/domain";
+import { formatINR, GST_RATE, quoteTotals, todayIST, visibleFor } from "@/lib/domain";
 import { quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 
@@ -125,6 +125,14 @@ export async function POST(request: NextRequest) {
         };
       });
   const presentation = quotationPresentation(items);
+  const isLegacySavedQuote = !!savedQuote && !savedQuote.gstBreakdown;
+  const legacySubtotal = items.reduce((sum, item) => sum + item.qty * item.price, 0);
+  const legacyDiscount = items.reduce((sum, item) => sum + (item.discount ?? 0), 0);
+  const totals = savedQuote?.gstBreakdown ?? (isLegacySavedQuote
+    ? { subtotal: legacySubtotal, discount: legacyDiscount, gst: 0, total: legacySubtotal - legacyDiscount }
+    : presentation.totals);
+  const partATotals = savedQuote?.gstBreakdown?.partA ?? quoteTotals(presentation.equipment);
+  const partBTotals = savedQuote?.gstBreakdown?.partB ?? quoteTotals(presentation.ancillary);
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -217,7 +225,7 @@ export async function POST(request: NextRequest) {
     return headerY - 16;
   };
 
-  const drawPart = (partItems: QuotationPresentationItem[], title: string, gstNote: string, total: number) => {
+  const drawPart = (partItems: QuotationPresentationItem[], title: string, gstNote: string, partTotals: typeof totals) => {
     if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
     y = drawTableHeader(page, y, title);
     partItems.forEach((item, index) => {
@@ -228,27 +236,58 @@ export async function POST(request: NextRequest) {
       text(page, descriptionLines.join(" "), margin + 34, y - 12, 7);
       text(page, item.unit, margin + 320, y - 12, 8);
       text(page, `${item.qty}`, margin + 360, y - 12, 8);
-      if (presentation.hasDiscount) text(page, money(item.discount ?? 0), margin + 375, y - 12, 8);
-      text(page, money(item.price), presentation.hasDiscount ? margin + 435 : margin + 395, y - 12, 8);
-      text(page, money(item.qty * item.price - (item.discount ?? 0)), presentation.hasDiscount ? margin + 495 : margin + 455, y - 12, 8);
+      if (presentation.hasDiscount) text(page, money(item.discount ?? 0, isLegacySavedQuote), margin + 375, y - 12, 8);
+      text(page, money(item.price, isLegacySavedQuote), presentation.hasDiscount ? margin + 435 : margin + 395, y - 12, 8);
+      text(page, money(item.qty * item.price - (item.discount ?? 0), isLegacySavedQuote), presentation.hasDiscount ? margin + 495 : margin + 455, y - 12, 8);
       page.drawLine({ start: { x: margin, y: y - rowHeight }, end: { x: width - margin, y: y - rowHeight }, thickness: 0.4, color: rgb(0.8, 0.8, 0.8) });
       y -= rowHeight;
     });
     if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
-    text(page, "Basic Sub Total", margin + 34, y - 14, 8, bold);
-    text(page, money(total), margin + 455, y - 14, 8, bold);
-    y -= 26;
-    text(page, gstNote, margin + 34, y - 14, 8);
-    y -= 26;
+    if (isLegacySavedQuote) {
+      text(page, "Basic Sub Total", margin + 34, y - 14, 8, bold);
+      text(page, money(partTotals.subtotal - partTotals.discount, true), margin + 455, y - 14, 8, bold);
+      y -= 26;
+      text(page, gstNote, margin + 34, y - 14, 8);
+      y -= 26;
+      return;
+    }
+    for (const [label, amount, boldLine] of [
+      [`Subtotal - ${title.includes("PART A") ? "Part A" : "Part B"}`, partTotals.subtotal, true],
+      ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as [string, number, boolean]] : []),
+      [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false],
+      [`Total - ${title.includes("PART A") ? "Part A" : "Part B"}`, partTotals.total, true],
+    ] as [string, number, boolean][]) {
+      if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
+      text(page, label, margin + 34, y - 14, 8, boldLine ? bold : regular);
+      text(page, money(amount), margin + 455, y - 14, 8, boldLine ? bold : regular);
+      y -= 16;
+    }
+    y -= 10;
   };
 
   const { equipment, ancillary } = splitQuotationItems(items);
-  drawPart(equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst, quoteTotals(equipment).total);
-  if (ancillary.length) drawPart(ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, quoteTotals(ancillary).total);
+  drawPart(equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst, partATotals);
+  if (ancillary.length) drawPart(ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, partBTotals);
   if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
   text(page, "TOTAL PART A + B", margin + 34, y - 14, 10, bold);
-  text(page, money(presentation.grandTotal), margin + 455, y - 14, 10, bold);
-  y -= 42;
+  text(page, money(totals.total, isLegacySavedQuote), margin + 455, y - 14, 10, bold);
+  y -= 28;
+  if (!isLegacySavedQuote) {
+    for (const [label, amount, boldLine] of [
+      ["Subtotal", totals.subtotal, false],
+      ...(totals.discount > 0 ? [["Discount", -totals.discount, false] as [string, number, boolean]] : []),
+      [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
+      ["Grand Total", totals.total, true],
+    ] as [string, number, boolean][]) {
+      if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
+      text(page, label, margin + 340, y, 8, boldLine ? bold : regular);
+      text(page, money(amount), margin + 455, y, 8, boldLine ? bold : regular);
+      y -= 14;
+    }
+    y -= 8;
+  } else {
+    y -= 14;
+  }
 
   text(page, "NOTE", margin, y, 9, bold); y -= 14;
   text(page, OFFER_TEXT.note, margin, y, 8); y -= 20;
@@ -290,6 +329,6 @@ function formatOfferDate(value: string) {
   return `${day}.${month}.${(year ?? "").slice(-2)}`;
 }
 
-function money(value: number) {
-  return formatINR(Math.round(value));
+function money(value: number, preserveLegacyFormatting = false) {
+  return formatINR(preserveLegacyFormatting ? Math.round(value) : value);
 }

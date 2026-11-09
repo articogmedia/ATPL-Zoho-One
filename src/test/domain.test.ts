@@ -49,6 +49,7 @@ describe("work tab membership", () => {
 
 describe("access rules", () => {
   it("formats Indian numbers", () => expect(formatINR(467500)).toBe("Rs. 4,67,500"));
+  it("keeps rounded paise visible in currency output", () => expect(formatINR(23.59)).toBe("Rs. 23.59"));
   it("calling team sees only leads", () => {
     expect(canAccess("Calling Team", "leads")).toBe(true);
     expect(canAccess("Calling Team", "quotations")).toBe(false);

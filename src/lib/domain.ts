@@ -139,6 +139,13 @@ export type Quotation = {
   status?: string;
   ownerId?: string;
   items?: QuoteItem[];
+  gstBreakdown?: QuoteGstBreakdown;
+};
+export type QuoteGstTotals = { subtotal: number; discount: number; gst: number; total: number };
+export type QuoteGstBreakdown = QuoteGstTotals & {
+  rate: number;
+  partA: QuoteGstTotals;
+  partB: QuoteGstTotals;
 };
 
 export type VisitStatus = "Assigned" | "In Progress" | "Completed";
@@ -218,19 +225,36 @@ export function validateQuoteLine(qty: number, discount: number, price: number):
   return null;
 }
 
-/** GST is shown as Rs 0 until ATPL confirms GST invoicing scope (see plan section 12). */
-export const GST_RATE = 0;
+export const GST_RATE = 0.18;
+
+const roundCurrency = (amount: number) => Math.round((amount + Number.EPSILON) * 100) / 100;
 
 export function formatINR(n: number): string {
-  return "Rs. " + Math.round(n).toLocaleString("en-IN");
+  return "Rs. " + n.toLocaleString("en-IN", {
+    minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
 }
 
-export function quoteTotals(items: QuoteItem[]) {
-  const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
-  const discount = items.reduce((s, i) => s + Math.min(i.qty * i.price, i.discount ?? 0), 0);
-  const taxable = subtotal - discount;
-  const gst = Math.round(taxable * GST_RATE);
-  return { subtotal, discount, gst, total: taxable + gst };
+export function quoteTotals(items: readonly QuoteItem[]): QuoteGstTotals {
+  const subtotal = roundCurrency(items.reduce((sum, item) => sum + item.qty * item.price, 0));
+  const discount = roundCurrency(items.reduce((sum, item) =>
+    sum + Math.min(item.qty * item.price, item.discount ?? 0), 0,
+  ));
+  const taxable = roundCurrency(subtotal - discount);
+  const gst = roundCurrency(taxable * GST_RATE);
+  return { subtotal, discount, gst, total: roundCurrency(taxable + gst) };
+}
+
+export function quotationGstBreakdown(items: readonly QuoteItem[]): QuoteGstBreakdown {
+  const equipment = items.filter((item) => !/^B\s*-\s*/i.test(item.model.trim()));
+  const ancillary = items.filter((item) => /^B\s*-\s*/i.test(item.model.trim()));
+  return {
+    ...quoteTotals(items),
+    rate: GST_RATE,
+    partA: quoteTotals(equipment),
+    partB: quoteTotals(ancillary),
+  };
 }
 
 // ---------- Performance dashboard ----------

@@ -1,4 +1,4 @@
-import { canAdvanceLeadStatus, nextOfferNo, quoteTotals, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
+import { canAdvanceLeadStatus, nextOfferNo, quoteTotals, quotationGstBreakdown, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 
 export function advanceMockLeadStatus(lead: Lead, target: "Site Visit Scheduled" | "Quotation Sent"): boolean {
@@ -189,6 +189,7 @@ export const mockRepository: CrmRepository = {
       customer: lead.company || lead.name, contactName: lead.name,
       company: lead.company, phone: lead.phone, area: lead.area, address: lead.address,
       executive, date: today(), total: quoteTotals(items).total, status: "Draft", items,
+      gstBreakdown: quotationGstBreakdown(items),
     };
     state.quotes.unshift(q);
     note(lead.id, actor.name, `Quotation ${q.offerNo} created`);

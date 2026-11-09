@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyLeadOverrides, canAdvanceLeadStatus, canUpdateWorkItem, financialYear, isAssignable, leadAssigneeOptions, leadsForTab, nextOfferNo, normalizePhone, quotationCustomers, quoteTotals, reassignLeadOptimistically, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
+import { applyLeadOverrides, canAdvanceLeadStatus, canUpdateWorkItem, financialYear, isAssignable, leadAssigneeOptions, leadsForTab, nextOfferNo, normalizePhone, quotationCustomers, quotationGstBreakdown, quoteTotals, reassignLeadOptimistically, todayIST, uniqueProducts, validateQuoteLine } from "@/lib/domain";
 import { CALL_STATUS_BY_OUTCOME, zohoLeadSource } from "@/lib/zoho/fields";
 import { mapLead, mapQuote, mapRole, mapTask, mapTaskStatus, mapUser, normalizeSource, normalizeStatus, parseRoleOverrides } from "@/lib/zoho/mappers";
 import { canAccess } from "@/lib/domain";
@@ -111,7 +111,23 @@ describe("offer numbering", () => {
     expect(quoteTotals([
       { model: "AC", unit: "Nos", qty: 2, price: 50000, discount: 5000 },
       { model: "Stand", unit: "Nos", qty: 1, price: 10000, discount: 0 },
-    ])).toEqual({ subtotal: 110000, discount: 5000, gst: 0, total: 105000 });
+    ])).toEqual({ subtotal: 110000, discount: 5000, gst: 18900, total: 123900 });
+  });
+  it("rounds GST to two decimals and provides totals for both quotation parts", () => {
+    expect(quoteTotals([{ model: "Fractional item", unit: "Nos", qty: 1, price: 19.99 }])).toEqual({
+      subtotal: 19.99, discount: 0, gst: 3.6, total: 23.59,
+    });
+    expect(quoteTotals([{ model: "Small item", unit: "Nos", qty: 1, price: 0.05 }])).toEqual({
+      subtotal: 0.05, discount: 0, gst: 0.01, total: 0.06,
+    });
+    expect(quotationGstBreakdown([
+      { model: "Equipment", unit: "Nos", qty: 1, price: 100.01 },
+      { model: "B - Installation", unit: "Nos", qty: 1, price: 50.03, discount: 0.02 },
+    ])).toEqual({
+      subtotal: 150.04, discount: 0.02, gst: 27, total: 177.02, rate: 0.18,
+      partA: { subtotal: 100.01, discount: 0, gst: 18, total: 118.01 },
+      partB: { subtotal: 50.03, discount: 0.02, gst: 9, total: 59.01 },
+    });
   });
   it("derives the Indian financial year", () => {
     expect(financialYear("2026-10-29")).toBe("26-27");

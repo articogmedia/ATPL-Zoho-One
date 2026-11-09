@@ -52,8 +52,43 @@ describe("quotation PDF route", () => {
       model: `Product ${index + 1}`, unit: "Nos", qty: 1, price: 1000,
     }));
     const presentation = quotationPresentation(items);
-    expect(presentation.grandTotal).toBe(25000);
+    expect(presentation.grandTotal).toBe(29500);
+    expect(presentation.totals).toEqual({ subtotal: 25000, discount: 0, gst: 4500, total: 29500 });
     expect(needsPdfTotalsPage(25, 120)).toBe(true);
+  });
+
+  it("renders a saved GST breakdown from the stored quote snapshot", async () => {
+    currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
+    quoteRepository.getQuote.mockResolvedValue({
+      id: "Q-GST",
+      offerNo: "240/26-27",
+      leadId: "",
+      customer: "Customer",
+      executive: "User",
+      total: 118,
+      date: "2026-11-09",
+      ownerId: "U1",
+      items: [{ model: "Equipment", unit: "Nos", qty: 1, price: 100 }],
+      gstBreakdown: {
+        subtotal: 100, discount: 0, gst: 18, total: 118, rate: 0.18,
+        partA: { subtotal: 100, discount: 0, gst: 18, total: 118 },
+        partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+      },
+    });
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+    const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "Q-GST",
+        offerNo: "240/26-27",
+        subject: "Offer",
+        items: [{ qty: 1 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const pdfBytes = Buffer.from(await response.arrayBuffer());
+    expect(pdfBytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
   });
 
   it("allows saved quote PDFs to use mapped line snapshots without product IDs", () => {

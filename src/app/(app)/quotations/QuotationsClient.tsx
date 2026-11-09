@@ -14,7 +14,7 @@ import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@
 import { addLeadAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, markQuotationSentAction, refreshProductsAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { canCreateQuotationPdf, splitQuotationItems } from "@/lib/quotation-presentation";
-import { formatINR, quoteTotals, uniqueProducts, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation } from "@/lib/domain";
+import { formatINR, GST_RATE, quoteTotals, uniqueProducts, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation, type QuoteGstBreakdown, type QuoteGstTotals } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
 type WizardState = {
@@ -488,7 +488,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         discount: Math.min(product.price * row.qty, Math.max(0, row.discount)),
       }] : [];
     });
-    const saved = { ...res.data, items: savedItems };
+    const saved = { ...res.data, items: res.data.items ?? savedItems };
     const alreadyCounted = savedQuotes.some((quote) => quote.id === saved.id);
     setSavedQuotesCount((count) => Math.max((count ?? 0) + (alreadyCounted ? 0 : 1), savedQuotes.length + (alreadyCounted ? 0 : 1)));
     setSavedQuotes((current) => [saved, ...current.filter((quote) => quote.id !== saved.id)]);
@@ -678,6 +678,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         readOnly
         editableOfferNo={false}
         customer={readOnlyQuote.customer}
+        gstBreakdown={readOnlyQuote.gstBreakdown}
         offerDate={readOnlyQuote.date}
         validTill={readOnlyQuote.validTill}
         savedQuoteId={readOnlyQuote.id}
@@ -696,7 +697,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       </Button>
     </div>
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
-    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={items} subject={wizard.subject || offerSubject(items.map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedQuoteId={wizard.savedQuotation.id} status={wizard.quotationSent ? "Sent" : wizard.savedQuotation.status ?? "Draft"} />
+    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} status={wizard.quotationSent ? "Sent" : wizard.savedQuotation.status ?? "Draft"} />
     {savedDialog}
   </div>;
 
@@ -961,7 +962,7 @@ function Totals({ t }: { t: { subtotal: number; discount: number; gst: number; t
     <dl className="ml-auto max-w-sm space-y-1 rounded-lg bg-secondary p-4 text-secondary-foreground">
       <div className="flex justify-between"><dt>Subtotal</dt><dd>{formatINR(t.subtotal)}</dd></div>
       <div className="flex justify-between"><dt>Discount</dt><dd>-{formatINR(t.discount)}</dd></div>
-      <div className="flex justify-between"><dt>Tax</dt><dd>{formatINR(t.gst)}</dd></div>
+      <div className="flex justify-between"><dt>GST @ {Math.round(GST_RATE * 100)}%</dt><dd>{formatINR(t.gst)}</dd></div>
       <div className="flex justify-between text-lg font-bold"><dt>Grand Total</dt><dd>{formatINR(t.total)}</dd></div>
     </dl>
   );
@@ -976,12 +977,21 @@ class SharePreparationError extends Error {
   }
 }
 
-function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, status = "Draft" }: {
+function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, gstBreakdown, status = "Draft" }: {
  lead: QuotationCustomer; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; subject: string; setSubject: (subject: string) => void;
   onBack: () => void; onMarkSent: () => Promise<void>;
-  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; status?: string;
+  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown; status?: string;
 }) {
-  const t = quoteTotals(items);
+  const isLegacySavedQuote = !!savedQuoteId && !gstBreakdown;
+  const t: QuoteGstTotals = gstBreakdown ?? (isLegacySavedQuote
+    ? {
+        subtotal: items.reduce((sum, item) => sum + item.qty * item.price, 0),
+        discount: items.reduce((sum, item) => sum + (item.discount ?? 0), 0),
+        gst: 0,
+        total: items.reduce((sum, item) => sum + item.qty * item.price - (item.discount ?? 0), 0),
+      }
+    : quoteTotals(items));
+  const offerMoney = (amount: number) => formatINR(isLegacySavedQuote ? Math.round(amount) : amount);
   const customer = savedCustomer?.trim() || lead.company.trim() || lead.name.trim();
   const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date());
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
@@ -1000,7 +1010,16 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   }).format(new Date(`${savedValidTill}T12:00:00+05:30`)) : new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric",
   }).format(validTillDate);
-  const renderPart = (part: Item[], title: string, gst: string, startIndex = 0) => (
+  const renderPart = (part: Item[], title: string, gst: string, startIndex = 0, storedTotals?: QuoteGstTotals) => {
+    const partTotals: QuoteGstTotals = storedTotals ?? (isLegacySavedQuote
+      ? {
+          subtotal: part.reduce((sum, item) => sum + item.qty * item.price, 0),
+          discount: 0,
+          gst: 0,
+          total: part.reduce((sum, item) => sum + item.qty * item.price - (item.discount ?? 0), 0),
+        }
+      : quoteTotals(part));
+    return (
     <section className="mt-4">
       <div className="border-y border-border py-2 text-center font-bold">{title}</div>
       <table className="w-full table-fixed border-collapse text-[9px]">
@@ -1011,17 +1030,23 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
             <td className="border border-border px-1 py-2"><span className="font-semibold">{item.model}</span>{item.description && <div className="mt-1 break-words text-muted-foreground">{item.description}</div>}</td>
             <td className="border border-border px-1 py-2 text-center">{item.unit}</td>
             <td className="border border-border px-1 py-2 text-center">{item.qty}</td>
-            {hasDiscount && <td className="border border-border px-1 py-2 text-right">{formatINR(item.discount ?? 0)}</td>}
-            <td className="border border-border px-1 py-2 text-right">{formatINR(item.price)}</td>
-            <td className="border border-border px-1 py-2 text-right">{formatINR(lineAmount(item))}</td>
+            {hasDiscount && <td className="border border-border px-1 py-2 text-right">{offerMoney(item.discount ?? 0)}</td>}
+            <td className="border border-border px-1 py-2 text-right">{offerMoney(item.price)}</td>
+            <td className="border border-border px-1 py-2 text-right">{offerMoney(lineAmount(item))}</td>
           </tr>
         ))}</tbody>
       </table>
-      <div className="mt-1 grid grid-cols-2 border border-border p-2 font-semibold"><span>Basic Sub Total - {title.includes("PART A") ? "Part A" : "Part B"}</span><span className="text-right">{formatINR(quoteTotals(part).total)}</span></div>
-      <div className="mt-1 text-center text-[10px] font-semibold">{gst}</div>
+      {isLegacySavedQuote
+        ? <><div className="mt-1 grid grid-cols-2 border border-border p-2 font-semibold"><span>Basic Sub Total - {title.includes("PART A") ? "Part A" : "Part B"}</span><span className="text-right">{offerMoney(partTotals.total)}</span></div><div className="mt-1 text-center text-[10px] font-semibold">{gst}</div></>
+        : <div className="mt-1 space-y-1 border border-border p-2 text-sm">
+            <div className="grid grid-cols-2 font-semibold"><span>Subtotal - {title.includes("PART A") ? "Part A" : "Part B"}</span><span className="text-right">{offerMoney(partTotals.subtotal)}</span></div>
+            {partTotals.discount > 0 && <div className="grid grid-cols-2"><span>Discount</span><span className="text-right">-{offerMoney(partTotals.discount)}</span></div>}
+            <div className="grid grid-cols-2"><span>GST @ {Math.round((gstBreakdown?.rate ?? GST_RATE) * 100)}%</span><span className="text-right">{offerMoney(partTotals.gst)}</span></div>
+            <div className="grid grid-cols-2 border-t border-border pt-1 font-bold"><span>Total - {title.includes("PART A") ? "Part A" : "Part B"}</span><span className="text-right">{offerMoney(partTotals.total)}</span></div>
+          </div>}
     </section>
-  );
-  const shortMessage = `Offer ${offerNo} for ${customer || "customer"}\nGrand total: ${formatINR(t.total)}\n${COMPANY.name}`;
+  );};
+  const shortMessage = `Offer ${offerNo} for ${customer || "customer"}\nGrand total: ${offerMoney(t.total)}\n${COMPANY.name}`;
   const resolvedWaPhone = normalizeWhatsAppPhone(lead.phone);
   const canCreatePdf = canCreateQuotationPdf({ offerNo, customer, leadId: lead.id, items }, !!savedQuoteId);
   const [downloading, setDownloading] = useState(false);
@@ -1205,7 +1230,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Valid Till</span><span>{validTill}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Date</span><span>{date}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Sales Person</span><span>{COMPANY.signatory}</span></div>
-            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Amount</span><span>{formatINR(t.subtotal)}</span></div>
+            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Amount</span><span>{offerMoney(t.subtotal)}</span></div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="offer-no-break">
@@ -1246,10 +1271,10 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           <div className="font-bold">Total Units: {items.reduce((sum, item) => sum + item.qty, 0)}</div>
         </section>
         <div className="min-w-0 max-w-full">
-          {renderPart(splitParts.equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst)}
-          {splitParts.ancillary.length > 0 && renderPart(splitParts.ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, splitParts.equipment.length)}
+          {renderPart(splitParts.equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst, 0, gstBreakdown?.partA)}
+          {splitParts.ancillary.length > 0 && renderPart(splitParts.ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, splitParts.equipment.length, gstBreakdown?.partB)}
         </div>
-        <div className="mt-3 grid grid-cols-2 border border-border p-2 font-bold"><span>TOTAL PART A + B</span><span className="text-right">{formatINR(t.total)}</span></div>
+        <div className="mt-3 grid grid-cols-2 border border-border p-2 font-bold"><span>TOTAL PART A + B</span><span className="text-right">{offerMoney(t.total)}</span></div>
 
         <div className="offer-no-break mt-4 grid grid-cols-1 gap-8 sm:grid-cols-2">
           <div>
@@ -1259,9 +1284,10 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
             <div>{COMPANY.phones}</div>
           </div>
           <div className="text-right">
-            <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Sub Total</span><span>{formatINR(t.subtotal)}</span></div>
-            <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>GST</span><span>{formatINR(0)}</span></div>
-            <div className="mt-1 grid grid-cols-[1fr_auto] gap-6 bg-muted px-2 py-2 font-bold text-foreground"><span>Grand Total</span><span>{formatINR(t.subtotal)}</span></div>
+            <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Subtotal</span><span>{offerMoney(t.subtotal)}</span></div>
+            {!isLegacySavedQuote && t.discount > 0 && <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Discount</span><span>-{offerMoney(t.discount)}</span></div>}
+            <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>{isLegacySavedQuote ? "GST" : `GST @ ${Math.round((gstBreakdown?.rate ?? GST_RATE) * 100)}%`}</span><span>{offerMoney(t.gst)}</span></div>
+            <div className="mt-1 grid grid-cols-[1fr_auto] gap-6 bg-muted px-2 py-2 font-bold text-foreground"><span>Grand Total</span><span>{offerMoney(isLegacySavedQuote ? t.subtotal : t.total)}</span></div>
           </div>
         </div>
 
