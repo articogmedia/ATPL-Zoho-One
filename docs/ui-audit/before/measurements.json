@@ -1,0 +1,1236 @@
+{
+  "screenshots": [
+    "login-360.png",
+    "login-390.png",
+    "login-430.png",
+    "login-768.png",
+    "login-1024.png",
+    "login-1440.png",
+    "home-360.png",
+    "home-390.png",
+    "home-430.png",
+    "home-768.png",
+    "home-1024.png",
+    "home-1440.png",
+    "leads-360.png",
+    "leads-390.png",
+    "leads-430.png",
+    "leads-768.png",
+    "leads-1024.png",
+    "leads-1440.png",
+    "quotations-360.png",
+    "quotations-390.png",
+    "quotations-430.png",
+    "quotations-768.png",
+    "quotations-1024.png",
+    "quotations-1440.png",
+    "visits-360.png",
+    "visits-390.png",
+    "visits-430.png",
+    "visits-768.png",
+    "visits-1024.png",
+    "visits-1440.png",
+    "performance-360.png",
+    "performance-390.png",
+    "performance-430.png",
+    "performance-768.png",
+    "performance-1024.png",
+    "performance-1440.png"
+  ],
+  "measurements": [
+    {
+      "route": "home",
+      "width": 360,
+      "title": "Home | ATPL Sales Portal",
+      "h1": [
+        "Good morning, Reshma"
+      ],
+      "documentWidth": 360,
+      "viewportWidth": 360,
+      "horizontalOverflow": false,
+      "mainWidth": 360,
+      "visibleControls": 11,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "",
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manager\n\nGood morning, Reshma\n\nYour sales workspace for leads, quotations, site visits and performance.\n\n13\nManage Leads\nTrack enquiries and update their status.\n5\nCreate Quotation\nPick products, auto-fill approved prices and create the offer.\n6\nMy Work & Site Visits\nYour assignments, site visits and follow-ups.\nPerformance\nLead sources, visits, conversions and executive results."
+    },
+    {
+      "route": "home",
+      "width": 390,
+      "title": "Home | ATPL Sales Portal",
+      "h1": [
+        "Good morning, Reshma"
+      ],
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "horizontalOverflow": false,
+      "mainWidth": 390,
+      "visibleControls": 11,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manager\n\nGood morning, Reshma\n\nYour sales workspace for leads, quotations, site visits and performance.\n\n13\nManage Leads\nTrack enquiries and update their status.\n5\nCreate Quotation\nPick products, auto-fill approved prices and create the offer.\n6\nMy Work & Site Visits\nYour assignments, site visits and follow-ups.\nPerformance\nLead sources, visits, conversions and executive results."
+    },
+    {
+      "route": "home",
+      "width": 430,
+      "title": "Home | ATPL Sales Portal",
+      "h1": [
+        "Good morning, Reshma"
+      ],
+      "documentWidth": 430,
+      "viewportWidth": 430,
+      "horizontalOverflow": false,
+      "mainWidth": 430,
+      "visibleControls": 11,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manager\n\nGood morning, Reshma\n\nYour sales workspace for leads, quotations, site visits and performance.\n\n13\nManage Leads\nTrack enquiries and update their status.\n5\nCreate Quotation\nPick products, auto-fill approved prices and create the offer.\n6\nMy Work & Site Visits\nYour assignments, site visits and follow-ups.\nPerformance\nLead sources, visits, conversions and executive results."
+    },
+    {
+      "route": "home",
+      "width": 768,
+      "title": "Home | ATPL Sales Portal",
+      "h1": [
+        "Good morning, Reshma"
+      ],
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "horizontalOverflow": false,
+      "mainWidth": 768,
+      "visibleControls": 11,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manager\n\nGood morning, Reshma\n\nYour sales workspace for leads, quotations, site visits and performance.\n\n13\nManage Leads\nTrack enquiries and update their status.\n5\nCreate Quotation\nPick products, auto-fill approved prices and create the offer.\n6\nMy Work & Site Visits\nYour assignments, site visits and follow-ups.\nPerformance\nLead sources, visits, conversions and executive results."
+    },
+    {
+      "route": "home",
+      "width": 1024,
+      "title": "Home | ATPL Sales Portal",
+      "h1": [
+        "Good morning, Reshma"
+      ],
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "horizontalOverflow": false,
+      "mainWidth": 784,
+      "visibleControls": 11,
+      "shortTargets": [],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manager\n\nGood morning, Reshma\n\nYour sales workspace for leads, quotations, site visits and performance.\n\n13\nManage Leads\nTrack enquiries and update their status.\n5\nCreate Quotation\nPick products, auto-fill approved prices and create the offer.\n6\nMy Work & Site Visits\nYour assignments, site visits and follow-ups.\nPerformance\nLead sources, visits, conversions and executive results."
+    },
+    {
+      "route": "home",
+      "width": 1440,
+      "title": "Home | ATPL Sales Portal",
+      "h1": [
+        "Good morning, Reshma"
+      ],
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "horizontalOverflow": false,
+      "mainWidth": 1200,
+      "visibleControls": 11,
+      "shortTargets": [],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manager\n\nGood morning, Reshma\n\nYour sales workspace for leads, quotations, site visits and performance.\n\n13\nManage Leads\nTrack enquiries and update their status.\n5\nCreate Quotation\nPick products, auto-fill approved prices and create the offer.\n6\nMy Work & Site Visits\nYour assignments, site visits and follow-ups.\nPerformance\nLead sources, visits, conversions and executive results."
+    },
+    {
+      "route": "leads",
+      "width": 360,
+      "title": "Manage Leads | ATPL Sales Portal",
+      "h1": [
+        "Manage Leads"
+      ],
+      "documentWidth": 360,
+      "viewportWidth": 360,
+      "horizontalOverflow": false,
+      "mainWidth": 360,
+      "visibleControls": 43,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "",
+          "width": 40,
+          "height": 40
+        },
+        {
+          "tag": "A",
+          "text": "95500 66778",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "93470 55667",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "88860 11223",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "94400 88990",
+          "width": 112,
+          "height": 20
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manage Leads\nAdd\n\nAssign ownership and track follow-ups.\n\nToday's follow-ups: 0\n\nFresh (4)\nAssigned (1)\nCall Back (2)\nMy Leads (0)\nAll Leads (13)\nSearch leads\nLakshmi Prasanna\nFresh Lead\n95500 66778\nSource · Meta Ads\nCreated · 2026-10-27\nOwner · Unassigned\n\nRemarks: 1.5 ton split for bedroom\n\nCall\nWhatsApp\nEdit\nAssign\nDelete\nVenkatesh\nBalaji Sweets\nFresh Lead\n93470 55667\nSource · Direct Call\nCreat"
+    },
+    {
+      "route": "leads",
+      "width": 390,
+      "title": "Manage Leads | ATPL Sales Portal",
+      "h1": [
+        "Manage Leads"
+      ],
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "horizontalOverflow": false,
+      "mainWidth": 390,
+      "visibleControls": 43,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        },
+        {
+          "tag": "A",
+          "text": "95500 66778",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "93470 55667",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "88860 11223",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "94400 88990",
+          "width": 112,
+          "height": 20
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manage Leads\nAdd\n\nAssign ownership and track follow-ups.\n\nToday's follow-ups: 0\n\nFresh (4)\nAssigned (1)\nCall Back (2)\nMy Leads (0)\nAll Leads (13)\nSearch leads\nLakshmi Prasanna\nFresh Lead\n95500 66778\nSource · Meta Ads\nCreated · 2026-10-27\nOwner · Unassigned\n\nRemarks: 1.5 ton split for bedroom\n\nCall\nWhatsApp\nEdit\nAssign\nDelete\nVenkatesh\nBalaji Sweets\nFresh Lead\n93470 55667\nSource · Direct Call\nCreat"
+    },
+    {
+      "route": "leads",
+      "width": 430,
+      "title": "Manage Leads | ATPL Sales Portal",
+      "h1": [
+        "Manage Leads"
+      ],
+      "documentWidth": 430,
+      "viewportWidth": 430,
+      "horizontalOverflow": false,
+      "mainWidth": 430,
+      "visibleControls": 43,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        },
+        {
+          "tag": "A",
+          "text": "95500 66778",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "93470 55667",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "88860 11223",
+          "width": 112,
+          "height": 20
+        },
+        {
+          "tag": "A",
+          "text": "94400 88990",
+          "width": 112,
+          "height": 20
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Manage Leads\nAdd\n\nAssign ownership and track follow-ups.\n\nToday's follow-ups: 0\n\nFresh (4)\nAssigned (1)\nCall Back (2)\nMy Leads (0)\nAll Leads (13)\nSearch leads\nLakshmi Prasanna\nFresh Lead\n95500 66778\nSource · Meta Ads\nCreated · 2026-10-27\nOwner · Unassigned\n\nRemarks: 1.5 ton split for bedroom\n\nCall\nWhatsApp\nEdit\nAssign\nDelete\nVenkatesh\nBalaji Sweets\nFresh Lead\n93470 55667\nSource · Direct Call\nCreat"
+    },
+    {
+      "route": "leads",
+      "width": 768,
+      "title": "Manage Leads | ATPL Sales Portal",
+      "h1": [
+        "Manage Leads"
+      ],
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "horizontalOverflow": false,
+      "mainWidth": 768,
+      "visibleControls": 42,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Lakshmi Prasanna on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Venkatesh on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Arjun Varma on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Naveen Reddy",
+          "width": 36,
+          "height": 36
+        }
+      ],
+      "smallInputs": [
+        {
+          "placeholder": "Search name, company or phone",
+          "fontSize": "14px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        }
+      ],
+      "errorOverlay": false,
+      "text": "Manage Leads\n\nReview enquiries, assign ownership, and track follow-ups.\n\nAdd Lead\nToday's follow-ups: 0\nFresh Leads to Call (4)\nAssigned to Sales (1)\nCall Back (2)\nMy Leads (0)\nAll Leads (13)\nSearch leads\nOwner\nStage\nSource\nFrom\nTo\nLEAD\tPHONE\tSOURCE\tCREATED\tSTATUS\tOWNER\tACTION\n\nLakshmi Prasanna\n\t95500 66778\tMeta Ads\t2026-10-27\tFresh Lead\tUnassigned\t\n\n\nVenkatesh\nBalaji Sweets\n\t93470 55667\tDirect Ca"
+    },
+    {
+      "route": "leads",
+      "width": 1024,
+      "title": "Manage Leads | ATPL Sales Portal",
+      "h1": [
+        "Manage Leads"
+      ],
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "horizontalOverflow": false,
+      "mainWidth": 784,
+      "visibleControls": 42,
+      "shortTargets": [
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Lakshmi Prasanna on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Venkatesh on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Arjun Varma on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Naveen Reddy",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Naveen Reddy on WhatsApp",
+          "width": 36,
+          "height": 36
+        }
+      ],
+      "smallInputs": [
+        {
+          "placeholder": "Search name, company or phone",
+          "fontSize": "14px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        }
+      ],
+      "errorOverlay": false,
+      "text": "Manage Leads\n\nReview enquiries, assign ownership, and track follow-ups.\n\nAdd Lead\nToday's follow-ups: 0\nFresh Leads to Call (4)\nAssigned to Sales (1)\nCall Back (2)\nMy Leads (0)\nAll Leads (13)\nSearch leads\nOwner\nStage\nSource\nFrom\nTo\nLEAD\tPHONE\tSOURCE\tCREATED\tSTATUS\tOWNER\tACTION\n\nLakshmi Prasanna\n\t95500 66778\tMeta Ads\t2026-10-27\tFresh Lead\tUnassigned\t\n\n\nVenkatesh\nBalaji Sweets\n\t93470 55667\tDirect Ca"
+    },
+    {
+      "route": "leads",
+      "width": 1440,
+      "title": "Manage Leads | ATPL Sales Portal",
+      "h1": [
+        "Manage Leads"
+      ],
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "horizontalOverflow": false,
+      "mainWidth": 1200,
+      "visibleControls": 42,
+      "shortTargets": [
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Lakshmi Prasanna on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Lakshmi Prasanna",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Venkatesh on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Venkatesh",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Arjun Varma on WhatsApp",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Edit Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Reassign Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Delete Arjun Varma",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "BUTTON",
+          "text": "Call Naveen Reddy",
+          "width": 36,
+          "height": 36
+        },
+        {
+          "tag": "A",
+          "text": "Message Naveen Reddy on WhatsApp",
+          "width": 36,
+          "height": 36
+        }
+      ],
+      "smallInputs": [
+        {
+          "placeholder": "Search name, company or phone",
+          "fontSize": "14px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "12px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        },
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        }
+      ],
+      "errorOverlay": false,
+      "text": "Manage Leads\n\nReview enquiries, assign ownership, and track follow-ups.\n\nAdd Lead\nToday's follow-ups: 0\nFresh Leads to Call (4)\nAssigned to Sales (1)\nCall Back (2)\nMy Leads (0)\nAll Leads (13)\nSearch leads\nOwner\nStage\nSource\nFrom\nTo\nLEAD\tPHONE\tSOURCE\tCREATED\tSTATUS\tOWNER\tACTION\n\nLakshmi Prasanna\n\t95500 66778\tMeta Ads\t2026-10-27\tFresh Lead\tUnassigned\t\n\n\nVenkatesh\nBalaji Sweets\n\t93470 55667\tDirect Ca"
+    },
+    {
+      "route": "quotations",
+      "width": 360,
+      "title": "Create Quotation | ATPL Sales Portal",
+      "h1": [
+        "Create Quotation"
+      ],
+      "documentWidth": 360,
+      "viewportWidth": 360,
+      "horizontalOverflow": false,
+      "mainWidth": 360,
+      "visibleControls": 26,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "",
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Create Quotation\nSaved quotations (5)\n1. Customer\n2. Products\n3. Preview\nStep 1 · Choose customer\nLakshmi Prasanna\nKondapur\n95500 66778\nVenkatesh\nBalaji Sweets\n93470 55667\nArjun Varma\nCyber Towers Office 4B\n88860 11223\nNaveen Reddy\nReddy Associates\n94400 88990\nFarhan Ali\nAli Bakers\n98660 22110\nSwathi\nSwathi Boutique\n90300 44556\nRajesh Iyer\nIyer Motors\n94900 11223\nSunitha Reddy\nGachibowli\n97010 998"
+    },
+    {
+      "route": "quotations",
+      "width": 390,
+      "title": "Create Quotation | ATPL Sales Portal",
+      "h1": [
+        "Create Quotation"
+      ],
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "horizontalOverflow": false,
+      "mainWidth": 390,
+      "visibleControls": 26,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Create Quotation\nSaved quotations (5)\n1. Customer\n2. Products\n3. Preview\nStep 1 · Choose customer\nLakshmi Prasanna\nKondapur\n95500 66778\nVenkatesh\nBalaji Sweets\n93470 55667\nArjun Varma\nCyber Towers Office 4B\n88860 11223\nNaveen Reddy\nReddy Associates\n94400 88990\nFarhan Ali\nAli Bakers\n98660 22110\nSwathi\nSwathi Boutique\n90300 44556\nRajesh Iyer\nIyer Motors\n94900 11223\nSunitha Reddy\nGachibowli\n97010 998"
+    },
+    {
+      "route": "quotations",
+      "width": 430,
+      "title": "Create Quotation | ATPL Sales Portal",
+      "h1": [
+        "Create Quotation"
+      ],
+      "documentWidth": 430,
+      "viewportWidth": 430,
+      "horizontalOverflow": false,
+      "mainWidth": 430,
+      "visibleControls": 26,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Create Quotation\nSaved quotations (5)\n1. Customer\n2. Products\n3. Preview\nStep 1 · Choose customer\nLakshmi Prasanna\nKondapur\n95500 66778\nVenkatesh\nBalaji Sweets\n93470 55667\nArjun Varma\nCyber Towers Office 4B\n88860 11223\nNaveen Reddy\nReddy Associates\n94400 88990\nFarhan Ali\nAli Bakers\n98660 22110\nSwathi\nSwathi Boutique\n90300 44556\nRajesh Iyer\nIyer Motors\n94900 11223\nSunitha Reddy\nGachibowli\n97010 998"
+    },
+    {
+      "route": "quotations",
+      "width": 768,
+      "title": "Create Quotation | ATPL Sales Portal",
+      "h1": [
+        "Create Quotation"
+      ],
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "horizontalOverflow": false,
+      "mainWidth": 768,
+      "visibleControls": 26,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Create Quotation\nSaved quotations (5)\n1. Customer\n2. Products\n3. Preview\nStep 1 · Choose customer\nNew customer\nLakshmi Prasanna\nKondapur\n95500 66778\nVenkatesh\nBalaji Sweets\n93470 55667\nArjun Varma\nCyber Towers Office 4B\n88860 11223\nNaveen Reddy\nReddy Associates\n94400 88990\nFarhan Ali\nAli Bakers\n98660 22110\nSwathi\nSwathi Boutique\n90300 44556\nRajesh Iyer\nIyer Motors\n94900 11223\nSunitha Reddy\nGachibo"
+    },
+    {
+      "route": "quotations",
+      "width": 1024,
+      "title": "Create Quotation | ATPL Sales Portal",
+      "h1": [
+        "Create Quotation"
+      ],
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "horizontalOverflow": false,
+      "mainWidth": 784,
+      "visibleControls": 26,
+      "shortTargets": [],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Create Quotation\nSaved quotations (5)\n1. Customer\n2. Products\n3. Preview\nStep 1 · Choose customer\nNew customer\nLakshmi Prasanna\nKondapur\n95500 66778\nVenkatesh\nBalaji Sweets\n93470 55667\nArjun Varma\nCyber Towers Office 4B\n88860 11223\nNaveen Reddy\nReddy Associates\n94400 88990\nFarhan Ali\nAli Bakers\n98660 22110\nSwathi\nSwathi Boutique\n90300 44556\nRajesh Iyer\nIyer Motors\n94900 11223\nSunitha Reddy\nGachibo"
+    },
+    {
+      "route": "quotations",
+      "width": 1440,
+      "title": "Create Quotation | ATPL Sales Portal",
+      "h1": [
+        "Create Quotation"
+      ],
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "horizontalOverflow": false,
+      "mainWidth": 1200,
+      "visibleControls": 26,
+      "shortTargets": [],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Create Quotation\nSaved quotations (5)\n1. Customer\n2. Products\n3. Preview\nStep 1 · Choose customer\nNew customer\nLakshmi Prasanna\nKondapur\n95500 66778\nVenkatesh\nBalaji Sweets\n93470 55667\nArjun Varma\nCyber Towers Office 4B\n88860 11223\nNaveen Reddy\nReddy Associates\n94400 88990\nFarhan Ali\nAli Bakers\n98660 22110\nSwathi\nSwathi Boutique\n90300 44556\nRajesh Iyer\nIyer Motors\n94900 11223\nSunitha Reddy\nGachibo"
+    },
+    {
+      "route": "visits",
+      "width": 360,
+      "title": "My Work & Site Visits | ATPL Sales Portal",
+      "h1": [
+        "My Work & Site Visits"
+      ],
+      "documentWidth": 360,
+      "viewportWidth": 360,
+      "horizontalOverflow": false,
+      "mainWidth": 360,
+      "visibleControls": 33,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "",
+          "width": 40,
+          "height": 40
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "My Work & Site Visits\nExecutive\nToday's visits (0)\n\nNo visits today.\n\nTasks (4)\nIn Progress (2)\nUpcoming Visits (0)\nCompleted (3)\nRamesh Clinic\nOverdue\nAssigned\n\nSite survey\n\n29 Oct 2026 · 11:00\nRavi\nMeasure waiting hall for cassette AC\nFollow-up 30 Oct 2026\nPlot 45, KPHB Phase 3, Kukatpally\nStart Work\nCall\nWhatsApp\nQuotation\nReschedule\nSri Lakshmi Textiles\nOverdue\nAssigned\n\nFollow-up call\n\n30 Oct"
+    },
+    {
+      "route": "visits",
+      "width": 390,
+      "title": "My Work & Site Visits | ATPL Sales Portal",
+      "h1": [
+        "My Work & Site Visits"
+      ],
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "horizontalOverflow": false,
+      "mainWidth": 390,
+      "visibleControls": 32,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "My Work & Site Visits\nExecutive\nAll executives\nToday's visits (0)\n\nNo visits today.\n\nTasks (4)\nIn Progress (2)\nUpcoming Visits (0)\nCompleted (3)\nRamesh Clinic\nOverdue\nAssigned\n\nSite survey\n\n29 Oct 2026 · 11:00\nRavi\nMeasure waiting hall for cassette AC\nFollow-up 30 Oct 2026\nPlot 45, KPHB Phase 3, Kukatpally\nStart Work\nCall\nWhatsApp\nQuotation\nReschedule\nSri Lakshmi Textiles\nOverdue\nAssigned\n\nFollow-"
+    },
+    {
+      "route": "visits",
+      "width": 430,
+      "title": "My Work & Site Visits | ATPL Sales Portal",
+      "h1": [
+        "My Work & Site Visits"
+      ],
+      "documentWidth": 430,
+      "viewportWidth": 430,
+      "horizontalOverflow": false,
+      "mainWidth": 430,
+      "visibleControls": 33,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "My Work & Site Visits\nExecutive\nToday's visits (0)\n\nNo visits today.\n\nTasks (4)\nIn Progress (2)\nUpcoming Visits (0)\nCompleted (3)\nRamesh Clinic\nOverdue\nAssigned\n\nSite survey\n\n29 Oct 2026 · 11:00\nRavi\nMeasure waiting hall for cassette AC\nFollow-up 30 Oct 2026\nPlot 45, KPHB Phase 3, Kukatpally\nStart Work\nCall\nWhatsApp\nQuotation\nReschedule\nSri Lakshmi Textiles\nOverdue\nAssigned\n\nFollow-up call\n\n30 Oct"
+    },
+    {
+      "route": "visits",
+      "width": 768,
+      "title": "My Work & Site Visits | ATPL Sales Portal",
+      "h1": [
+        "My Work & Site Visits"
+      ],
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "horizontalOverflow": false,
+      "mainWidth": 768,
+      "visibleControls": 33,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        },
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "smallInputs": [
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        }
+      ],
+      "errorOverlay": false,
+      "text": "My Work & Site Visits\nExecutive\nToday's visits (0)\n\nNo visits today.\n\nTasks (4)\nIn Progress (2)\nUpcoming Visits (0)\nCompleted (3)\nRamesh Clinic\nOverdue\nAssigned\n\nSite survey\n\n29 Oct 2026 · 11:00\nRavi\nMeasure waiting hall for cassette AC\nFollow-up 30 Oct 2026\nPlot 45, KPHB Phase 3, Kukatpally\nStart Work\nCall\nWhatsApp\nQuotation\nReschedule\nSri Lakshmi Textiles\nOverdue\nAssigned\n\nFollow-up call\n\n30 Oct"
+    },
+    {
+      "route": "visits",
+      "width": 1024,
+      "title": "My Work & Site Visits | ATPL Sales Portal",
+      "h1": [
+        "My Work & Site Visits"
+      ],
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "horizontalOverflow": false,
+      "mainWidth": 784,
+      "visibleControls": 33,
+      "shortTargets": [
+        {
+          "tag": "SELECT",
+          "text": "",
+          "width": 1,
+          "height": 1
+        }
+      ],
+      "smallInputs": [
+        {
+          "placeholder": null,
+          "fontSize": "14px"
+        }
+      ],
+      "errorOverlay": false,
+      "text": "My Work & Site Visits\nExecutive\nToday's visits (0)\n\nNo visits today.\n\nTasks (4)\nIn Progress (2)\nUpcoming Visits (0)\nCompleted (3)\nRamesh Clinic\nOverdue\nAssigned\n\nSite survey\n\n29 Oct 2026 · 11:00\nRavi\nMeasure waiting hall for cassette AC\nFollow-up 30 Oct 2026\nPlot 45, KPHB Phase 3, Kukatpally\nStart Work\nCall\nWhatsApp\nQuotation\nReschedule\nSri Lakshmi Textiles\nOverdue\nAssigned\n\nFollow-up call\n\n30 Oct"
+    },
+    {
+      "route": "visits",
+      "width": 1440,
+      "title": "My Work & Site Visits | ATPL Sales Portal",
+      "h1": [
+        "My Work & Site Visits"
+      ],
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "horizontalOverflow": false,
+      "mainWidth": 1200,
+      "visibleControls": 32,
+      "shortTargets": [],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "My Work & Site Visits\nExecutive\nAll executives\nToday's visits (0)\n\nNo visits today.\n\nTasks (4)\nIn Progress (2)\nUpcoming Visits (0)\nCompleted (3)\nRamesh Clinic\nOverdue\nAssigned\n\nSite survey\n\n29 Oct 2026 · 11:00\nRavi\nMeasure waiting hall for cassette AC\nFollow-up 30 Oct 2026\nPlot 45, KPHB Phase 3, Kukatpally\nStart Work\nCall\nWhatsApp\nQuotation\nReschedule\nSri Lakshmi Textiles\nOverdue\nAssigned\n\nFollow-"
+    },
+    {
+      "route": "performance",
+      "width": 360,
+      "title": "Performance | ATPL Sales Portal",
+      "h1": [
+        "Performance"
+      ],
+      "documentWidth": 360,
+      "viewportWidth": 360,
+      "horizontalOverflow": false,
+      "mainWidth": 360,
+      "visibleControls": 10,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "",
+          "width": 40,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Performance\nThis Week\nThis Month\nLast Month\nTotal Leads\n0\n0 won\nConversion Rate\n0%\nWon ÷ total leads\nVisits Completed\n0/1\nof scheduled visits\nQuotations Sent\n0\nin this period\nLeads by Source\nMeta Ads\n0\nGoogle Ads\n0\nDirect Call\n0\nWalk-in\n0\nReferral\n0\nWebsite\n0\nOther\n0\nSite Visits — Scheduled vs Completed\n1\nScheduled\n0\nCompleted\nCompletion\n0%\nExecutive-wise Performance\nReshma (Manager)\nLeads assigne"
+    },
+    {
+      "route": "performance",
+      "width": 390,
+      "title": "Performance | ATPL Sales Portal",
+      "h1": [
+        "Performance"
+      ],
+      "documentWidth": 390,
+      "viewportWidth": 390,
+      "horizontalOverflow": false,
+      "mainWidth": 390,
+      "visibleControls": 10,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Performance\nThis Week\nThis Month\nLast Month\nTotal Leads\n0\n0 won\nConversion Rate\n0%\nWon ÷ total leads\nVisits Completed\n0/1\nof scheduled visits\nQuotations Sent\n0\nin this period\nLeads by Source\nMeta Ads\n0\nGoogle Ads\n0\nDirect Call\n0\nWalk-in\n0\nReferral\n0\nWebsite\n0\nOther\n0\nSite Visits — Scheduled vs Completed\n1\nScheduled\n0\nCompleted\nCompletion\n0%\nExecutive-wise Performance\nReshma (Manager)\nLeads assigne"
+    },
+    {
+      "route": "performance",
+      "width": 430,
+      "title": "Performance | ATPL Sales Portal",
+      "h1": [
+        "Performance"
+      ],
+      "documentWidth": 430,
+      "viewportWidth": 430,
+      "horizontalOverflow": false,
+      "mainWidth": 430,
+      "visibleControls": 10,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Performance\nThis Week\nThis Month\nLast Month\nTotal Leads\n0\n0 won\nConversion Rate\n0%\nWon ÷ total leads\nVisits Completed\n0/1\nof scheduled visits\nQuotations Sent\n0\nin this period\nLeads by Source\nMeta Ads\n0\nGoogle Ads\n0\nDirect Call\n0\nWalk-in\n0\nReferral\n0\nWebsite\n0\nOther\n0\nSite Visits — Scheduled vs Completed\n1\nScheduled\n0\nCompleted\nCompletion\n0%\nExecutive-wise Performance\nReshma (Manager)\nLeads assigne"
+    },
+    {
+      "route": "performance",
+      "width": 768,
+      "title": "Performance | ATPL Sales Portal",
+      "h1": [
+        "Performance"
+      ],
+      "documentWidth": 768,
+      "viewportWidth": 768,
+      "horizontalOverflow": false,
+      "mainWidth": 768,
+      "visibleControls": 10,
+      "shortTargets": [
+        {
+          "tag": "A",
+          "text": "ATPL Sales Portal",
+          "width": 164,
+          "height": 40
+        }
+      ],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Performance\nThis Week\nThis Month\nLast Month\nTotal Leads\n0\n0 won\nConversion Rate\n0%\nWon ÷ total leads\nVisits Completed\n0/1\nof scheduled visits\nQuotations Sent\n0\nin this period\nLeads by Source\nMeta Ads\n0\nGoogle Ads\n0\nDirect Call\n0\nWalk-in\n0\nReferral\n0\nWebsite\n0\nOther\n0\nSite Visits — Scheduled vs Completed\n1\nScheduled\n0\nCompleted\nCompletion\n0%\nExecutive-wise Performance\nExecutive\tLeads Assigned\tVisit"
+    },
+    {
+      "route": "performance",
+      "width": 1024,
+      "title": "Performance | ATPL Sales Portal",
+      "h1": [
+        "Performance"
+      ],
+      "documentWidth": 1024,
+      "viewportWidth": 1024,
+      "horizontalOverflow": false,
+      "mainWidth": 784,
+      "visibleControls": 10,
+      "shortTargets": [],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Performance\nThis Week\nThis Month\nLast Month\nTotal Leads\n0\n0 won\nConversion Rate\n0%\nWon ÷ total leads\nVisits Completed\n0/1\nof scheduled visits\nQuotations Sent\n0\nin this period\nLeads by Source\nMeta Ads\n0\nGoogle Ads\n0\nDirect Call\n0\nWalk-in\n0\nReferral\n0\nWebsite\n0\nOther\n0\nSite Visits — Scheduled vs Completed\n1\nScheduled\n0\nCompleted\nCompletion\n0%\nExecutive-wise Performance\nExecutive\tLeads Assigned\tVisit"
+    },
+    {
+      "route": "performance",
+      "width": 1440,
+      "title": "Performance | ATPL Sales Portal",
+      "h1": [
+        "Performance"
+      ],
+      "documentWidth": 1440,
+      "viewportWidth": 1440,
+      "horizontalOverflow": false,
+      "mainWidth": 1200,
+      "visibleControls": 10,
+      "shortTargets": [],
+      "smallInputs": [],
+      "errorOverlay": false,
+      "text": "Performance\nThis Week\nThis Month\nLast Month\nTotal Leads\n0\n0 won\nConversion Rate\n0%\nWon ÷ total leads\nVisits Completed\n0/1\nof scheduled visits\nQuotations Sent\n0\nin this period\nLeads by Source\nMeta Ads\n0\nGoogle Ads\n0\nDirect Call\n0\nWalk-in\n0\nReferral\n0\nWebsite\n0\nOther\n0\nSite Visits — Scheduled vs Completed\n1\nScheduled\n0\nCompleted\nCompletion\n0%\nExecutive-wise Performance\nExecutive\tLeads Assigned\tVisit"
+    }
+  ],
+  "errors": [
+    "Unexpected end of JSON input",
+    "Unexpected end of JSON input",
+    "Unexpected end of JSON input",
+    "Unexpected end of JSON input"
+  ]
+}
