@@ -10,6 +10,7 @@ import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT } from "@/lib/company";
 import { formatINR, GST_RATE, quoteTotals, todayIST, visibleFor } from "@/lib/domain";
 import { quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
+import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 
 export const runtime = "nodejs";
@@ -27,22 +28,6 @@ function redactPayload(value: unknown): unknown {
     ]));
   }
   return value;
-}
-
-function wrap(font: PDFFont, text: string, size: number, maxWidth: number) {
-  const words = text.replace(/\s+/g, " ").trim().split(" ");
-  const lines: string[] = [];
-  let line = "";
-  for (const word of words) {
-    const next = line ? `${line} ${word}` : word;
-    if (font.widthOfTextAtSize(next, size) <= maxWidth) line = next;
-    else {
-      if (line) lines.push(line);
-      line = word;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.length ? lines : [""];
 }
 
 export async function POST(request: NextRequest) {
@@ -203,7 +188,7 @@ export async function POST(request: NextRequest) {
   y -= 18;
   const equipmentSummary = items.filter((item) => !/^B\s*-\s*/i.test(item.model));
   for (const item of equipmentSummary) {
-    const lines = wrap(regular, `${item.model} / ${item.qty} / ${item.unit}`, 7, width - margin * 2);
+    const lines = wrapQuotationPdfText(regular, `${item.model} / ${item.qty} / Nos`, 7, width - margin * 2);
     for (const line of lines) {
       if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
       text(page, line, margin, y, 7);
@@ -213,80 +198,151 @@ export async function POST(request: NextRequest) {
   y -= 8;
   text(page, `Dear Sir,  Sub: ${subject}`, margin, y, 9, bold);
   y -= 16;
-  wrap(regular, OFFER_TEXT.enquiry, 8, width - margin * 2).forEach((line) => { text(page, line, margin, y, 8); y -= 10; });
+  wrapQuotationPdfText(regular, OFFER_TEXT.enquiry, 8, width - margin * 2).forEach((line) => { text(page, line, margin, y, 8); y -= 10; });
 
-  const drawTableHeader = (target: PDFPage, top: number, title: string) => {
-    text(target, title, margin, top, 10, bold);
-    const headerY = top - 18;
-    target.drawRectangle({ x: margin, y: headerY - 16, width: width - margin * 2, height: 16, color: rgb(0.31, 0.58, 0.80) });
-    const headers = ["S.No", "Description", "Unit", "Qty", ...(presentation.hasDiscount ? ["Discount (Rs)"] : []), "Basic Rate (Rs)", "Amount (Rs)"];
-    const cols = [margin + 2, margin + 34, margin + 300, margin + 340, ...(presentation.hasDiscount ? [margin + 375] : []), margin + 435, margin + 495];
-    headers.forEach((label, i) => text(target, label, cols[i] ?? margin, headerY - 11, 6, bold));
-    return headerY - 16;
+  const contentWidth = width - margin * 2;
+  const columns = [
+    { key: "sno", label: "S.No", width: 28, align: "center" },
+    { key: "description", label: "Description", width: 252, align: "left" },
+    { key: "unit", label: "Unit", width: 42, align: "center" },
+    { key: "qty", label: "Qty", width: 38, align: "right" },
+    { key: "rate", label: "Basic Rate (Rs)", width: 82, align: "right" },
+    { key: "amount", label: "Amount (Rs)", width: contentWidth - 442, align: "right" },
+  ] as const;
+  const cellPadding = 4;
+  const tableFontSize = 7;
+  const lineHeight = 9;
+  const bottomMargin = 48;
+  const rightEdge = width - margin;
+  const colLeft = (index: number) => margin + columns.slice(0, index).reduce((sum, column) => sum + column.width, 0);
+
+  const textWidth = (value: string, size: number, font: PDFFont) => font.widthOfTextAtSize(value, size);
+  const drawRight = (target: PDFPage, value: string, right: number, baseline: number, size: number, font = regular) =>
+    text(target, value, right - textWidth(value, size, font), baseline, size, font);
+
+  const drawTableHeader = (target: PDFPage, title: string) => {
+    y -= 24;
+    text(target, title, margin, y, 10, bold);
+    y -= 18;
+    const headerHeight = 18;
+    target.drawRectangle({
+      x: margin,
+      y: y - headerHeight,
+      width: contentWidth,
+      height: headerHeight,
+      color: rgb(0.31, 0.58, 0.80),
+    });
+    const baseline = y - headerHeight + (headerHeight - 6) / 2 + 1;
+    columns.forEach((column, index) => {
+      const left = colLeft(index);
+      const right = left + column.width;
+      const value = column.label;
+      if (column.align === "right") drawRight(target, value, right - cellPadding, baseline, 6, bold);
+      else if (column.align === "center") {
+        const x = left + (column.width - textWidth(value, 6, bold)) / 2;
+        text(target, value, x, baseline, 6, bold);
+      } else text(target, value, left + cellPadding, baseline, 6, bold);
+    });
+    y -= headerHeight;
+  };
+
+  const startNewPage = (title?: string) => {
+    page = newPage();
+    drawHeader(page);
+    y = height - 112;
+    if (title) drawTableHeader(page, title);
+  };
+
+  const ensureSpace = (requiredHeight: number, title?: string) => {
+    if (y - requiredHeight < bottomMargin) startNewPage(title);
+  };
+
+  const partBlockRows = (partTotals: typeof totals, partName: string, gstNote: string) => isLegacySavedQuote
+    ? [
+        ["Basic Sub Total", partTotals.subtotal - partTotals.discount, true] as const,
+        [gstNote, null, false] as const,
+      ]
+    : [
+        [`Subtotal - ${partName}`, partTotals.subtotal, true] as const,
+        ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as const] : []),
+        [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
+        [`Total - ${partName}`, partTotals.total, true] as const,
+      ];
+
+  const drawTotalsBlock = (rows: readonly (readonly [string, number | null, boolean])[], rowHeight = 15) => {
+    ensureSpace(rows.length * rowHeight + 8);
+    const labelX = colLeft(1) + cellPadding;
+    const amountRight = rightEdge - cellPadding;
+    for (const [label, amount, emphasis] of rows) {
+      const font = emphasis ? bold : regular;
+      text(page, label, labelX, y - rowHeight + 4, 8, font);
+      if (amount !== null) drawRight(page, money(amount), amountRight, y - rowHeight + 4, 8, font);
+      y -= rowHeight;
+    }
+    y -= 8;
   };
 
   const drawPart = (partItems: QuotationPresentationItem[], title: string, gstNote: string, partTotals: typeof totals) => {
-    if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
-    y = drawTableHeader(page, y, title);
+    ensureSpace(60);
+    drawTableHeader(page, title);
     partItems.forEach((item, index) => {
-      const descriptionLines = wrap(regular, `${item.model}${item.description ? `\n${item.description}` : ""}`, 7, 286);
-      const rowHeight = Math.max(24, descriptionLines.length * 8 + 12);
-      if (y - rowHeight < 260) { page = newPage(); drawHeader(page); y = drawTableHeader(page, height - 112, title); }
-      text(page, `${index + 1}`, margin + 4, y - 12, 8);
-      text(page, descriptionLines.join(" "), margin + 34, y - 12, 7);
-      text(page, item.unit, margin + 320, y - 12, 8);
-      text(page, `${item.qty}`, margin + 360, y - 12, 8);
-      if (presentation.hasDiscount) text(page, money(item.discount ?? 0, isLegacySavedQuote), margin + 375, y - 12, 8);
-      text(page, money(item.price, isLegacySavedQuote), presentation.hasDiscount ? margin + 435 : margin + 395, y - 12, 8);
-      text(page, money(item.qty * item.price - (item.discount ?? 0), isLegacySavedQuote), presentation.hasDiscount ? margin + 495 : margin + 455, y - 12, 8);
-      page.drawLine({ start: { x: margin, y: y - rowHeight }, end: { x: width - margin, y: y - rowHeight }, thickness: 0.4, color: rgb(0.8, 0.8, 0.8) });
+      const description = `${item.model}${item.description ? ` / ${item.description}` : ""}`;
+      const descriptionLines = wrapQuotationPdfText(regular, description, tableFontSize, columns[1].width - cellPadding * 2);
+      const rowHeight = Math.max(20, descriptionLines.length * lineHeight + cellPadding * 2);
+      if (y - rowHeight < bottomMargin) startNewPage(title);
+      const rowTop = y;
+      const baseline = rowTop - cellPadding - tableFontSize;
+      const bodyValues = [
+        `${index + 1}`,
+        descriptionLines[0] ?? "",
+        "Nos",
+        `${item.qty}`,
+        money(item.price),
+        money(item.qty * item.price - (item.discount ?? 0)),
+      ];
+      columns.forEach((column, columnIndex) => {
+        const left = colLeft(columnIndex);
+        const right = left + column.width;
+        const value = bodyValues[columnIndex] ?? "";
+        if (columnIndex === 1) {
+          descriptionLines.forEach((line, lineIndex) => {
+            text(page, line, left + cellPadding, baseline - lineIndex * lineHeight, tableFontSize);
+          });
+        } else if (column.align === "right") {
+          drawRight(page, value, right - cellPadding, baseline, tableFontSize);
+        } else if (column.align === "center") {
+          text(page, value, left + (column.width - textWidth(value, tableFontSize, regular)) / 2, baseline, tableFontSize);
+        } else {
+          text(page, value, left + cellPadding, baseline, tableFontSize);
+        }
+      });
+      page.drawLine({
+        start: { x: margin, y: rowTop - rowHeight },
+        end: { x: rightEdge, y: rowTop - rowHeight },
+        thickness: 0.4,
+        color: rgb(0.8, 0.8, 0.8),
+      });
       y -= rowHeight;
     });
-    if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
-    if (isLegacySavedQuote) {
-      text(page, "Basic Sub Total", margin + 34, y - 14, 8, bold);
-      text(page, money(partTotals.subtotal - partTotals.discount, true), margin + 455, y - 14, 8, bold);
-      y -= 26;
-      text(page, gstNote, margin + 34, y - 14, 8);
-      y -= 26;
-      return;
-    }
-    for (const [label, amount, boldLine] of [
-      [`Subtotal - ${title.includes("PART A") ? "Part A" : "Part B"}`, partTotals.subtotal, true],
-      ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as [string, number, boolean]] : []),
-      [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false],
-      [`Total - ${title.includes("PART A") ? "Part A" : "Part B"}`, partTotals.total, true],
-    ] as [string, number, boolean][]) {
-      if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
-      text(page, label, margin + 34, y - 14, 8, boldLine ? bold : regular);
-      text(page, money(amount), margin + 455, y - 14, 8, boldLine ? bold : regular);
-      y -= 16;
-    }
-    y -= 10;
+    const partName = title.includes("PART A") ? "Part A" : "Part B";
+    drawTotalsBlock(partBlockRows(partTotals, partName, gstNote));
   };
 
   const { equipment, ancillary } = splitQuotationItems(items);
   drawPart(equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst, partATotals);
   if (ancillary.length) drawPart(ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, partBTotals);
-  if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
-  text(page, "TOTAL PART A + B", margin + 34, y - 14, 10, bold);
-  text(page, money(totals.total, isLegacySavedQuote), margin + 455, y - 14, 10, bold);
-  y -= 28;
+  const finalRows: (readonly [string, number | null, boolean])[] = isLegacySavedQuote
+    ? [["TOTAL PART A + B", totals.total, true]]
+    : [
+        ["TOTAL PART A + B", totals.total, true],
+        ["Subtotal", totals.subtotal, false],
+        ...(totals.discount > 0 ? [["Discount", -totals.discount, false] as const] : []),
+        [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
+        ["Grand Total", totals.total, true],
+      ];
+  drawTotalsBlock(finalRows, 16);
   if (!isLegacySavedQuote) {
-    for (const [label, amount, boldLine] of [
-      ["Subtotal", totals.subtotal, false],
-      ...(totals.discount > 0 ? [["Discount", -totals.discount, false] as [string, number, boolean]] : []),
-      [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
-      ["Grand Total", totals.total, true],
-    ] as [string, number, boolean][]) {
-      if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
-      text(page, label, margin + 340, y, 8, boldLine ? bold : regular);
-      text(page, money(amount), margin + 455, y, 8, boldLine ? bold : regular);
-      y -= 14;
-    }
     y -= 8;
-  } else {
-    y -= 14;
   }
 
   text(page, "NOTE", margin, y, 9, bold); y -= 14;
@@ -329,6 +385,6 @@ function formatOfferDate(value: string) {
   return `${day}.${month}.${(year ?? "").slice(-2)}`;
 }
 
-function money(value: number, preserveLegacyFormatting = false) {
-  return formatINR(preserveLegacyFormatting ? Math.round(value) : value);
+function money(value: number) {
+  return formatINR(value);
 }

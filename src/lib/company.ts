@@ -27,7 +27,7 @@ export const OFFER_TEXT = {
   ],
   terms: [
     ["Validity", "30 days from the date of this offer"],
-    ["Taxes", "Included As mentioned above"],
+    ["Taxes", `GST @ ${Math.round(GST_RATE * 100)}% extra, as shown above`],
     ["Delivery", "1-2 weeks from the date of order"],
     ["Payment Terms", "100% advance for equipment"],
   ] as const,

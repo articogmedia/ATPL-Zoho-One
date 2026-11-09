@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { PDFDocument, PDFPage, StandardFonts } from "pdf-lib";
 import { canCreateQuotationPdf, needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-presentation";
 import { quotationRequestSchema } from "@/lib/quotation-request";
+import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 
 vi.mock("server-only", () => ({}));
 
@@ -57,6 +59,18 @@ describe("quotation PDF route", () => {
     expect(needsPdfTotalsPage(25, 120)).toBe(true);
   });
 
+  it("wraps long descriptions and set codes inside the fixed description column", async () => {
+    const pdf = await PDFDocument.create();
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const setCode = Array.from({ length: 10 }, (_, index) => `VRF-SET-${String(index + 1).padStart(3, "0")}`).join("+");
+    const description = `${setCode}/VERY-LONG-SET-CODE+${"Very long equipment specification ".repeat(18)}`;
+    const lines = wrapQuotationPdfText(font, description, 7, 244);
+
+    expect(lines.length).toBeGreaterThan(3);
+    expect(lines.every((line) => font.widthOfTextAtSize(line, 7) <= 244)).toBe(true);
+    expect(lines.some((line) => line.endsWith("+") || line.endsWith("/"))).toBe(true);
+  });
+
   it("renders a saved GST breakdown from the stored quote snapshot", async () => {
     currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
     quoteRepository.getQuote.mockResolvedValue({
@@ -68,7 +82,13 @@ describe("quotation PDF route", () => {
       total: 118,
       date: "2026-11-09",
       ownerId: "U1",
-      items: [{ model: "Equipment", unit: "Nos", qty: 1, price: 100 }],
+      items: [{
+        model: "VRF-SET-001+VRF-SET-002/VRF-SET-003",
+        description: "Long equipment specification ".repeat(16),
+        unit: "Set",
+        qty: 1,
+        price: 100,
+      }],
       gstBreakdown: {
         subtotal: 100, discount: 0, gst: 18, total: 118, rate: 0.18,
         partA: { subtotal: 100, discount: 0, gst: 18, total: 118 },
@@ -76,6 +96,7 @@ describe("quotation PDF route", () => {
       },
     });
     const { POST } = await import("@/app/api/quotations/pdf/route");
+    const drawText = vi.spyOn(PDFPage.prototype, "drawText");
     const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
       method: "POST",
       body: JSON.stringify({
@@ -89,6 +110,13 @@ describe("quotation PDF route", () => {
     expect(response.status).toBe(200);
     const pdfBytes = Buffer.from(await response.arrayBuffer());
     expect(pdfBytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
+    const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(renderedText).toContain("Nos");
+    expect(renderedText).not.toContain("Set");
+    expect(renderedText).toContain("Taxes: GST @ 18% extra, as shown above");
+    expect(renderedText).toContain("GST @ 18%");
+    expect(drawText.mock.calls.filter(([value]) => String(value).includes("Long equipment")).length).toBeGreaterThan(1);
+    drawText.mockRestore();
   });
 
   it("allows saved quote PDFs to use mapped line snapshots without product IDs", () => {
