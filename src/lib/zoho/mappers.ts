@@ -76,9 +76,10 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
         const discount = number(record, "discount");
         const gst = number(record, "gst");
         const total = number(record, "total");
+        const gstIncluded = number(record, "gstIncluded");
         return subtotal === undefined || discount === undefined || gst === undefined || total === undefined
           ? undefined
-          : { subtotal, discount, gst, total };
+          : { subtotal, discount, gst, total, ...(gstIncluded !== undefined ? { gstIncluded } : {}) };
       };
       let gstBreakdown: QuoteGstBreakdown | undefined;
       if (gstValue && typeof gstValue === "object") {
@@ -88,7 +89,26 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
         const partA = totals(record.partA);
         const partB = totals(record.partB);
         if (base && rate !== undefined && partA && partB) {
-          gstBreakdown = { ...base, rate, partA, partB };
+          const zohoRecord = record.zoho && typeof record.zoho === "object"
+            ? record.zoho as Record<string, unknown>
+            : undefined;
+          const zohoSubtotal = zohoRecord ? number(zohoRecord, "subtotal") : undefined;
+          const zohoDiscount = zohoRecord ? number(zohoRecord, "discount") : undefined;
+          const zohoTax = zohoRecord ? number(zohoRecord, "tax") : undefined;
+          const zohoAdjustment = zohoRecord ? number(zohoRecord, "adjustment") : undefined;
+          const partAGstMode = record.partAGstMode === "included" || record.partAGstMode === "extra"
+            ? record.partAGstMode
+            : undefined;
+          gstBreakdown = {
+            ...base,
+            rate,
+            partA,
+            partB,
+            ...(partAGstMode ? { partAGstMode } : {}),
+            ...(zohoSubtotal !== undefined && zohoDiscount !== undefined && zohoTax !== undefined && zohoAdjustment !== undefined
+              ? { zoho: { subtotal: zohoSubtotal, discount: zohoDiscount, tax: zohoTax, adjustment: zohoAdjustment } }
+              : {}),
+          };
         }
       }
       return {

@@ -1619,10 +1619,10 @@ export const zohoRepository: CrmRepository = {
       Subject: `Offer - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
       [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata),
-      Sub_Total: totals.subtotal,
-      Discount: totals.discount,
-      Tax: totals.gst,
-      Adjustment: 0,
+      Sub_Total: totals.zoho.subtotal,
+      Discount: totals.zoho.discount,
+      Tax: totals.zoho.tax,
+      Adjustment: totals.zoho.adjustment,
     };
     if (snapshotField?.api_name) quoteRecord[snapshotField.api_name] = customerSnapshot;
     else if (schema.fieldNames.has("Description") && schema.fieldsByName.get("Description")?.read_only !== true) {
@@ -1747,10 +1747,10 @@ export const zohoRepository: CrmRepository = {
             operation: "POST /Quotes",
             field: error.field ?? error.details?.api_name ?? error.details?.json_path,
             code: error.code,
-            gstAmount: totals.gst,
+            gstAmount: totals.zoho.tax,
             quotePayloadKeys: Object.keys(quoteRecord),
           });
-          const fallbackRecord: Record<string, unknown> = { ...quoteRecord, Adjustment: totals.gst };
+          const fallbackRecord: Record<string, unknown> = { ...quoteRecord, Adjustment: totals.zoho.tax };
           delete fallbackRecord.Tax;
           return zohoWrite("POST", "/Quotes", fallbackRecord);
         }

@@ -8,7 +8,7 @@ import { crm } from "@/lib/crm";
 import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT } from "@/lib/company";
-import { formatINR, GST_RATE, quoteTotals, todayIST, visibleFor } from "@/lib/domain";
+import { formatINR, GST_RATE, quotationGstBreakdown, todayIST, visibleFor, type QuoteGstTotals } from "@/lib/domain";
 import { quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 import { quotationRequestSchema } from "@/lib/quotation-request";
@@ -114,10 +114,12 @@ export async function POST(request: NextRequest) {
   const legacySubtotal = items.reduce((sum, item) => sum + item.qty * item.price, 0);
   const legacyDiscount = items.reduce((sum, item) => sum + (item.discount ?? 0), 0);
   const totals = savedQuote?.gstBreakdown ?? (isLegacySavedQuote
-    ? { subtotal: legacySubtotal, discount: legacyDiscount, gst: 0, total: legacySubtotal - legacyDiscount }
+    ? { subtotal: legacySubtotal, discount: legacyDiscount, gst: 0, total: savedQuote.total }
     : presentation.totals);
-  const partATotals = savedQuote?.gstBreakdown?.partA ?? quoteTotals(presentation.equipment);
-  const partBTotals = savedQuote?.gstBreakdown?.partB ?? quoteTotals(presentation.ancillary);
+  const isPartTaxConvention = !savedQuote || !!savedQuote.gstBreakdown?.partAGstMode;
+  const computedBreakdown = quotationGstBreakdown(items);
+  const partATotals = savedQuote?.gstBreakdown?.partA ?? computedBreakdown.partA;
+  const partBTotals = savedQuote?.gstBreakdown?.partB ?? computedBreakdown.partB;
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
@@ -257,16 +259,25 @@ export async function POST(request: NextRequest) {
     if (y - requiredHeight < bottomMargin) startNewPage(title);
   };
 
-  const partBlockRows = (partTotals: typeof totals, partName: string, gstNote: string) => isLegacySavedQuote
+  const partBlockRows = (partTotals: QuoteGstTotals, partName: string, gstNote: string) => isLegacySavedQuote
     ? [
         ["Basic Sub Total", partTotals.subtotal - partTotals.discount, true] as const,
         [gstNote, null, false] as const,
       ]
-    : [
+    : !isPartTaxConvention ? [
         [`Subtotal - ${partName}`, partTotals.subtotal, true] as const,
         ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as const] : []),
         [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
         [`Total - ${partName}`, partTotals.total, true] as const,
+      ] : partName === "Part A" ? [
+        [COMPANY.partAGstMode === "included" ? "Part A total (GST included)" : "Part A subtotal", partTotals.total, true] as const,
+        ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as const] : []),
+        ...((partTotals.gstIncluded ?? 0) > 0 ? [["GST included in Part A (information)", partTotals.gstIncluded ?? 0, false] as const] : []),
+      ] : [
+        ["Part B subtotal", partTotals.subtotal, true] as const,
+        ...(partTotals.discount > 0 ? [["Part B discount", -partTotals.discount, false] as const] : []),
+        [`Part B GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
+        ["Part B total", partTotals.total, true] as const,
       ];
 
   const drawTotalsBlock = (rows: readonly (readonly [string, number | null, boolean])[], rowHeight = 15) => {
@@ -333,11 +344,19 @@ export async function POST(request: NextRequest) {
   if (ancillary.length) drawPart(ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, partBTotals);
   const finalRows: (readonly [string, number | null, boolean])[] = isLegacySavedQuote
     ? [["TOTAL PART A + B", totals.total, true]]
-    : [
+    : !isPartTaxConvention ? [
         ["TOTAL PART A + B", totals.total, true],
         ["Subtotal", totals.subtotal, false],
         ...(totals.discount > 0 ? [["Discount", -totals.discount, false] as const] : []),
         [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
+        ["Grand Total", totals.total, true],
+      ] : [
+        [COMPANY.partAGstMode === "included" ? "Part A total (GST included)" : "Part A subtotal", partATotals.total, false],
+        ...(partBTotals.subtotal > 0 ? [
+          ["Part B subtotal", partBTotals.subtotal, false] as const,
+          ...(partBTotals.discount > 0 ? [["Part B discount", -partBTotals.discount, false] as const] : []),
+          [`Part B GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partBTotals.gst, false] as const,
+        ] : []),
         ["Grand Total", totals.total, true],
       ];
   drawTotalsBlock(finalRows, 16);

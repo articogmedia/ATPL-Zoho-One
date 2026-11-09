@@ -1,4 +1,4 @@
-import { quoteTotals } from "@/lib/domain";
+import { quotationGstBreakdown } from "@/lib/domain";
 
 export function canCreateQuotationPdf(
   quotation: { offerNo: string; customer: string; leadId: string; items?: readonly { productId?: string }[] },
@@ -30,13 +30,13 @@ export function splitQuotationItems(items: readonly QuotationPresentationItem[])
 }
 
 export function partTotal(items: readonly QuotationPresentationItem[]) {
-  return quoteTotals([...items]).total;
+  return quotationGstBreakdown([...items]).total;
 }
 
 export function quotationPresentation(items: readonly QuotationPresentationItem[]) {
   const parts = splitQuotationItems(items);
   const totalUnits = items.reduce((sum, item) => sum + item.qty, 0);
-  const totals = quoteTotals([...items]);
+  const totals = quotationGstBreakdown([...items]);
   return { ...parts, totalUnits, totals, grandTotal: totals.total };
 }
 

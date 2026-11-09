@@ -50,6 +50,71 @@ const quoteFields = {
 };
 
 describe("Zoho quotation creation", () => {
+  it("writes formula-compatible Zoho totals for Part A, Part B, and mixed quotations", async () => {
+    const payloads: Record<string, unknown>[] = [];
+    let quoteId = 0;
+    const write = vi.fn(async (_method: string, path: string, payload: Record<string, unknown>) => {
+      if (path === "/Quotes") {
+        payloads.push(payload);
+        quoteId += 1;
+        return `quote-${quoteId}`;
+      }
+      return "side-effect";
+    });
+    const zoho = vi.fn(async (_method: string, path: string) => {
+      if (path === "/settings/fields") return quoteFields;
+      if (path === "/settings/layouts") return { layouts: [] };
+      if (path === "/Leads/lead-1") return { data: [leadRecord] };
+      if (path === "/users") return { users: userRecords };
+      if (path === "/Quotes") return { data: [], info: { more_records: false } };
+      return {};
+    });
+    const list = vi.fn(async (module: string) => module === "Products" ? [
+      { id: "part-a", Product_Name: "Samsung 4 Way 3.0 TR", Unit_Price: 112240, Usage_Unit: "Nos", Product_Active: true },
+      { id: "part-b", Product_Name: "B - Installation", Unit_Price: 1000, Usage_Unit: "Nos", Product_Active: true },
+    ] : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZOHO_CRM_API_VERSION: "v6",
+      ZohoError: class extends Error {},
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho,
+      zohoList: list,
+      zohoWrite: write,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const actor = { id: "manager-1", name: "Manager", role: "Manager" as const };
+    const quotes = [
+      { offerNo: "301/26-27", items: [{ productId: "part-a", qty: 1, discount: 2240 }], expected: 110000 },
+      { offerNo: "302/26-27", items: [{ productId: "part-b", qty: 1, discount: 100 }], expected: 1062 },
+      { offerNo: "303/26-27", items: [
+        { productId: "part-a", qty: 1, discount: 2240 },
+        { productId: "part-b", qty: 1, discount: 100 },
+      ], expected: 111062 },
+    ];
+
+    for (const quote of quotes) {
+      const saved = await zohoRepository.createQuote({
+        offerNo: quote.offerNo,
+        leadId: "lead-1",
+        subject: "Mixed GST quotation",
+        items: quote.items,
+      }, actor, "Manager");
+      expect(saved.total).toBe(quote.expected);
+    }
+
+    expect(payloads).toHaveLength(3);
+    for (let index = 0; index < payloads.length; index += 1) {
+      const payload = payloads[index]!;
+      const zohoTotal = Number(payload.Sub_Total) - Number(payload.Discount)
+        + Number(payload.Tax) + Number(payload.Adjustment);
+      expect(Math.round(zohoTotal * 100) / 100).toBe(quotes[index]!.expected);
+      expect(payload).not.toHaveProperty("Grand_Total");
+    }
+    expect(payloads[0]).toMatchObject({ Sub_Total: 95118.64, Discount: 2240, Tax: 17121.36, Adjustment: 0 });
+    expect(payloads[1]).toMatchObject({ Sub_Total: 1000, Discount: 118, Tax: 180, Adjustment: 0 });
+    expect(payloads[2]).toMatchObject({ Sub_Total: 96118.64, Discount: 2358, Tax: 17301.36, Adjustment: 0 });
+  });
+
   it("loads only the first quote page and does not request the complete leads list", async () => {
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") return { fields: quoteFields.fields };
@@ -457,11 +522,13 @@ describe("Zoho quotation creation", () => {
       subject: "Cassette AC quotation",
       items: [{ productId: "product-1", qty: 2, discount: 4000 }],
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
-      id: "quote-1", offerNo: "239/26-27", leadId: "lead-1", customer: "Customer Co", total: 283200,
+      id: "quote-1", offerNo: "239/26-27", leadId: "lead-1", customer: "Customer Co", total: 240000,
       gstBreakdown: {
-        subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18,
-        partA: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200 },
+        subtotal: 244000, discount: 4000, gst: 0, total: 240000, rate: 0.18,
+        partAGstMode: "included",
+        partA: { subtotal: 244000, discount: 4000, gst: 0, total: 240000, gstIncluded: 36610.17 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+        zoho: { subtotal: 206779.66, discount: 4000, tax: 37220.34, adjustment: 0 },
       },
     });
 
@@ -478,9 +545,9 @@ describe("Zoho quotation creation", () => {
         Total_After_Discount: 240000,
         Net_Total: 240000,
       }],
-      Sub_Total: 244000,
+      Sub_Total: 206779.66,
       Discount: 4000,
-      Tax: 43200,
+      Tax: 37220.34,
       Adjustment: 0,
     }));
     expect(infoLog).toHaveBeenCalledWith("[zoho] creating quote", expect.objectContaining({
@@ -502,7 +569,12 @@ describe("Zoho quotation creation", () => {
     expect(savedLine).not.toHaveProperty("Line_Tax");
     expect(JSON.parse(String(writtenRecord.Description))).toMatchObject({
       leadId: "lead-1", name: "Customer", phone: "9876543210", company: "Customer Co",
-      gstBreakdown: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18 },
+      gstBreakdown: {
+        subtotal: 244000, discount: 4000, gst: 0, total: 240000, rate: 0.18, partAGstMode: "included",
+        partA: { subtotal: 244000, discount: 4000, gst: 0, total: 240000, gstIncluded: 36610.17 },
+        partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+        zoho: { subtotal: 206779.66, discount: 4000, tax: 37220.34, adjustment: 0 },
+      },
     });
     expect(errorLog).toHaveBeenCalledWith("[zoho] primary change succeeded but history note failed", expect.objectContaining({
       action: "create quote",
@@ -573,19 +645,24 @@ describe("Zoho quotation creation", () => {
       items: [{ productId: "product-1", qty: 2, discount: 4000 }],
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
       id: "quote-tax-fallback",
-      total: 283200,
-      gstBreakdown: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200 },
+      total: 240000,
+      gstBreakdown: {
+        subtotal: 244000, discount: 4000, gst: 0, total: 240000, rate: 0.18, partAGstMode: "included",
+        partA: { subtotal: 244000, discount: 4000, gst: 0, total: 240000, gstIncluded: 36610.17 },
+        partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+        zoho: { subtotal: 206779.66, discount: 4000, tax: 37220.34, adjustment: 0 },
+      },
     });
 
     expect(postPayloads).toHaveLength(2);
-    expect(postPayloads[0]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Tax: 43200, Adjustment: 0 });
+    expect(postPayloads[0]).toMatchObject({ Sub_Total: 206779.66, Discount: 4000, Tax: 37220.34, Adjustment: 0 });
     expect(postPayloads[0]).not.toHaveProperty("Grand_Total");
-    expect(postPayloads[1]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Adjustment: 43200 });
+    expect(postPayloads[1]).toMatchObject({ Sub_Total: 206779.66, Discount: 4000, Adjustment: 37220.34 });
     expect(postPayloads[1]).not.toHaveProperty("Tax");
     expect(postPayloads[1]).not.toHaveProperty("Grand_Total");
     expect(errorLog).toHaveBeenCalledWith(
       "[zoho] Quotes Tax field was rejected; retrying quote with GST as Adjustment to preserve the portal total",
-      expect.objectContaining({ field: "Tax", gstAmount: 43200 }),
+      expect.objectContaining({ field: "Tax", gstAmount: 37220.34 }),
     );
     errorLog.mockRestore();
   });

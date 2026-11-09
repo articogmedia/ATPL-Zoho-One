@@ -124,10 +124,33 @@ describe("offer numbering", () => {
       { model: "Equipment", unit: "Nos", qty: 1, price: 100.01 },
       { model: "B - Installation", unit: "Nos", qty: 1, price: 50.03, discount: 0.02 },
     ])).toEqual({
-      subtotal: 150.04, discount: 0.02, gst: 27, total: 177.02, rate: 0.18,
-      partA: { subtotal: 100.01, discount: 0, gst: 18, total: 118.01 },
+      subtotal: 150.04, discount: 0.02, gst: 9, total: 159.02, rate: 0.18,
+      partAGstMode: "included",
+      partA: { subtotal: 100.01, discount: 0, gst: 0, total: 100.01, gstIncluded: 15.26 },
       partB: { subtotal: 50.03, discount: 0.02, gst: 9, total: 59.01 },
+      zoho: { subtotal: 134.78, discount: 0.02, tax: 24.26, adjustment: 0 },
     });
+  });
+  it.each([
+    ["Part A only", [{ model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240 }], 112240],
+    ["Part B only", [{ model: "B - Installation", unit: "Nos", qty: 1, price: 1000 }], 1180],
+    ["mixed Part A and Part B", [
+      { model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240, discount: 2240 },
+      { model: "B - Installation", unit: "Nos", qty: 1, price: 1000, discount: 100 },
+    ], 110000 + 900 + 162],
+  ] as const)("keeps Zoho's formula equal to the portal total for %s", (_label, items, expectedTotal) => {
+    const breakdown = quotationGstBreakdown(items);
+    const { subtotal, discount, tax, adjustment } = breakdown.zoho;
+    expect(breakdown.total).toBe(expectedTotal);
+    expect(Math.round((subtotal - discount + tax + adjustment) * 100) / 100).toBe(breakdown.total);
+  });
+  it("calculates included Part A GST as information without adding it to the price", () => {
+    const breakdown = quotationGstBreakdown([
+      { model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240 },
+    ]);
+    expect(breakdown.partA.total).toBe(112240);
+    expect(breakdown.partA.gstIncluded).toBe(17121.36);
+    expect(breakdown.total).toBe(112240);
   });
   it("derives the Indian financial year", () => {
     expect(financialYear("2026-10-29")).toBe("26-27");
