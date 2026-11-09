@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
   const totals = savedQuote?.gstBreakdown ?? (isLegacySavedQuote
     ? { subtotal: legacySubtotal, discount: legacyDiscount, gst: 0, total: savedQuote.total }
     : presentation.totals);
-  const isPartTaxConvention = !savedQuote || !!savedQuote.gstBreakdown?.partAGstMode;
+  const isPartTaxConvention = !savedQuote || savedQuote.gstBreakdown?.partAGstMode === "extra";
   const computedBreakdown = quotationGstBreakdown(items);
   const partATotals = savedQuote?.gstBreakdown?.partA ?? computedBreakdown.partA;
   const partBTotals = savedQuote?.gstBreakdown?.partB ?? computedBreakdown.partB;
@@ -269,15 +269,10 @@ export async function POST(request: NextRequest) {
         ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as const] : []),
         [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
         [`Total - ${partName}`, partTotals.total, true] as const,
-      ] : partName === "Part A" ? [
-        [COMPANY.partAGstMode === "included" ? "Part A total (GST included)" : "Part A subtotal", partTotals.total, true] as const,
-        ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as const] : []),
-        ...((partTotals.gstIncluded ?? 0) > 0 ? [["GST included in Part A (information)", partTotals.gstIncluded ?? 0, false] as const] : []),
       ] : [
-        ["Part B subtotal", partTotals.subtotal, true] as const,
-        ...(partTotals.discount > 0 ? [["Part B discount", -partTotals.discount, false] as const] : []),
-        [`Part B GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
-        ["Part B total", partTotals.total, true] as const,
+        [`${partName} subtotal`, partTotals.subtotal, true] as const,
+        [`${partName} GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
+        [`${partName} total`, partTotals.total, true] as const,
       ];
 
   const drawTotalsBlock = (rows: readonly (readonly [string, number | null, boolean])[], rowHeight = 15) => {
@@ -351,12 +346,8 @@ export async function POST(request: NextRequest) {
         [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
         ["Grand Total", totals.total, true],
       ] : [
-        [COMPANY.partAGstMode === "included" ? "Part A total (GST included)" : "Part A subtotal", partATotals.total, false],
-        ...(partBTotals.subtotal > 0 ? [
-          ["Part B subtotal", partBTotals.subtotal, false] as const,
-          ...(partBTotals.discount > 0 ? [["Part B discount", -partBTotals.discount, false] as const] : []),
-          [`Part B GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partBTotals.gst, false] as const,
-        ] : []),
+        ["Subtotal", totals.subtotal, false],
+        [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
         ["Grand Total", totals.total, true],
       ];
   drawTotalsBlock(finalRows, 16);

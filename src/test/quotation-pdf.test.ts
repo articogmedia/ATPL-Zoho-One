@@ -54,10 +54,10 @@ describe("quotation PDF route", () => {
       model: `Product ${index + 1}`, unit: "Nos", qty: 1, price: 1000,
     }));
     const presentation = quotationPresentation(items);
-    expect(presentation.grandTotal).toBe(25000);
+    expect(presentation.grandTotal).toBe(29500);
     expect(presentation.totals).toMatchObject({
-      subtotal: 25000, discount: 0, gst: 0, total: 25000,
-      partA: { total: 25000, gstIncluded: 3813.56 },
+      subtotal: 25000, discount: 0, gst: 4500, total: 29500,
+      partA: { subtotal: 25000, gst: 4500, total: 29500 },
     });
     expect(needsPdfTotalsPage(25, 120)).toBe(true);
   });
@@ -93,10 +93,10 @@ describe("quotation PDF route", () => {
         price: 100,
       }],
       gstBreakdown: {
-        subtotal: 100, discount: 0, gst: 0, total: 100, rate: 0.18, partAGstMode: "included",
-        partA: { subtotal: 100, discount: 0, gst: 0, total: 100, gstIncluded: 15.25 },
+        subtotal: 100, discount: 0, gst: 18, total: 118, rate: 0.18, partAGstMode: "extra",
+        partA: { subtotal: 100, discount: 0, gst: 18, total: 118 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 84.75, discount: 0, tax: 15.25, adjustment: 0 },
+        zoho: { subtotal: 100, discount: 0, tax: 18, adjustment: 0 },
       },
     });
     const { POST } = await import("@/app/api/quotations/pdf/route");
@@ -117,21 +117,21 @@ describe("quotation PDF route", () => {
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
     expect(renderedText).toContain("Nos");
     expect(renderedText).not.toContain("Set");
-    expect(renderedText).toContain("Taxes: GST @ 18% extra on Part B, as shown above");
+    expect(renderedText).toContain("Taxes: GST @ 18% extra on all items, as shown above");
     expect(renderedText).toContain("GST @ 18%");
     expect(drawText.mock.calls.filter(([value]) => String(value).includes("Long equipment")).length).toBeGreaterThan(1);
     drawText.mockRestore();
   });
 
-  it("renders included Part A and extra Part B totals without taxing Part A twice", async () => {
+  it("renders GST separately for Part A and Part B", async () => {
     currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
     quoteRepository.getLead.mockResolvedValue({
       id: "L1", name: "Customer", company: "Customer Co", phone: "9876543210", area: "", address: "",
       source: "Direct Call", status: "Fresh Lead", assignedTo: null, remarks: "", createdOn: "2026-11-09", touchedBy: [],
     });
     quoteRepository.listProducts.mockResolvedValue([
-      { id: "A1", model: "Samsung 4 Way 3.0 TR", unit: "Nos", price: 112240 },
-      { id: "B1", model: "B - Installation", unit: "Nos", price: 1000 },
+      { id: "A1", model: "Samsung 4 Way 3.0 TR", unit: "Nos", price: 59724 },
+      { id: "B1", model: "B - Installation", unit: "Nos", price: 1220 },
     ]);
     const { POST } = await import("@/app/api/quotations/pdf/route");
     const drawText = vi.spyOn(PDFPage.prototype, "drawText");
@@ -150,14 +150,21 @@ describe("quotation PDF route", () => {
 
     expect(response.status).toBe(200);
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
-    expect(renderedText).toContain("Part A total (GST included)");
-    expect(renderedText).toContain("Rs. 1,12,240");
+    expect(renderedText).toContain("Part A subtotal");
+    expect(renderedText).toContain("Rs. 59,724");
+    expect(renderedText).toContain("Part A GST @ 18%");
+    expect(renderedText).toContain("Rs. 10,750.32");
+    expect(renderedText).toContain("Part A total");
+    expect(renderedText).toContain("Rs. 70,474.32");
     expect(renderedText).toContain("Part B subtotal");
-    expect(renderedText).toContain("Rs. 1,000");
+    expect(renderedText).toContain("Rs. 1,220");
     expect(renderedText).toContain("Part B GST @ 18%");
-    expect(renderedText).toContain("Rs. 180");
+    expect(renderedText).toContain("Rs. 219.60");
     expect(renderedText).toContain("Grand Total");
-    expect(renderedText).toContain("Rs. 1,13,420");
+    expect(renderedText).toContain("Rs. 60,944");
+    expect(renderedText).toContain("Rs. 10,969.92");
+    expect(renderedText).toContain("Rs. 71,913.92");
+    expect(renderedText).not.toContain("GST included");
     drawText.mockRestore();
   });
 

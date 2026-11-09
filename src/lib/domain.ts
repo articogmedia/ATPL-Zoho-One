@@ -144,7 +144,7 @@ export type Quotation = {
   items?: QuoteItem[];
   gstBreakdown?: QuoteGstBreakdown;
 };
-export type QuoteGstTotals = { subtotal: number; discount: number; gst: number; total: number; gstIncluded?: number };
+export type QuoteGstTotals = { subtotal: number; discount: number; gst: number; total: number };
 export type QuoteGstBreakdown = QuoteGstTotals & {
   rate: number;
   partAGstMode?: "included" | "extra";
@@ -242,13 +242,13 @@ export function formatINR(n: number): string {
 }
 
 export function quoteTotals(items: readonly QuoteItem[]): QuoteGstTotals {
-  const subtotal = roundCurrency(items.reduce((sum, item) => sum + item.qty * item.price, 0));
+  const gross = roundCurrency(items.reduce((sum, item) => sum + item.qty * item.price, 0));
   const discount = roundCurrency(items.reduce((sum, item) =>
     sum + Math.min(item.qty * item.price, item.discount ?? 0), 0,
   ));
-  const taxable = roundCurrency(subtotal - discount);
-  const gst = roundCurrency(taxable * GST_RATE);
-  return { subtotal, discount, gst, total: roundCurrency(taxable + gst) };
+  const subtotal = roundCurrency(gross - discount);
+  const gst = roundCurrency(subtotal * GST_RATE);
+  return { subtotal, discount, gst, total: roundCurrency(subtotal + gst) };
 }
 
 export function quotationGstBreakdown(items: readonly QuoteItem[]): QuoteGstBreakdown & {
@@ -256,42 +256,21 @@ export function quotationGstBreakdown(items: readonly QuoteItem[]): QuoteGstBrea
 } {
   const equipment = items.filter((item) => !/^B\s*-\s*/i.test(item.model.trim()));
   const ancillary = items.filter((item) => /^B\s*-\s*/i.test(item.model.trim()));
-  const partTotals = (partItems: readonly QuoteItem[], gstIncluded: boolean): QuoteGstTotals => {
-    const subtotal = roundCurrency(partItems.reduce((sum, item) => sum + item.qty * item.price, 0));
-    const discount = roundCurrency(partItems.reduce((sum, item) =>
-      sum + Math.min(item.qty * item.price, item.discount ?? 0), 0,
-    ));
-    const taxable = roundCurrency(subtotal - discount);
-    const included = gstIncluded && COMPANY.partAGstMode === "included";
-    const gst = included ? 0 : roundCurrency(taxable * GST_RATE);
-    const includedGst = included ? roundCurrency(taxable - taxable / (1 + GST_RATE)) : 0;
-    return {
-      subtotal,
-      discount,
-      gst,
-      total: roundCurrency(taxable + gst),
-      ...(gstIncluded ? { gstIncluded: includedGst } : {}),
-    };
-  };
-  const partA = partTotals(equipment, true);
-  const partB = partTotals(ancillary, false);
+  const partA = quoteTotals(equipment);
+  const partB = quoteTotals(ancillary);
   const total = roundCurrency(partA.total + partB.total);
-  const zohoSubtotal = roundCurrency(
-    (COMPANY.partAGstMode === "included" ? partA.subtotal / (1 + GST_RATE) : partA.subtotal)
-      + partB.subtotal,
-  );
-  const zohoTax = roundCurrency(zohoSubtotal * GST_RATE);
-  const zohoDiscount = roundCurrency(zohoSubtotal + zohoTax - total);
+  const subtotal = roundCurrency(partA.subtotal + partB.subtotal);
+  const gst = roundCurrency(partA.gst + partB.gst);
   return {
-    subtotal: roundCurrency(partA.subtotal + partB.subtotal),
+    subtotal,
     discount: roundCurrency(partA.discount + partB.discount),
-    gst: roundCurrency(partA.gst + partB.gst),
+    gst,
     total,
     rate: GST_RATE,
     partAGstMode: COMPANY.partAGstMode,
     partA,
     partB,
-    zoho: { subtotal: zohoSubtotal, discount: zohoDiscount, tax: zohoTax, adjustment: 0 },
+    zoho: { subtotal, discount: 0, tax: gst, adjustment: 0 },
   };
 }
 

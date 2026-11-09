@@ -111,7 +111,7 @@ describe("offer numbering", () => {
     expect(quoteTotals([
       { model: "AC", unit: "Nos", qty: 2, price: 50000, discount: 5000 },
       { model: "Stand", unit: "Nos", qty: 1, price: 10000, discount: 0 },
-    ])).toEqual({ subtotal: 110000, discount: 5000, gst: 18900, total: 123900 });
+    ])).toEqual({ subtotal: 105000, discount: 5000, gst: 18900, total: 123900 });
   });
   it("rounds GST to two decimals and provides totals for both quotation parts", () => {
     expect(quoteTotals([{ model: "Fractional item", unit: "Nos", qty: 1, price: 19.99 }])).toEqual({
@@ -124,33 +124,39 @@ describe("offer numbering", () => {
       { model: "Equipment", unit: "Nos", qty: 1, price: 100.01 },
       { model: "B - Installation", unit: "Nos", qty: 1, price: 50.03, discount: 0.02 },
     ])).toEqual({
-      subtotal: 150.04, discount: 0.02, gst: 9, total: 159.02, rate: 0.18,
-      partAGstMode: "included",
-      partA: { subtotal: 100.01, discount: 0, gst: 0, total: 100.01, gstIncluded: 15.26 },
-      partB: { subtotal: 50.03, discount: 0.02, gst: 9, total: 59.01 },
-      zoho: { subtotal: 134.78, discount: 0.02, tax: 24.26, adjustment: 0 },
+      subtotal: 150.02, discount: 0.02, gst: 27, total: 177.02, rate: 0.18,
+      partAGstMode: "extra",
+      partA: { subtotal: 100.01, discount: 0, gst: 18, total: 118.01 },
+      partB: { subtotal: 50.01, discount: 0.02, gst: 9, total: 59.01 },
+      zoho: { subtotal: 150.02, discount: 0, tax: 27, adjustment: 0 },
     });
   });
   it.each([
-    ["Part A only", [{ model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240 }], 112240],
+    ["Part A only", [{ model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240 }], 132443.2],
     ["Part B only", [{ model: "B - Installation", unit: "Nos", qty: 1, price: 1000 }], 1180],
     ["mixed Part A and Part B", [
       { model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240, discount: 2240 },
       { model: "B - Installation", unit: "Nos", qty: 1, price: 1000, discount: 100 },
-    ], 110000 + 900 + 162],
+    ], 130862],
   ] as const)("keeps Zoho's formula equal to the portal total for %s", (_label, items, expectedTotal) => {
     const breakdown = quotationGstBreakdown(items);
     const { subtotal, discount, tax, adjustment } = breakdown.zoho;
     expect(breakdown.total).toBe(expectedTotal);
     expect(Math.round((subtotal - discount + tax + adjustment) * 100) / 100).toBe(breakdown.total);
   });
-  it("calculates included Part A GST as information without adding it to the price", () => {
+  it("applies GST separately to Part A and Part B using the shared total", () => {
     const breakdown = quotationGstBreakdown([
-      { model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240 },
+      { model: "Samsung 4 Way", unit: "Nos", qty: 1, price: 59724 },
+      { model: "B - Installation", unit: "Nos", qty: 1, price: 1220 },
     ]);
-    expect(breakdown.partA.total).toBe(112240);
-    expect(breakdown.partA.gstIncluded).toBe(17121.36);
-    expect(breakdown.total).toBe(112240);
+    expect(breakdown).toMatchObject({
+      subtotal: 60944,
+      gst: 10969.92,
+      total: 71913.92,
+      partA: { subtotal: 59724, gst: 10750.32, total: 70474.32 },
+      partB: { subtotal: 1220, gst: 219.6, total: 1439.6 },
+      zoho: { subtotal: 60944, discount: 0, tax: 10969.92, adjustment: 0 },
+    });
   });
   it("derives the Indian financial year", () => {
     expect(financialYear("2026-10-29")).toBe("26-27");

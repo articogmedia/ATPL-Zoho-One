@@ -959,15 +959,15 @@ function ProductPicker({ products, value, onChange, label, isManager, refreshing
 }
 
 function Totals({ t }: { t: QuoteGstBreakdown }) {
-  const partATotalLabel = COMPANY.partAGstMode === "included" ? "Part A total (GST included)" : "Part A subtotal";
   return (
     <dl className="ml-auto max-w-sm space-y-1 rounded-lg bg-secondary p-4 text-secondary-foreground">
-      <div className="flex justify-between"><dt>{partATotalLabel}</dt><dd>{formatINR(t.partA.total)}</dd></div>
-      {(t.partA.gstIncluded ?? 0) > 0 && <div className="flex justify-between text-xs"><dt>GST included in Part A (information)</dt><dd>{formatINR(t.partA.gstIncluded ?? 0)}</dd></div>}
+      <div className="flex justify-between"><dt>Part A subtotal</dt><dd>{formatINR(t.partA.subtotal)}</dd></div>
+      <div className="flex justify-between"><dt>Part A GST @ {Math.round(GST_RATE * 100)}%</dt><dd>{formatINR(t.partA.gst)}</dd></div>
+      <div className="flex justify-between font-semibold"><dt>Part A total</dt><dd>{formatINR(t.partA.total)}</dd></div>
       {t.partB.subtotal > 0 && <>
         <div className="flex justify-between"><dt>Part B subtotal</dt><dd>{formatINR(t.partB.subtotal)}</dd></div>
-        {t.partB.discount > 0 && <div className="flex justify-between"><dt>Part B discount</dt><dd>-{formatINR(t.partB.discount)}</dd></div>}
         <div className="flex justify-between"><dt>Part B GST @ {Math.round(GST_RATE * 100)}%</dt><dd>{formatINR(t.partB.gst)}</dd></div>
+        <div className="flex justify-between font-semibold"><dt>Part B total</dt><dd>{formatINR(t.partB.total)}</dd></div>
       </>}
       <div className="flex justify-between text-lg font-bold"><dt>Grand Total</dt><dd>{formatINR(t.total)}</dd></div>
     </dl>
@@ -989,8 +989,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
   readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; savedTotal?: number; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown; status?: string;
 }) {
   const isLegacySavedQuote = !!savedQuoteId && !gstBreakdown;
-  const usesPartTaxConvention = !!gstBreakdown?.partAGstMode;
-  const partATotalLabel = gstBreakdown?.partAGstMode === "included" ? "Part A total (GST included)" : "Part A subtotal";
+  const usesPartTaxConvention = gstBreakdown?.partAGstMode === "extra";
   const t: QuoteGstTotals = gstBreakdown ?? (isLegacySavedQuote
     ? {
         subtotal: items.reduce((sum, item) => sum + item.qty * item.price, 0),
@@ -1054,14 +1053,13 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           </div> : <div className="mt-1 space-y-1 border border-border p-2 text-sm">
             {title.includes("PART A")
               ? <>
-                  {partTotals.discount > 0 && <div className="grid grid-cols-2"><span>Discount</span><span className="text-right">-{offerMoney(partTotals.discount)}</span></div>}
-                  <div className="grid grid-cols-2 font-bold"><span>{partATotalLabel}</span><span className="text-right">{offerMoney(partTotals.total)}</span></div>
-                  {(partTotals.gstIncluded ?? 0) > 0 && <div className="grid grid-cols-2 text-xs"><span>GST included in Part A (information)</span><span className="text-right">{offerMoney(partTotals.gstIncluded ?? 0)}</span></div>}
+                  <div className="grid grid-cols-2 font-semibold"><span>Part A subtotal</span><span className="text-right">{offerMoney(partTotals.subtotal)}</span></div>
+                  <div className="grid grid-cols-2"><span>Part A GST @ {Math.round((gstBreakdown?.rate ?? GST_RATE) * 100)}%</span><span className="text-right">{offerMoney(partTotals.gst)}</span></div>
+                  <div className="grid grid-cols-2 border-t border-border pt-1 font-bold"><span>Part A total</span><span className="text-right">{offerMoney(partTotals.total)}</span></div>
                 </>
               : <>
-                  <div className="grid grid-cols-2 font-semibold"><span>Part B subtotal</span><span className="text-right">{offerMoney(partTotals.subtotal)}</span></div>
-                  {partTotals.discount > 0 && <div className="grid grid-cols-2"><span>Part B discount</span><span className="text-right">-{offerMoney(partTotals.discount)}</span></div>}
-                  <div className="grid grid-cols-2"><span>Part B GST @ {Math.round((gstBreakdown?.rate ?? GST_RATE) * 100)}%</span><span className="text-right">{offerMoney(partTotals.gst)}</span></div>
+                <div className="grid grid-cols-2 font-semibold"><span>Part B subtotal</span><span className="text-right">{offerMoney(partTotals.subtotal)}</span></div>
+                <div className="grid grid-cols-2"><span>Part B GST @ {Math.round((gstBreakdown?.rate ?? GST_RATE) * 100)}%</span><span className="text-right">{offerMoney(partTotals.gst)}</span></div>
                   <div className="grid grid-cols-2 border-t border-border pt-1 font-bold"><span>Part B total</span><span className="text-right">{offerMoney(partTotals.total)}</span></div>
                 </>}
           </div>}
@@ -1306,12 +1304,8 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
           </div>
           <div className="text-right">
             {usesPartTaxConvention ? <>
-              <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>{partATotalLabel}</span><span>{offerMoney(gstBreakdown?.partA.total ?? 0)}</span></div>
-              {gstBreakdown && gstBreakdown.partB.subtotal > 0 && <>
-                <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Part B subtotal</span><span>{offerMoney(gstBreakdown.partB.subtotal)}</span></div>
-                {gstBreakdown.partB.discount > 0 && <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Part B discount</span><span>-{offerMoney(gstBreakdown.partB.discount)}</span></div>}
-                <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Part B GST @ {Math.round(gstBreakdown.rate * 100)}%</span><span>{offerMoney(gstBreakdown.partB.gst)}</span></div>
-              </>}
+              <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Subtotal</span><span>{offerMoney(t.subtotal)}</span></div>
+              <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>GST @ {Math.round((gstBreakdown?.rate ?? GST_RATE) * 100)}%</span><span>{offerMoney(t.gst)}</span></div>
             </> : <>
               <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Subtotal</span><span>{offerMoney(t.subtotal)}</span></div>
               {!isLegacySavedQuote && t.discount > 0 && <div className="grid grid-cols-[1fr_auto] gap-6 py-1"><span>Discount</span><span>-{offerMoney(t.discount)}</span></div>}

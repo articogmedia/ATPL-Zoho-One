@@ -84,12 +84,12 @@ describe("Zoho quotation creation", () => {
     const { zohoRepository } = await import("@/lib/zoho/repository");
     const actor = { id: "manager-1", name: "Manager", role: "Manager" as const };
     const quotes = [
-      { offerNo: "301/26-27", items: [{ productId: "part-a", qty: 1, discount: 2240 }], expected: 110000 },
+      { offerNo: "301/26-27", items: [{ productId: "part-a", qty: 1, discount: 2240 }], expected: 129800 },
       { offerNo: "302/26-27", items: [{ productId: "part-b", qty: 1, discount: 100 }], expected: 1062 },
       { offerNo: "303/26-27", items: [
         { productId: "part-a", qty: 1, discount: 2240 },
         { productId: "part-b", qty: 1, discount: 100 },
-      ], expected: 111062 },
+      ], expected: 130862 },
     ];
 
     for (const quote of quotes) {
@@ -110,9 +110,9 @@ describe("Zoho quotation creation", () => {
       expect(Math.round(zohoTotal * 100) / 100).toBe(quotes[index]!.expected);
       expect(payload).not.toHaveProperty("Grand_Total");
     }
-    expect(payloads[0]).toMatchObject({ Sub_Total: 95118.64, Discount: 2240, Tax: 17121.36, Adjustment: 0 });
-    expect(payloads[1]).toMatchObject({ Sub_Total: 1000, Discount: 118, Tax: 180, Adjustment: 0 });
-    expect(payloads[2]).toMatchObject({ Sub_Total: 96118.64, Discount: 2358, Tax: 17301.36, Adjustment: 0 });
+    expect(payloads[0]).toMatchObject({ Sub_Total: 110000, Discount: 0, Tax: 19800, Adjustment: 0 });
+    expect(payloads[1]).toMatchObject({ Sub_Total: 900, Discount: 0, Tax: 162, Adjustment: 0 });
+    expect(payloads[2]).toMatchObject({ Sub_Total: 110900, Discount: 0, Tax: 19962, Adjustment: 0 });
   });
 
   it("loads only the first quote page and does not request the complete leads list", async () => {
@@ -522,13 +522,13 @@ describe("Zoho quotation creation", () => {
       subject: "Cassette AC quotation",
       items: [{ productId: "product-1", qty: 2, discount: 4000 }],
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
-      id: "quote-1", offerNo: "239/26-27", leadId: "lead-1", customer: "Customer Co", total: 240000,
+      id: "quote-1", offerNo: "239/26-27", leadId: "lead-1", customer: "Customer Co", total: 283200,
       gstBreakdown: {
-        subtotal: 244000, discount: 4000, gst: 0, total: 240000, rate: 0.18,
-        partAGstMode: "included",
-        partA: { subtotal: 244000, discount: 4000, gst: 0, total: 240000, gstIncluded: 36610.17 },
+        subtotal: 240000, discount: 4000, gst: 43200, total: 283200, rate: 0.18,
+        partAGstMode: "extra",
+        partA: { subtotal: 240000, discount: 4000, gst: 43200, total: 283200 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 206779.66, discount: 4000, tax: 37220.34, adjustment: 0 },
+        zoho: { subtotal: 240000, discount: 0, tax: 43200, adjustment: 0 },
       },
     });
 
@@ -545,9 +545,9 @@ describe("Zoho quotation creation", () => {
         Total_After_Discount: 240000,
         Net_Total: 240000,
       }],
-      Sub_Total: 206779.66,
-      Discount: 4000,
-      Tax: 37220.34,
+      Sub_Total: 240000,
+      Discount: 0,
+      Tax: 43200,
       Adjustment: 0,
     }));
     expect(infoLog).toHaveBeenCalledWith("[zoho] creating quote", expect.objectContaining({
@@ -570,10 +570,10 @@ describe("Zoho quotation creation", () => {
     expect(JSON.parse(String(writtenRecord.Description))).toMatchObject({
       leadId: "lead-1", name: "Customer", phone: "9876543210", company: "Customer Co",
       gstBreakdown: {
-        subtotal: 244000, discount: 4000, gst: 0, total: 240000, rate: 0.18, partAGstMode: "included",
-        partA: { subtotal: 244000, discount: 4000, gst: 0, total: 240000, gstIncluded: 36610.17 },
+        subtotal: 240000, discount: 4000, gst: 43200, total: 283200, rate: 0.18, partAGstMode: "extra",
+        partA: { subtotal: 240000, discount: 4000, gst: 43200, total: 283200 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 206779.66, discount: 4000, tax: 37220.34, adjustment: 0 },
+        zoho: { subtotal: 240000, discount: 0, tax: 43200, adjustment: 0 },
       },
     });
     expect(errorLog).toHaveBeenCalledWith("[zoho] primary change succeeded but history note failed", expect.objectContaining({
@@ -645,24 +645,24 @@ describe("Zoho quotation creation", () => {
       items: [{ productId: "product-1", qty: 2, discount: 4000 }],
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
       id: "quote-tax-fallback",
-      total: 240000,
+      total: 283200,
       gstBreakdown: {
-        subtotal: 244000, discount: 4000, gst: 0, total: 240000, rate: 0.18, partAGstMode: "included",
-        partA: { subtotal: 244000, discount: 4000, gst: 0, total: 240000, gstIncluded: 36610.17 },
+        subtotal: 240000, discount: 4000, gst: 43200, total: 283200, rate: 0.18, partAGstMode: "extra",
+        partA: { subtotal: 240000, discount: 4000, gst: 43200, total: 283200 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 206779.66, discount: 4000, tax: 37220.34, adjustment: 0 },
+        zoho: { subtotal: 240000, discount: 0, tax: 43200, adjustment: 0 },
       },
     });
 
     expect(postPayloads).toHaveLength(2);
-    expect(postPayloads[0]).toMatchObject({ Sub_Total: 206779.66, Discount: 4000, Tax: 37220.34, Adjustment: 0 });
+    expect(postPayloads[0]).toMatchObject({ Sub_Total: 240000, Discount: 0, Tax: 43200, Adjustment: 0 });
     expect(postPayloads[0]).not.toHaveProperty("Grand_Total");
-    expect(postPayloads[1]).toMatchObject({ Sub_Total: 206779.66, Discount: 4000, Adjustment: 37220.34 });
+    expect(postPayloads[1]).toMatchObject({ Sub_Total: 240000, Discount: 0, Adjustment: 43200 });
     expect(postPayloads[1]).not.toHaveProperty("Tax");
     expect(postPayloads[1]).not.toHaveProperty("Grand_Total");
     expect(errorLog).toHaveBeenCalledWith(
       "[zoho] Quotes Tax field was rejected; retrying quote with GST as Adjustment to preserve the portal total",
-      expect.objectContaining({ field: "Tax", gstAmount: 37220.34 }),
+      expect.objectContaining({ field: "Tax", gstAmount: 43200 }),
     );
     errorLog.mockRestore();
   });

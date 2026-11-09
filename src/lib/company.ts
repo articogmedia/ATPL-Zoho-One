@@ -8,7 +8,7 @@ export const COMPANY = {
   gstin: "36AANCA9304M2Z7",
   subject: "Your requirement for SAMSUNG MAKE INVERTOR Air Conditioners - reg.",
   gstRate: 0.18,
-  partAGstMode: "included" as "included" | "extra",
+  partAGstMode: "extra" as const,
   terms:
     "NOTE: Quantities are tentative; final billing is based on actual measurements. Validity: 30 days from the date of this offer. Delivery: 1-2 weeks from the date of order. Payment: 100% advance for equipment; 60% advance for Part B and 40% on completion.",
 } as const;
@@ -18,7 +18,7 @@ export const OFFER_TEXT = {
     "We thank you very much for your enquiry. In this connection, in subsequent discussions had with you, we are pleased to submit herewith our offer for the subject works. Our detailed Bill of quantities are as follows",
   partA: "BOQ - PART A - EQUIPMENT SUPPLY",
   partB: "BOQ - PART B - ANCILLARY WORKS",
-  partAGst: `GST @ ${Math.round(COMPANY.gstRate * 100)}% ${COMPANY.partAGstMode}`,
+  partAGst: `GST @ ${Math.round(COMPANY.gstRate * 100)}% EXTRA`,
   partBGst: `GST @ ${Math.round(COMPANY.gstRate * 100)}% EXTRA`,
   note: "Pls note that the above quantities are tentative only, and final billing shall be based on actual measurements",
   excluded: [
@@ -27,7 +27,7 @@ export const OFFER_TEXT = {
   ],
   terms: [
     ["Validity", "30 days from the date of this offer"],
-    ["Taxes", `GST @ ${Math.round(COMPANY.gstRate * 100)}% extra on Part B, as shown above`],
+    ["Taxes", `GST @ ${Math.round(COMPANY.gstRate * 100)}% extra on all items, as shown above`],
     ["Delivery", "1-2 weeks from the date of order"],
     ["Payment Terms", "100% advance for equipment"],
   ] as const,

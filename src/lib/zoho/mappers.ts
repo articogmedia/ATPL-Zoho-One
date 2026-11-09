@@ -76,10 +76,9 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
         const discount = number(record, "discount");
         const gst = number(record, "gst");
         const total = number(record, "total");
-        const gstIncluded = number(record, "gstIncluded");
         return subtotal === undefined || discount === undefined || gst === undefined || total === undefined
           ? undefined
-          : { subtotal, discount, gst, total, ...(gstIncluded !== undefined ? { gstIncluded } : {}) };
+          : { subtotal, discount, gst, total };
       };
       let gstBreakdown: QuoteGstBreakdown | undefined;
       if (gstValue && typeof gstValue === "object") {
