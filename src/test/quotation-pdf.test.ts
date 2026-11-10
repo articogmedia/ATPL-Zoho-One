@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { PDFDocument, PDFPage, StandardFonts } from "pdf-lib";
+import { COMPANY, OFFER_TEXT } from "@/lib/company";
 import { canCreateQuotationPdf, needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-presentation";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
@@ -191,6 +192,66 @@ describe("quotation PDF route", () => {
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
     expect(renderedText).toContain("Rs. 90");
     expect(renderedText).toContain("TOTAL PART A + B");
+    drawText.mockRestore();
+  });
+
+  it("continues long quote content and terms on new pages without clipping", async () => {
+    currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
+    quoteRepository.getQuote.mockResolvedValue({
+      id: "Q-LONG",
+      offerNo: "268/26-27",
+      leadId: "",
+      customer: "Customer",
+      executive: "User",
+      total: 1_000_000,
+      date: "2026-11-10",
+      ownerId: "U1",
+      items: Array.from({ length: 18 }, (_, index) => ({
+        model: `Long product ${index + 1}`,
+        description: "Long equipment specification with installation and technical requirements ".repeat(9),
+        unit: "Nos",
+        qty: 1,
+        price: 1000,
+      })),
+    });
+
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+    const drawText = vi.spyOn(PDFPage.prototype, "drawText");
+    const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "Q-LONG",
+        offerNo: "268/26-27",
+        subject: "Long quotation",
+        items: [{ qty: 1 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const pdfBytes = Buffer.from(await response.arrayBuffer());
+    const renderedPdf = await PDFDocument.load(pdfBytes);
+    expect(renderedPdf.getPageCount()).toBeGreaterThan(1);
+
+    const renderedText = drawText.mock.calls
+      .map(([value]) => String(value))
+      .join(" ")
+      .replace(/\s+/g, " ");
+    for (const [label, detail] of OFFER_TEXT.terms) {
+      expect(renderedText).toContain(`${label}: ${detail}`);
+    }
+    for (const closingText of [
+      OFFER_TEXT.paymentContinuation,
+      OFFER_TEXT.closing,
+      OFFER_TEXT.thanks,
+      `for ${COMPANY.name}`,
+      COMPANY.signatory,
+      COMPANY.phones,
+    ]) {
+      expect(renderedText).toContain(closingText);
+    }
+    expect(drawText.mock.calls.every(([, options]) =>
+      Number((options as { y?: number }).y ?? 0) >= 48,
+    )).toBe(true);
     drawText.mockRestore();
   });
 

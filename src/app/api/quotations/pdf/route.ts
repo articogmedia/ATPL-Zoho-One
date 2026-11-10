@@ -259,6 +259,19 @@ export async function POST(request: NextRequest) {
     if (y - requiredHeight < bottomMargin) startNewPage(title);
   };
 
+  const drawFlowText = (value: string, size = 8, font = regular, lineHeight = 12) => {
+    const lines = wrapQuotationPdfText(font, value, size, contentWidth);
+    for (const line of lines) {
+      if (y - lineHeight < bottomMargin + 4) startNewPage();
+      text(page, line, margin, y, size, font);
+      y -= lineHeight;
+    }
+  };
+  const addFlowSpace = (amount: number) => {
+    if (y - amount < bottomMargin + 4) startNewPage();
+    else y -= amount;
+  };
+
   const partBlockRows = (partTotals: QuoteGstTotals, partName: string, gstNote: string) => isLegacySavedQuote
     ? [
         ["Basic Sub Total", partTotals.subtotal - partTotals.discount, true] as const,
@@ -355,18 +368,23 @@ export async function POST(request: NextRequest) {
     y -= 8;
   }
 
-  text(page, "NOTE", margin, y, 9, bold); y -= 14;
-  text(page, OFFER_TEXT.note, margin, y, 8); y -= 20;
-  text(page, "ITEMS EXCLUDED", margin, y, 9, bold); y -= 14;
-  OFFER_TEXT.excluded.forEach((line, index) => { text(page, `${index + 1}. ${line}`, margin, y, 8); y -= 12; });
-  y -= 8;
-  text(page, "TERMS & CONDITIONS", margin, y, 9, bold); y -= 14;
-  OFFER_TEXT.terms.forEach(([label, detail]) => { text(page, `${label}: ${detail}`, margin, y, 8); y -= 12; });
-  text(page, OFFER_TEXT.paymentContinuation, margin, y, 8); y -= 18;
-  text(page, OFFER_TEXT.closing, margin, y, 8); y -= 16;
-  text(page, OFFER_TEXT.thanks, margin, y, 8); y -= 16;
-  text(page, `for ${COMPANY.name}`, margin, y, 8, bold); y -= 12;
-  text(page, COMPANY.signatory, margin, y, 8); text(page, COMPANY.phones, margin + 180, y, 8);
+  drawFlowText("NOTE", 9, bold, 14);
+  drawFlowText(OFFER_TEXT.note);
+  addFlowSpace(8);
+  drawFlowText("ITEMS EXCLUDED", 9, bold, 14);
+  OFFER_TEXT.excluded.forEach((line, index) => drawFlowText(`${index + 1}. ${line}`));
+  addFlowSpace(8);
+  drawFlowText("TERMS & CONDITIONS", 9, bold, 14);
+  OFFER_TEXT.terms.forEach(([label, detail]) => drawFlowText(`${label}: ${detail}`));
+  drawFlowText(OFFER_TEXT.paymentContinuation);
+  addFlowSpace(6);
+  drawFlowText(OFFER_TEXT.closing);
+  addFlowSpace(4);
+  drawFlowText(OFFER_TEXT.thanks);
+  addFlowSpace(4);
+  drawFlowText(`for ${COMPANY.name}`, 8, bold);
+  drawFlowText(COMPANY.signatory);
+  drawFlowText(COMPANY.phones);
 
   const bytes = await pdf.save();
   return new NextResponse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
