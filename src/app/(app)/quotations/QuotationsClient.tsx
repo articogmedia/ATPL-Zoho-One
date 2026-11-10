@@ -13,7 +13,7 @@ import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, 
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
 import { addLeadAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, markQuotationSentAction, refreshProductsAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
-import { canCreateQuotationPdf, splitQuotationItems } from "@/lib/quotation-presentation";
+import { canCreateQuotationPdf, formatQuotationMoney, splitQuotationItems } from "@/lib/quotation-presentation";
 import { formatINR, GST_RATE, quoteTotals, quotationGstBreakdown, uniqueProducts, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type Product, type Quotation, type QuoteGstBreakdown, type QuoteGstTotals } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number };
@@ -684,7 +684,6 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         validTill={readOnlyQuote.validTill}
         savedQuoteId={readOnlyQuote.id}
         savedSubject={readOnlyQuote.subject}
-        status={readOnlyQuote.status ?? "Draft"}
       />
       {savedDialog}
     </div>;
@@ -698,7 +697,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       </Button>
     </div>
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
-    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedTotal={wizard.savedQuotation.total} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} status={wizard.quotationSent ? "Sent" : wizard.savedQuotation.status ?? "Draft"} />
+    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedTotal={wizard.savedQuotation.total} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} />
     {savedDialog}
   </div>;
 
@@ -983,10 +982,10 @@ class SharePreparationError extends Error {
   }
 }
 
-function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, savedTotal, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, gstBreakdown, status = "Draft" }: {
+function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, savedTotal, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, gstBreakdown }: {
  lead: QuotationCustomer; offerNo: string; setOfferNo: (s: string) => void; items: Item[]; subject: string; setSubject: (subject: string) => void;
   onBack: () => void; onMarkSent: () => Promise<void>;
-  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; savedTotal?: number; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown; status?: string;
+  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; savedTotal?: number; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown;
 }) {
   const isLegacySavedQuote = !!savedQuoteId && !gstBreakdown;
   const usesPartTaxConvention = gstBreakdown?.partAGstMode === "extra";
@@ -998,7 +997,7 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
         total: items.reduce((sum, item) => sum + item.qty * item.price - (item.discount ?? 0), 0),
       }
     : quoteTotals(items));
-  const offerMoney = (amount: number) => formatINR(isLegacySavedQuote ? Math.round(amount) : amount);
+  const offerMoney = formatQuotationMoney;
   const customer = savedCustomer?.trim() || lead.company.trim() || lead.name.trim();
   const parts = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date());
   const datePart = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? "";
@@ -1245,7 +1244,6 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
             <label className="grid grid-cols-[70px_1fr] items-center gap-2"><span className="font-semibold">Offer Ref</span>
               {readOnly || !editableOfferNo ? <span className="font-medium">{offerNo.trim() || "Offer reference unavailable"}</span> : <input aria-label="Offer reference" className="h-8 rounded-lg border border-input px-2 font-medium" pattern="\d{1,4}/\d{2}-\d{2}" value={offerNo} onChange={(event) => setOfferNo(event.target.value)} maxLength={9} />}
             </label>
-            <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Stage</span><span>{status}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Valid Till</span><span>{validTill}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Date</span><span>{date}</span></div>
             <div className="grid grid-cols-[70px_1fr] gap-2"><span className="font-semibold">Sales Person</span><span>{COMPANY.signatory}</span></div>
@@ -1286,8 +1284,8 @@ function Offer({ lead, offerNo, setOfferNo, items, subject, setSubject, onBack, 
         </section>
 
         <section className="mt-4 grid grid-cols-[1fr_auto] gap-2 border border-border p-3">
-          <div><span className="font-bold">EQUIPMENT REQUIRED</span>{items.filter((item) => !/^B\s*-\s*/i.test(item.model)).map((item) => <div key={item.model}>{item.model} / {item.qty} / {item.unit}</div>)}</div>
-          <div className="font-bold">Total Units: {items.reduce((sum, item) => sum + item.qty, 0)}</div>
+          <div className="font-bold">EQUIPMENT REQUIRED</div>
+          <div className="font-bold">Total Units: {splitParts.equipment.reduce((sum, item) => sum + item.qty, 0)}</div>
         </section>
         <div className="min-w-0 max-w-full">
           {renderPart(splitParts.equipment, OFFER_TEXT.partA, OFFER_TEXT.partAGst, 0, gstBreakdown?.partA)}

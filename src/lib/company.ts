@@ -6,7 +6,7 @@ export const COMPANY = {
   signatory: "Reshma",
   phones: "9490172222 / 9989789222",
   gstin: "36AANCA9304M2Z7",
-  subject: "Your requirement for SAMSUNG MAKE INVERTOR Air Conditioners - reg.",
+  subject: "Your requirement for Air Conditioners - reg.",
   gstRate: 0.18,
   partAGstMode: "extra" as const,
   terms:

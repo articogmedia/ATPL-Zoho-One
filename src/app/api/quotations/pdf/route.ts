@@ -7,9 +7,9 @@ import { currentUser } from "@/lib/auth/guard";
 import { crm } from "@/lib/crm";
 import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
-import { COMPANY, OFFER_TEXT } from "@/lib/company";
-import { formatINR, GST_RATE, quotationGstBreakdown, todayIST, visibleFor, type QuoteGstTotals } from "@/lib/domain";
-import { quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
+import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
+import { GST_RATE, quotationGstBreakdown, todayIST, visibleFor, type QuoteGstTotals } from "@/lib/domain";
+import { formatQuotationMoney, quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
     source: "Direct Call" as const,
   };
   const offerNo = savedQuote?.offerNo || parsed.offerNo;
-  const subject = savedQuote?.subject || parsed.subject;
+  const subject = savedQuote?.subject || parsed.subject || offerSubject((savedQuote?.items ?? []).map((item) => item.model));
   const items = savedQuote?.items?.length
     ? savedQuote.items.map((item) => ({
         model: item.model,
@@ -164,9 +164,6 @@ export async function POST(request: NextRequest) {
     text(page, customerName || customerCompany, margin + 75, y, 9);
     y -= 18;
   }
-  text(page, "STAGE", margin, y, 8, bold);
-  text(page, "Draft", margin + 75, y, 9);
-  y -= 18;
   if (hasCustomerDetails) {
     text(page, "BILL TO", margin, y, 8, bold);
     text(page, "SHIP TO", 320, y, 8, bold);
@@ -188,16 +185,6 @@ export async function POST(request: NextRequest) {
   text(page, "EQUIPMENT REQUIRED", margin, y, 9, bold);
   text(page, `Total Units: ${presentation.totalUnits}`, 430, y, 9, bold);
   y -= 18;
-  const equipmentSummary = items.filter((item) => !/^B\s*-\s*/i.test(item.model));
-  for (const item of equipmentSummary) {
-    const lines = wrapQuotationPdfText(regular, `${item.model} / ${item.qty} / Nos`, 7, width - margin * 2);
-    for (const line of lines) {
-      if (y < 260) { page = newPage(); drawHeader(page); y = height - 112; }
-      text(page, line, margin, y, 7);
-      y -= 10;
-    }
-  }
-  y -= 8;
   text(page, `Dear Sir,  Sub: ${subject}`, margin, y, 9, bold);
   y -= 16;
   wrapQuotationPdfText(regular, OFFER_TEXT.enquiry, 8, width - margin * 2).forEach((line) => { text(page, line, margin, y, 8); y -= 10; });
@@ -271,6 +258,22 @@ export async function POST(request: NextRequest) {
     if (y - amount < bottomMargin + 4) startNewPage();
     else y -= amount;
   };
+  const drawFlowBlock = (entries: readonly { value: string; size?: number; font?: PDFFont; lineHeight?: number }[]) => {
+    const blocks = entries.map(({ value, size = 8, font = regular, lineHeight = 12 }) => ({
+      size,
+      font,
+      lineHeight,
+      lines: wrapQuotationPdfText(font, value, size, contentWidth),
+    }));
+    const requiredHeight = blocks.reduce((sum, block) => sum + block.lines.length * block.lineHeight, 0);
+    if (y - requiredHeight < bottomMargin + 4) startNewPage();
+    for (const block of blocks) {
+      for (const line of block.lines) {
+        text(page, line, margin, y, block.size, block.font);
+        y -= block.lineHeight;
+      }
+    }
+  };
 
   const partBlockRows = (partTotals: QuoteGstTotals, partName: string, gstNote: string) => isLegacySavedQuote
     ? [
@@ -294,7 +297,7 @@ export async function POST(request: NextRequest) {
     const amountRight = rightEdge - cellPadding;
     for (const [label, amount, emphasis] of rows) {
       const font = emphasis ? bold : regular;
-      text(page, label, labelX, y - rowHeight + 4, 8, font);
+          text(page, label, labelX, y - rowHeight + 4, 8, font);
       if (amount !== null) drawRight(page, money(amount), amountRight, y - rowHeight + 4, 8, font);
       y -= rowHeight;
     }
@@ -371,8 +374,10 @@ export async function POST(request: NextRequest) {
   drawFlowText("NOTE", 9, bold, 14);
   drawFlowText(OFFER_TEXT.note);
   addFlowSpace(8);
-  drawFlowText("ITEMS EXCLUDED", 9, bold, 14);
-  OFFER_TEXT.excluded.forEach((line, index) => drawFlowText(`${index + 1}. ${line}`));
+  drawFlowBlock([
+    { value: "ITEMS EXCLUDED", size: 9, font: bold, lineHeight: 14 },
+    ...OFFER_TEXT.excluded.map((line, index) => ({ value: `${index + 1}. ${line}` })),
+  ]);
   addFlowSpace(8);
   drawFlowText("TERMS & CONDITIONS", 9, bold, 14);
   OFFER_TEXT.terms.forEach(([label, detail]) => drawFlowText(`${label}: ${detail}`));
@@ -414,5 +419,5 @@ function formatOfferDate(value: string) {
 }
 
 function money(value: number) {
-  return formatINR(value);
+  return formatQuotationMoney(value);
 }

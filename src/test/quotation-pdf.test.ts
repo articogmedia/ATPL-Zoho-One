@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { PDFDocument, PDFPage, StandardFonts } from "pdf-lib";
-import { COMPANY, OFFER_TEXT } from "@/lib/company";
-import { canCreateQuotationPdf, needsPdfTotalsPage, quotationPresentation } from "@/lib/quotation-presentation";
+import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
+import { canCreateQuotationPdf, formatQuotationMoney, needsPdfTotalsPage, quotationPresentation, splitQuotationItems } from "@/lib/quotation-presentation";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 
@@ -61,6 +61,33 @@ describe("quotation PDF route", () => {
       partA: { subtotal: 25000, gst: 4500, total: 29500 },
     });
     expect(needsPdfTotalsPage(25, 120)).toBe(true);
+  });
+
+  it("uses equipment-only units, clean product descriptions, generic subjects, and decimal money", () => {
+    const presentation = quotationPresentation([
+      {
+        model: "Samsung Product",
+        description: "Samsung Product / 3.0 TR; Selling price excl GST; Price circular w.e.f. 01-04-2026",
+        unit: "Nos",
+        qty: 2,
+        price: 1000,
+      },
+      { model: "B - Installation", unit: "Nos", qty: 7, price: 100 },
+    ]);
+
+    expect(presentation.totalUnits).toBe(2);
+    expect(splitQuotationItems([
+      {
+        model: "Samsung Product",
+        description: "Samsung Product / 3.0 TR; Selling price excl GST; Price circular w.e.f. 01-04-2026",
+        unit: "Nos",
+        qty: 1,
+        price: 1000,
+      },
+    ]).equipment[0]).toMatchObject({ model: "Samsung Product", description: "3.0 TR" });
+    expect(formatQuotationMoney(171000)).toBe("Rs. 1,71,000.00");
+    expect(offerSubject(["Samsung 4 Way AC"])).toBe("Your requirement for Air Conditioners - reg.");
+    expect(offerSubject(["Samsung 4 Way AC"])).not.toContain("Samsung");
   });
 
   it("wraps long descriptions and set codes inside the fixed description column", async () => {
@@ -152,17 +179,17 @@ describe("quotation PDF route", () => {
     expect(response.status).toBe(200);
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
     expect(renderedText).toContain("Part A subtotal");
-    expect(renderedText).toContain("Rs. 59,724");
+    expect(renderedText).toContain("Rs. 59,724.00");
     expect(renderedText).toContain("Part A GST @ 18%");
     expect(renderedText).toContain("Rs. 10,750.32");
     expect(renderedText).toContain("Part A total");
     expect(renderedText).toContain("Rs. 70,474.32");
     expect(renderedText).toContain("Part B subtotal");
-    expect(renderedText).toContain("Rs. 1,220");
+    expect(renderedText).toContain("Rs. 1,220.00");
     expect(renderedText).toContain("Part B GST @ 18%");
     expect(renderedText).toContain("Rs. 219.60");
     expect(renderedText).toContain("Grand Total");
-    expect(renderedText).toContain("Rs. 60,944");
+    expect(renderedText).toContain("Rs. 60,944.00");
     expect(renderedText).toContain("Rs. 10,969.92");
     expect(renderedText).toContain("Rs. 71,913.92");
     expect(renderedText).not.toContain("GST included");
@@ -190,7 +217,7 @@ describe("quotation PDF route", () => {
 
     expect(response.status).toBe(200);
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
-    expect(renderedText).toContain("Rs. 90");
+    expect(renderedText).toContain("Rs. 90.00");
     expect(renderedText).toContain("TOTAL PART A + B");
     drawText.mockRestore();
   });
@@ -252,6 +279,62 @@ describe("quotation PDF route", () => {
     expect(drawText.mock.calls.every(([, options]) =>
       Number((options as { y?: number }).y ?? 0) >= 48,
     )).toBe(true);
+    const excludedIndices = drawText.mock.calls.flatMap(([value], index) =>
+      /^(?:ITEMS EXCLUDED|1\.|2\.)/.test(String(value)) ? [index] : [],
+    );
+    expect(excludedIndices).toHaveLength(3);
+    expect(new Set(excludedIndices.map((index) => drawText.mock.contexts[index])).size).toBe(1);
+    drawText.mockRestore();
+  });
+
+  it("prints customer-facing product details without status or internal pricing text", async () => {
+    currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
+    quoteRepository.getQuote.mockResolvedValue({
+      id: "Q-CUSTOMER-PDF",
+      offerNo: "268/26-27",
+      leadId: "",
+      customer: "Customer",
+      executive: "User",
+      total: 1_000_000,
+      date: "2026-11-10",
+      ownerId: "U1",
+      status: "Draft",
+      items: [
+        {
+          model: "Samsung Product",
+          description: "Samsung Product / 3.0 TR; Selling price excl GST; Price circular w.e.f. 01-04-2026",
+          unit: "Nos",
+          qty: 2,
+          price: 1000,
+        },
+        { model: "B - Installation", description: "Price list w.e.f. 01-04-2026", unit: "Nos", qty: 7, price: 100 },
+      ],
+    });
+
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+    const drawText = vi.spyOn(PDFPage.prototype, "drawText");
+    const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "Q-CUSTOMER-PDF",
+        offerNo: "268/26-27",
+        subject: "Air Conditioner offer",
+        items: [{ qty: 1 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(renderedText).not.toContain("STAGE");
+    expect(renderedText).not.toContain("Draft");
+    expect(renderedText).toContain("Total Units: 2");
+    expect(renderedText).not.toContain("Selling price excl GST");
+    expect(renderedText).not.toContain("Price circular w.e.f.");
+    expect(renderedText).not.toContain("Price list w.e.f.");
+    expect(renderedText).toContain("3.0 TR");
+    expect(renderedText).toContain("Rs. 1,000.00");
+    expect(renderedText).toContain("Rs. 2,000.00");
+    expect(renderedText.match(/Samsung Product/g)).toHaveLength(1);
     drawText.mockRestore();
   });
 
