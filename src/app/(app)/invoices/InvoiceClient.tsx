@@ -15,7 +15,7 @@ type ConvertibleQuote = {
   total: number;
 };
 
-export function InvoiceClient({ invoices, convertibleQuotes }: { invoices: Invoice[]; convertibleQuotes: ConvertibleQuote[] }) {
+export function InvoiceClient({ invoices, convertibleQuotes, loadError }: { invoices: Invoice[]; convertibleQuotes: ConvertibleQuote[]; loadError?: string }) {
   const [gstins, setGstins] = useState<Record<string, string>>({});
   const [emails, setEmails] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
@@ -36,11 +36,12 @@ export function InvoiceClient({ invoices, convertibleQuotes }: { invoices: Invoi
 
   return <section className="space-y-6">
     <PageHeader title="Invoices" subtitle="Convert accepted or Won quotations, then view, download, or email the invoice." />
+    {loadError && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">{loadError}</p>}
     {message && <p role="status" className="rounded-lg border bg-card p-3 text-sm">{message}</p>}
 
     <div className="space-y-3">
       <h2 className="text-lg font-semibold">Saved invoices ({invoices.length})</h2>
-      {invoices.length === 0 && <EmptyState icon={<ReceiptText className="h-5 w-5" />} message="No invoices have been created yet." />}
+      {!loadError && invoices.length === 0 && <EmptyState icon={<ReceiptText className="h-5 w-5" />} message="No invoices have been created yet." />}
       {invoices.map((invoice) => (
         <details key={invoice.id} className="rounded-xl border bg-card p-4">
           <summary className="cursor-pointer list-none">

@@ -1,19 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { AppErrorState } from "@/components/AppErrorState";
 
-export default function GlobalError({ reset }: { error: Error; reset: () => void }) {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="max-w-md text-center">
-        <h1 className="text-xl font-semibold">This page didn&apos;t load</h1>
-        <p className="mt-2 text-sm text-muted-foreground">Something went wrong on our end. Try again, or contact your administrator if it continues.</p>
-        <div className="mt-6 flex justify-center gap-2">
-          <Button onClick={reset}>Try again</Button>
-          <Button asChild variant="outline"><Link href="/home">Go home</Link></Button>
-        </div>
-      </div>
-    </div>
-  );
+export default function AppError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  return <AppErrorState
+    title="Something went wrong"
+    message="Please try again. Your work in Zoho CRM has not been removed."
+    error={error}
+    reset={reset}
+  />;
 }

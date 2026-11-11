@@ -1,5 +1,5 @@
 "use client";
-import { Button } from "@/components/ui/button";
-export default function Error({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  return <div className="rounded-xl border bg-card p-6 text-center"><h2 className="font-semibold">Home could not load</h2><Button className="mt-4" onClick={reset}>Try again</Button></div>;
+import { AppErrorState } from "@/components/AppErrorState";
+export default function Error({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  return <AppErrorState title="Home could not load" message="Please try again. Your dashboard data is unchanged." error={error} reset={reset} />;
 }
