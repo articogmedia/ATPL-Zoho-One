@@ -79,6 +79,7 @@ describe("Zoho products catalogue", () => {
 
     expect(products.map((product) => product.model)).toEqual(["Cassette AC", "Split AC"]);
     expect(list.mock.calls.map((call) => call[1])).toEqual([
+      ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit", "Tax"],
       ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit"],
       ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],
       ["Product_Name", "Unit_Price"],
@@ -115,7 +116,7 @@ describe("Zoho products catalogue", () => {
     expect(list).toHaveBeenCalledTimes(1);
     expect(list.mock.calls[0]).toEqual([
       "Products",
-      ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit"],
+      ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit", "Tax"],
       1000,
       { sort_by: "id", sort_order: "asc" },
     ]);
@@ -281,8 +282,9 @@ describe("Zoho lead actions", () => {
     }), { trigger: ["workflow"] });
     expect(updated).toMatchObject({ name: "Updated Lead", company: "Updated Co", phone: "9999999999" });
     expect(request).not.toHaveBeenCalledWith("GET", "/Leads/lead-1", expect.anything());
+    await Promise.all(assignmentAfterTasks.splice(0).map((task) => Promise.resolve(task())));
     await expect(cached("leads", 60_000, async () => [])).resolves.toMatchObject([
-      { id: "lead-1", name: "Updated Lead", company: "Updated Co" },
+      { id: "lead-1", name: "Old Lead", company: "Old Co" },
     ]);
   });
 

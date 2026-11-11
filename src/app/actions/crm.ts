@@ -1,18 +1,27 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { z } from "zod";
 import { crm } from "@/lib/crm";
-import { getCachedValue, invalidate, setCachedValue, withIdempotency } from "@/lib/cache";
-import type { LeadPatch } from "@/lib/crm/repository";
+import { getCachedValue, invalidate, markStale, withIdempotency } from "@/lib/cache";
+import type { LeadPatch, NewProduct } from "@/lib/crm/repository";
 import { requireActionUser, ForbiddenError } from "@/lib/auth/guard";
 import { hosts, ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
+import { logPerf } from "@/lib/perf-log";
+import { getStoredQuotationPdf, invalidateStoredQuotationPdf } from "@/lib/quotation-pdf-store";
+import { sendEmail } from "@/lib/email";
+import { takeQuotationEmailRateLimit } from "@/lib/quotation-email-rate-limit";
+import { getStoredInvoicePdf, saveStoredInvoicePdf } from "@/lib/invoice-pdf-store";
+import { canConvertToInvoice, canViewInvoice } from "@/lib/invoice-rules";
+import { COMPANY } from "@/lib/company";
+import { signQuotationPdfSnapshot } from "@/lib/quotation-pdf-snapshot";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, todayIST, visibleFor,
-  normalizePhone, type CallOutcome, type Lead, type LeadSource, type LeadStatus, type LeadUpdate, type User, type Visit, type VisitStatus,
+  LEAD_SOURCES, LEAD_STATUSES, LOST_REASONS, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, todayIST, visibleFor,
+  formatINR, normalizePhone, type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type LostReason, type User, type VisitStatus,
 } from "@/lib/domain";
 
 export type DuplicateLeadResult = { id: string; name: string; owner: string; status: string; matchedField: "Mobile" | "Phone" };
@@ -23,6 +32,8 @@ class DuplicateLeadError extends Error {
     super(`Customer already exists. Mobile number is already in use. (Ref: ${newErrorReference()})`);
   }
 }
+
+class DuplicateProductError extends Error {}
 
 function isZohoFailure(error: unknown): error is ZohoError {
   if (error instanceof ZohoError) return true;
@@ -36,8 +47,8 @@ function revalidateCrmPaths(...paths: string[]) {
   for (const path of new Set(paths)) revalidatePath(path);
 }
 
-function scheduleActionCompletionLog(elapsedMs: number, status: "completed" | "failed") {
-  const log = () => console.info(`[action] ${status} ${elapsedMs}ms`);
+function scheduleActionCompletionLog(action: string, elapsedMs: number, status: "completed" | "failed") {
+  const log = () => logPerf("server_action", elapsedMs, { action, status });
   try {
     after(async () => { log(); });
   } catch {
@@ -88,17 +99,18 @@ function reportActionFailure(action: string, error: unknown, fallback: string, e
 async function run<T>(
   fn: () => Promise<T>,
   duplicatePhone?: () => string,
-  mutation?: { input: unknown; action: string; section: "leads" | "quotations" | "visits" },
+  mutation?: { input: unknown; action: string; section: "leads" | "quotations" | "invoices" | "visits" },
 ): Promise<ActionResult<T>> {
   const started = Date.now();
   const execute = async (): Promise<ActionResult<T>> => {
     try {
       const data = await fn();
-      scheduleActionCompletionLog(Date.now() - started, "completed");
+      scheduleActionCompletionLog(mutation?.action ?? "crm-read", Date.now() - started, "completed");
       return { ok: true, data };
     } catch (err) {
-      scheduleActionCompletionLog(Date.now() - started, "failed");
+      scheduleActionCompletionLog(mutation?.action ?? "crm-read", Date.now() - started, "failed");
       if (err instanceof DuplicateLeadError) return { ok: false, error: err.message, duplicate: err.lead };
+      if (err instanceof DuplicateProductError) return { ok: false, error: err.message };
       if (err instanceof ForbiddenError) return { ok: false, error: err.message };
       if (err instanceof z.ZodError) return { ok: false, error: err.issues[0]?.message ?? "Please check the form values." };
       if (isZohoFailure(err)) {
@@ -150,7 +162,7 @@ function scheduleCrmEffects(action: string, invalidations: string[], paths: stri
   const work = async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        await invalidate(...invalidations);
+        await markStale(...invalidations);
         revalidateCrmPaths(...paths);
         return;
       } catch (error) {
@@ -223,7 +235,7 @@ export async function addLeadAction(input: unknown) {
     // Executives create leads for themselves; everyone else drops them in the fresh queue.
     if (assigneeId && !canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
     const lead = await crm().createLead(data, user, assigneeId, forceCreate);
-    scheduleCrmEffects("lead create", ["visits"], LEAD_MUTATION_PATHS);
+    scheduleCrmEffects("lead create", ["leads", "visits"], LEAD_MUTATION_PATHS);
     return { ...lead, zohoUrl: zohoLeadUrl(lead.id) };
   }, () => submittedPhone, { input, action: "add-lead", section: "leads" });
 }
@@ -246,7 +258,7 @@ export async function getLeadSourcesAction() {
 }
 
 const updateLeadSchema = z.object({
-  id, status: status.optional(), remarks: text(500).optional(), assignedTo: text(120).nullable().optional(),
+  id, status: status.optional(), lostReason: z.enum(LOST_REASONS).optional(), remarks: text(500).optional(), assignedTo: text(120).nullable().optional(),
 });
 
 const editLeadSchema = z.object({
@@ -276,7 +288,7 @@ export async function updateLeadAction(input: unknown) {
       status: p.status, remarks: p.remarks, followUp: p.followUp,
     };
     const updated = await crm().updateLead(p.id, patch, user, current);
-    scheduleCrmEffects("lead edit", ["visits"], LEAD_MUTATION_PATHS);
+    scheduleCrmEffects("lead edit", ["leads", "visits"], LEAD_MUTATION_PATHS);
     return {
       zohoUrl: zohoLeadUrl(p.id),
       lead: updated ?? {
@@ -301,23 +313,10 @@ export async function reassignLeadAction(input: unknown) {
     if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can reassign leads.");
     const p = reassignLeadSchema.parse(input);
     await ownLeadOrThrow(user, p.id);
-    const cachedLeads = await getCachedValue<Lead[]>("leads");
     const assignee = (await crm().listAssignableUsers()).find((member) => String(member.id) === String(p.assignedToId));
     if (!assignee) throw new ForbiddenError("Choose an active team member.");
     const assignment = await crm().assignLead(p.id, p.assignedToId, user);
-    scheduleCrmEffects("lead reassign", ["visits"], LEAD_MUTATION_PATHS);
-    if (cachedLeads) {
-      const updatedLeads = cachedLeads.map((lead) => lead.id === p.id
-        ? {
-            ...lead,
-            assignedTo: assignment.owner,
-            assignedToId: assignment.ownerId,
-            ownerId: assignment.ownerId,
-            status: assignment.status as LeadStatus,
-          }
-        : lead);
-      await setCachedValue("leads", 60_000, updatedLeads);
-    }
+    scheduleCrmEffects("lead reassign", ["leads", "visits"], LEAD_MUTATION_PATHS);
     return { ...assignment, zohoUrl: zohoLeadUrl(p.id) };
   }, undefined, { input, action: "reassign-lead", section: "leads" });
 }
@@ -353,14 +352,16 @@ export async function saveLeadUpdateAction(input: unknown) {
       if (!canAssignLeads(user.role)) throw new ForbiddenError("Only managers can assign leads.");
       if (p.assignedTo && !(await assignableNames()).includes(p.assignedTo)) throw new ForbiddenError("Choose a team member.");
     }
-    const patch: LeadPatch = { status: p.status as LeadStatus | undefined, remarks: p.remarks, assignedTo: p.assignedTo };
+      if (p.status === "Lost Lead" && !p.lostReason) throw new ForbiddenError("Choose a reason before marking this lead lost.");
+      const patch: LeadPatch = { status: p.status as LeadStatus | undefined, lostReason: p.lostReason as LostReason | undefined, remarks: p.remarks, assignedTo: p.assignedTo };
     const updated = await crm().updateLead(p.id, patch, user, current);
-    scheduleCrmEffects("lead update", ["visits"], LEAD_MUTATION_PATHS);
+    scheduleCrmEffects("lead update", ["leads", "visits"], LEAD_MUTATION_PATHS);
     return {
       zohoUrl: zohoLeadUrl(p.id),
       lead: updated ?? {
         ...current,
         ...(p.status ? { status: p.status as LeadStatus } : {}),
+        ...(p.lostReason ? { lostReason: p.lostReason as LostReason } : {}),
         ...(p.remarks !== undefined ? { remarks: p.remarks } : {}),
         ...(p.assignedTo !== undefined ? { assignedTo: p.assignedTo } : {}),
       },
@@ -393,10 +394,39 @@ export async function logCallAction(input: unknown) {
     if (data.outcome === "Call Back Later" && !data.followUp) {
       throw new ForbiddenError("Call Back Later requires a follow-up date.");
     }
-    const result = await crm().logCall(data, user);
+    const result = await crm().logCall({ ...data, notResponsiveAttempts: env().NOT_RESPONSIVE_ATTEMPTS }, user);
     scheduleCrmEffects("call outcome", ["leads", "visits", "performance"], WORK_MUTATION_PATHS);
     return result;
   }, undefined, { input, action: "log-call-outcome", section: "leads" });
+}
+
+const leadOutcomeSchema = z.object({
+  leadId: id,
+  outcome: z.enum(["Won", "Lost Lead"]),
+  lostReason: z.enum(LOST_REASONS).optional(),
+});
+
+export async function setLeadOutcomeAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    const data = leadOutcomeSchema.parse(input);
+    if (data.outcome === "Lost Lead" && !data.lostReason) {
+      throw new ForbiddenError("Choose a reason before marking this lead lost.");
+    }
+    const current = await ownLeadOrThrow(user, data.leadId);
+    const lead = await crm().updateLead(data.leadId, {
+      status: data.outcome,
+      ...(data.lostReason ? { lostReason: data.lostReason } : {}),
+    }, user, current);
+    scheduleCrmEffects("lead outcome", ["leads", "quotes", "performance"], LEAD_MUTATION_PATHS);
+    return {
+      lead: lead ?? {
+        ...current,
+        status: data.outcome,
+        ...(data.lostReason ? { lostReason: data.lostReason } : {}),
+      },
+    };
+  }, undefined, { input, action: "set-lead-outcome", section: "leads" });
 }
 
 export async function fixAssignedLeadsAction(input?: unknown) {
@@ -434,7 +464,17 @@ export async function getLeadTimelineAction(leadId: string): Promise<ActionResul
 const quoteSchema = z.object({
   leadId: id,
   subject: text(300).optional(),
-  items: z.array(z.object({ productId: id, qty: z.number().int().min(1).max(10_000), discount: z.number().min(0).default(0) })).min(1).max(50),
+  items: z.array(z.object({
+    productId: id,
+    qty: z.number().int().min(1).max(10_000),
+    discount: z.number().min(0).default(0),
+    taxRate: z.number().min(0).max(1).optional(),
+  })).min(1).max(50),
+  extraCharges: z.array(z.object({
+    label: z.string().trim().min(1).max(100),
+    amount: z.number().min(0).max(100_000_000),
+    taxRate: z.number().min(0).max(1).optional(),
+  }).strict()).max(50).default([]),
 });
 
 export async function createQuoteAction(input: unknown) {
@@ -448,6 +488,81 @@ export async function createQuoteAction(input: unknown) {
     scheduleCrmEffects("create quote", ["quotes", "leads", "performance"], QUOTE_MUTATION_PATHS);
     return quote;
   }, undefined, { input, action: "create-quote", section: "quotations" });
+}
+
+export async function updateQuoteAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("quotations");
+    const { quoteId, ...quoteInput } = quoteSchema.extend({ quoteId: id }).parse(input);
+    const repository = crm();
+    const current = await repository.getQuote(quoteId);
+    if (!current || visibleFor(user, [current]).length === 0) {
+      throw new ForbiddenError("Quotation not found or access denied.");
+    }
+    if (user.role !== "Manager" && ["sent", "won"].includes((current.status ?? "").trim().toLowerCase())) {
+      throw new ForbiddenError("Only managers can edit Sent or Won quotations.");
+    }
+    if (quoteInput.leadId !== current.leadId) {
+      throw new ForbiddenError("The customer cannot be changed while editing a quotation.");
+    }
+    const updated = await repository.updateQuote(quoteId, quoteInput, user);
+    await invalidateStoredQuotationPdf(quoteId);
+    scheduleCrmEffects("revise quotation", ["quotes"], QUOTE_MUTATION_PATHS);
+    return updated;
+  }, undefined, { input, action: "update-quote", section: "quotations" });
+}
+
+const quotationEmailSchema = z.object({
+  quoteId: id,
+  to: z.string().trim().email("Enter a valid recipient email address.").max(254),
+});
+
+export async function sendQuotationEmailAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("quotations");
+    const { quoteId, to } = quotationEmailSchema.parse(input);
+    const repository = crm();
+    const quote = await repository.getQuote(quoteId);
+    if (!quote || visibleFor(user, [quote]).length === 0) {
+      throw new ForbiddenError("Quotation not found or access denied.");
+    }
+    const pdf = await getStoredQuotationPdf(quoteId);
+    if (!pdf?.url) {
+      throw new ForbiddenError("The quotation PDF is not stored yet. Open or regenerate the saved quotation first.");
+    }
+    if (!await takeQuotationEmailRateLimit(user.id, quoteId)) {
+      throw new ForbiddenError("Email limit reached. Try again later.");
+    }
+    const offerReference = `${quote.offerNo}${quote.revision ? `/R${quote.revision}` : ""}`;
+    await sendEmail({
+      to,
+      subject: `Quotation ${offerReference} from ${COMPANY.name}`,
+      text: [
+        `Dear ${quote.contactName || quote.customer || "Customer"},`,
+        "",
+        `Please find your quotation ${offerReference} from ${COMPANY.name}.`,
+        `Grand total: ${formatINR(quote.total)}`,
+        `Quotation PDF: ${pdf.url}`,
+        "",
+        COMPANY.name,
+        COMPANY.address,
+        COMPANY.contact,
+        `GSTIN: ${COMPANY.gstin}`,
+      ].join("\n"),
+    });
+    let noteLogged = true;
+    try {
+      await repository.addLeadNote(
+        quote.leadId,
+        "Quotation emailed",
+        `Quotation ${offerReference} emailed to ${to} by ${user.name}. PDF: ${pdf.url}`,
+      );
+    } catch (error) {
+      noteLogged = false;
+      reportActionFailure("log quotation email note", error, "The email was sent but its CRM note could not be logged.");
+    }
+    return { noteLogged };
+  }, undefined, { input, action: "send-quotation-email", section: "quotations" });
 }
 
 const quotationSentSchema = z.object({ leadId: id.optional(), quoteId: id.optional() }).refine(
@@ -489,12 +604,130 @@ export async function getQuoteDetailAction(rawId: string): Promise<ActionResult<
     if (visibleFor(user, [quote]).length === 0) {
       return { ok: false, error: "You can only view your own quotations." };
     }
-    return { ok: true, data: quote };
+    return { ok: true, data: { ...quote, pdfSnapshotToken: signQuotationPdfSnapshot(quote, user.id) } };
   } catch (error) {
     if (error instanceof ForbiddenError) return { ok: false, error: error.message };
     if (error instanceof z.ZodError) return { ok: false, error: "Quotation not found." };
     return { ok: false, error: reportActionFailure("quotation detail", error, "Could not load quotation details.") };
   }
+}
+
+export async function getQuotationPdfUrlAction(rawId: string): Promise<ActionResult<string | null>> {
+  return run(async () => {
+    const user = await requireActionUser("quotations");
+    const quoteId = id.parse(rawId);
+    const stored = await getStoredQuotationPdf(quoteId);
+    if (!stored) return null;
+    if (visibleFor(user, [{ ownerId: stored.ownerId, executive: stored.executive }]).length === 0) {
+      throw new ForbiddenError("You can only view your own quotations.");
+    }
+    return stored.url;
+  }, undefined, { input: rawId, action: "quotation-pdf-url", section: "quotations" });
+}
+
+// ---------- Invoices ----------
+
+const invoiceConversionSchema = z.object({
+  quoteId: id,
+  gstin: z.string().trim().toUpperCase().refine((value) => !value || /^[0-9A-Z]{15}$/.test(value), "Enter a valid 15-character GSTIN.").default(""),
+  idempotencyKey: z.string().uuid().optional(),
+});
+
+export async function convertQuoteToInvoiceAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("invoices");
+    const { quoteId, gstin } = invoiceConversionSchema.parse(input);
+    const repository = crm();
+    const quote = await repository.getQuote(quoteId);
+    if (!quote || visibleFor(user, [quote]).length === 0) {
+      throw new ForbiddenError("Quotation not found or access denied.");
+    }
+    const lead = await repository.getLead(quote.leadId);
+    if (!lead || !canConvertToInvoice(quote, lead)) {
+      throw new ForbiddenError("Only Won leads or accepted quotations can be converted to an invoice.");
+    }
+    if (!quote.items?.length) {
+      throw new ForbiddenError("This quotation has no saved product lines to invoice.");
+    }
+    const existing = (await repository.listInvoices()).find((invoice) => invoice.quoteId === quote.id);
+    if (existing) return existing;
+    const invoice = await repository.createInvoice(quote, lead, user, gstin);
+    scheduleCrmEffects("create invoice", ["invoices", "quotes"], ["/invoices", "/quotations", "/home"]);
+    return invoice;
+  }, undefined, { input, action: "convert-quote-to-invoice", section: "invoices" });
+}
+
+export async function getInvoicesAction(): Promise<ActionResult<import("@/lib/domain").Invoice[]>> {
+  return run(async () => {
+    const user = await requireActionUser("invoices");
+    return (await crm().listInvoices()).filter((invoice) => canViewInvoice(user, invoice));
+  });
+}
+
+const invoiceEmailSchema = z.object({
+  invoiceId: id,
+  to: z.string().trim().email("Enter a valid recipient email address.").max(254),
+});
+
+export async function sendInvoiceEmailAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("invoices");
+    const { invoiceId, to } = invoiceEmailSchema.parse(input);
+    const repository = crm();
+    const invoice = await repository.getInvoice(invoiceId);
+    if (!invoice || !canViewInvoice(user, invoice)) {
+      throw new ForbiddenError("Invoice not found or access denied.");
+    }
+    let pdf = await getStoredInvoicePdf(invoice.id);
+    if (!pdf?.url) {
+      const blobToken = env().BLOB_READ_WRITE_TOKEN;
+      if (!blobToken) throw new Error("Invoice email requires BLOB_READ_WRITE_TOKEN so the customer can access its PDF.");
+      const [{ put }, { renderInvoicePdf }] = await Promise.all([
+        import("@vercel/blob"),
+        import("@/lib/invoice-pdf"),
+      ]);
+      const bytes = await renderInvoicePdf(invoice);
+      const blob = await put(`invoices/${randomUUID()}.pdf`, Buffer.from(bytes), {
+        access: "public",
+        contentType: "application/pdf",
+        token: blobToken,
+      });
+      pdf = { url: blob.url, ownerId: invoice.ownerId, executive: invoice.executive };
+      await saveStoredInvoicePdf(invoice.id, pdf);
+    }
+    const pdfUrl = pdf.url;
+    if (!await takeQuotationEmailRateLimit(user.id, invoice.id)) {
+      throw new ForbiddenError("Email limit reached. Try again later.");
+    }
+    await sendEmail({
+      to,
+      subject: `Invoice ${invoice.invoiceNo} from ${COMPANY.name}`,
+      text: [
+        `Dear ${invoice.contactName || invoice.customer},`,
+        "",
+        `Please find your invoice ${invoice.invoiceNo} from ${COMPANY.name}.`,
+        `Grand total: ${formatINR(invoice.total)}`,
+        `Invoice PDF: ${pdfUrl}`,
+        "",
+        COMPANY.name,
+        COMPANY.address,
+        COMPANY.contact,
+        `GSTIN: ${COMPANY.gstin}`,
+      ].join("\n"),
+    });
+    let noteLogged = true;
+    try {
+      await repository.addLeadNote(
+        invoice.leadId,
+        "Invoice emailed",
+        `Invoice ${invoice.invoiceNo} emailed to ${to} by ${user.name}. PDF: ${pdfUrl}`,
+      );
+    } catch (error) {
+      noteLogged = false;
+      reportActionFailure("log invoice email note", error, "The email was sent but its CRM note could not be logged.");
+    }
+    return { noteLogged };
+  }, undefined, { input, action: "send-invoice-email", section: "invoices" });
 }
 
 export async function suggestOfferNoAction(): Promise<string> {
@@ -522,6 +755,42 @@ export async function refreshProductsAction(): Promise<ActionResult<import("@/li
   });
 }
 
+const newProductSchema = z.object({
+  name: z.string().trim().min(1, "Enter a product name.").max(120),
+  code: z.string().trim().min(1, "Enter a product code.").max(60),
+  unit: z.string().trim().min(1, "Enter a unit.").max(40),
+  price: z.coerce.number().finite().positive().max(1_000_000_000),
+  gstRate: z.coerce.number().finite().min(0).max(1),
+});
+
+export async function createProductAction(input: unknown): Promise<ActionResult<import("@/lib/domain").Product>> {
+  return run(async () => {
+    const user = await requireActionUser("quotations");
+    if (user.role !== "Manager") throw new ForbiddenError("Only managers can add products.");
+    const productInput: NewProduct = newProductSchema.parse(input);
+    await invalidate("products");
+    const existing = await crm().listProducts();
+    const normalizedName = productInput.name.toLocaleLowerCase();
+    const normalizedCode = productInput.code.toLocaleLowerCase();
+    if (existing.some((product) => product.model.trim().toLocaleLowerCase() === normalizedName)) {
+      throw new DuplicateProductError("A product with this name already exists.");
+    }
+    if (existing.some((product) => product.code?.trim().toLocaleLowerCase() === normalizedCode)) {
+      throw new DuplicateProductError("A product with this code already exists.");
+    }
+    try {
+      const created = await crm().createProduct(productInput);
+      await invalidate("products");
+      return created;
+    } catch (error) {
+      if (isZohoFailure(error) && ["DUPLICATE_DATA", "DUPLICATE_KEY"].includes(error.code ?? "")) {
+        throw new DuplicateProductError("A product with this name or code already exists.");
+      }
+      throw error;
+    }
+  });
+}
+
 // ---------- Work & site visits ----------
 
 const newVisitSchema = z.object({
@@ -537,12 +806,8 @@ export async function scheduleVisitAction(input: unknown) {
     await ownLeadOrThrow(user, v.leadId);
     const executive = isExecutive(user) ? user.name : v.executive;
     if (!executive || !(await assignableNames()).includes(executive)) throw new ForbiddenError("Choose a team member.");
-    const cachedVisits = await getCachedValue<Visit[]>("visits");
     const createdVisit = await crm().createVisit({ ...v, executive }, user);
     scheduleCrmEffects("schedule visit", ["visits", "leads"], WORK_MUTATION_PATHS);
-    if (cachedVisits) {
-      await setCachedValue("visits", 60_000, [createdVisit, ...cachedVisits.filter((visit) => visit.id !== createdVisit.id)]);
-    }
     return createdVisit;
   }, undefined, { input, action: "schedule-visit", section: "visits" });
 }
@@ -563,18 +828,7 @@ export async function updateVisitAction(input: unknown) {
     if (!canUpdateWorkItem(user, visit)) {
       throw new ForbiddenError("You can only update your own work.");
     }
-    const cachedVisits = await getCachedValue<Visit[]>("visits");
     await crm().updateVisit(p.id, { status: p.status as VisitStatus | undefined, notes: p.notes, date: p.date, time: p.time, followUp: p.followUp }, user, visit);
     scheduleCrmEffects("update visit", ["visits", "leads"], WORK_MUTATION_PATHS);
-    if (cachedVisits) {
-      const patch = {
-        ...(p.status ? { status: p.status as VisitStatus, done: p.status === "Completed" } : {}),
-        ...(p.notes !== undefined ? { notes: p.notes } : {}),
-        ...(p.date ? { date: p.date } : {}),
-        ...(p.time ? { time: p.time } : {}),
-        ...(p.followUp ? { followUp: p.followUp } : {}),
-      };
-      await setCachedValue("visits", 60_000, cachedVisits.map((item) => item.id === p.id ? { ...item, ...patch } : item));
-    }
   }, undefined, { input, action: "update-visit", section: "visits" });
 }

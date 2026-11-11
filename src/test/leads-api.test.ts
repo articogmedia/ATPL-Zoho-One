@@ -7,10 +7,19 @@ vi.mock("server-only", () => ({}));
 const mocks = vi.hoisted(() => ({
   currentUser: vi.fn(),
   listLeads: vi.fn(),
+  listLeadsPage: vi.fn(),
+  listCalls: vi.fn(),
+  usePagedRepository: false,
 }));
 
 vi.mock("@/lib/auth/guard", () => ({ currentUser: mocks.currentUser }));
-vi.mock("@/lib/crm", () => ({ crm: () => ({ listLeads: mocks.listLeads }) }));
+vi.mock("@/lib/crm", () => ({
+  crm: () => ({
+    listLeads: mocks.listLeads,
+    listCalls: mocks.listCalls,
+    ...(mocks.usePagedRepository ? { listLeadsPage: mocks.listLeadsPage } : {}),
+  }),
+}));
 
 const tabs: LeadTab[] = ["fresh", "assigned", "callback", "mine", "all"];
 const users: User[] = [
@@ -54,8 +63,12 @@ const leads: Lead[] = [
 
 describe("GET /api/leads", () => {
   beforeEach(() => {
+    process.env.SESSION_SECRET = "test-session-secret-that-is-at-least-32-chars";
     mocks.currentUser.mockReset();
     mocks.listLeads.mockReset().mockResolvedValue(leads);
+    mocks.listCalls.mockReset().mockResolvedValue([]);
+    mocks.listLeadsPage.mockReset();
+    mocks.usePagedRepository = false;
   });
 
   it.each(users.flatMap((user) => tabs.map((tab) => [user, tab] as const)))(
@@ -87,5 +100,35 @@ describe("GET /api/leads", () => {
     expect(body.total).toBe(51);
     expect(body.tabCounts.fresh).toBe(51);
     expect(body.tabCounts.all).toBe(51);
+  });
+
+  it("returns no Fresh Leads to an executive through a direct API request", async () => {
+    mocks.currentUser.mockResolvedValue(users[2]);
+    mocks.usePagedRepository = true;
+    mocks.listLeadsPage.mockResolvedValue({ leads, total: 6, hasMore: true });
+    const { GET } = await import("@/app/api/leads/route");
+
+    const response = await GET(new NextRequest("http://localhost/api/leads?tab=fresh&page=1"));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.leads).toEqual([]);
+    expect(body.total).toBe(0);
+    expect(body.hasMore).toBe(false);
+    expect(body.tabCounts.fresh).toBe(0);
+    expect(body.tabCounts.all).toBe(0);
+  });
+
+  it("uses the requested page instead of loading the complete lead list", async () => {
+    mocks.currentUser.mockResolvedValue(users[0]);
+    mocks.usePagedRepository = true;
+    mocks.listLeadsPage.mockResolvedValue({ leads: leads.slice(0, 2), total: leads.length, hasMore: true });
+    const { GET } = await import("@/app/api/leads/route");
+
+    const response = await GET(new NextRequest("http://localhost/api/leads?tab=all&page=1"));
+
+    expect(response.status).toBe(200);
+    expect(mocks.listLeadsPage).toHaveBeenCalledWith(1, 50, undefined);
+    expect(mocks.listLeads).not.toHaveBeenCalled();
   });
 });

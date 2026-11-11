@@ -2,10 +2,11 @@ import "server-only";
 import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { canAdvanceLeadStatus, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quotationGstBreakdown, todayIST, uniqueProducts, type CallActivity, type Lead, type LeadSource, type LeadTimelineItem, type Product, type QuoteGstBreakdown, type User, type Visit } from "@/lib/domain";
-import { cached, getCachedValue, invalidate, patchCachedValues, setCachedValue } from "@/lib/cache";
+import { canAdvanceLeadStatus, DEFAULT_NOT_RESPONSIVE_ATTEMPTS, GST_RATE, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quotationGstBreakdown, summarizeLeadCalls, summarizeLeads, todayIST, uniqueProducts, type CallActivity, type CallOutcome, type Lead, type LeadSource, type LeadTimelineItem, type Product, type QuoteGstBreakdown, type User, type Visit } from "@/lib/domain";
+import { cached, getCachedValue, invalidate, markStale, setCachedValue } from "@/lib/cache";
 import { env } from "@/lib/env";
-import type { CrmRepository, LogCallInput } from "@/lib/crm/repository";
+import { offerSubject } from "@/lib/company";
+import type { CrmRepository, LogCallInput, NewProduct } from "@/lib/crm/repository";
 import { hosts, zoho, zohoList, zohoWrite, ZohoError, ZOHO_CRM_API_VERSION } from "./client";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
@@ -15,8 +16,11 @@ import {
 import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitRecord, mapSiteVisitUpdate } from "./site-visits";
 import { zohoDateTime } from "./date-time";
 import { leadSearchCriteria } from "./search";
+import { invoiceSnapshot } from "@/lib/invoice-rules";
+import { mapZohoInvoice, type ZohoInvoiceRecord } from "@/lib/invoice-mappers";
+import { nextInvoiceNumber } from "@/lib/invoice-number";
 
-const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", "City", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
+const LEAD_FIELDS = ["Last_Name", "First_Name", "Company", "Mobile", "Phone", FIELD.lead.email, FIELD.lead.accountId, "City", "Lead_Source", "Lead_Status", "Owner", "Description", "Created_Time", "Created_By", "Modified_By"];
 const LEAD_DETAIL_FIELDS = [...LEAD_FIELDS, "Street", "Created_By", "Modified_By"];
 
 export function leadPhoneMatch(record: ZLead, normalizedPhone: string): "Mobile" | "Phone" | null {
@@ -199,7 +203,7 @@ const quoteSchema = async () => {
 
 function quoteLineItemsPayload(
   lineItemsField: QuoteLineItemsField,
-  lines: { p: Product; qty: number; discount: number; amount: number }[],
+  lines: { p: Product; qty: number; discount: number; amount: number; taxRate: number }[],
   fieldMetadata?: QuoteFieldMetadata,
 ): Record<string, unknown>[] {
   const subfields = fieldMetadata?.subform_fields ?? fieldMetadata?.fields ?? [];
@@ -215,7 +219,8 @@ function quoteLineItemsPayload(
     });
   }
 
-  return lines.map(({ p, qty, discount, amount }) => {
+  return lines.map(({ p, qty, discount, amount, taxRate }) => {
+    const lineTax = [{ percentage: taxRate * 100, name: `GST ${taxRate * 100}%` }];
     if (lineItemsField === "Product_Details") {
       return {
         product: { id: p.id },
@@ -225,6 +230,7 @@ function quoteLineItemsPayload(
         total: p.price * qty,
         total_after_discount: amount,
         net_total: amount,
+        Line_Tax: lineTax,
         ...(p.description ? { Description: p.description } : {}),
       };
     }
@@ -239,25 +245,16 @@ function quoteLineItemsPayload(
       Net_Total: amount,
       Total_After_Discount: amount,
       Description: p.description,
+      Line_Tax: lineTax,
     };
     const newItem: Record<string, unknown> = {};
     for (const [name, value] of Object.entries(candidates)) {
-      if ((!subfields.length || availableNames.has(name)) && value !== undefined && value !== "") newItem[name] = value;
+      if ((name === "Line_Tax" || !subfields.length || availableNames.has(name)) && value !== undefined && value !== "") newItem[name] = value;
     }
     if (subfields.length && !availableNames.has("List_Price") && availableNames.has("Unit_Price")) {
       delete newItem.List_Price;
     } else {
       delete newItem.Unit_Price;
-    }
-    const lineTax = subfields.find((field) =>
-      field.api_name === "Line_Tax" && (field.required || field.system_mandatory || field.is_mandatory),
-    );
-    if (lineTax) {
-      console.warn("[zoho] Quotes line-item Line_Tax is mandatory but no tax was specified; sending an empty tax list", {
-        lineItemsField,
-        field: lineTax.api_name,
-      });
-      newItem.Line_Tax = [];
     }
     return newItem;
   });
@@ -516,7 +513,6 @@ const userById = async (id: string) => {
 export async function advanceLead(leadId: string, currentStatus: Lead["status"], target: "Site Visit Scheduled" | "Quotation Sent"): Promise<boolean> {
   if (!canAdvanceLeadStatus(currentStatus, target)) return false;
   await zohoWrite("PUT", `/Leads/${leadId}`, { Lead_Status: WRITE_LEAD_STATUS[target] }, { trigger: ["workflow"] });
-  await invalidate("leads");
   return true;
 }
 const activeUserById = async (id: string) => {
@@ -556,11 +552,16 @@ const leads = cache(async function leads(): Promise<Lead[]> {
         followUps.set(leadId, { date, time: String(task[FIELD.task.visitTime] ?? "") });
       }
     }
-    return raw.map((z) => {
+    const mappedLeads = raw.map((z) => {
       const lead = mapLead(z, assignable, salesExecutives);
       const followUp = followUps.get(lead.id);
       return followUp ? { ...lead, followUp: followUp.date, followUpTime: followUp.time } : lead;
     }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
+    await setCachedValue("leads:aggregate", SHORT, Object.fromEntries(allUsers.map((user) => [
+      user.id,
+      summarizeLeads(user, mappedLeads),
+    ])));
+    return mappedLeads;
   }, { keepStale: true });
 });
 const leadMap = async () => new Map((await leads()).map((l) => [l.id, l]));
@@ -668,7 +669,6 @@ function scheduleSideEffects(
 }
 
 async function quotePage(page: number) {
-  await ensureUniqueQuoteNumbers();
   const schema = await quoteSchema();
   return cached(`quotes:page:${page}`, SHORT, async () => {
     const response = await zoho<{ data?: ZQuote[]; info?: { more_records?: boolean; count?: number } }>("GET", "/Quotes", {
@@ -686,9 +686,6 @@ async function quotePage(page: number) {
 }
 
 let quoteWriteLock: Promise<void> = Promise.resolve();
-let lastQuoteUniquenessCheck = 0;
-let quoteUniquenessCheck: Promise<void> | undefined;
-
 async function withQuoteWriteLock<T>(task: () => Promise<T>): Promise<T> {
   const previous = quoteWriteLock;
   let release!: () => void;
@@ -713,11 +710,13 @@ function customerSnapshotField(fields: QuoteFieldMetadata[]): QuoteFieldMetadata
   return candidates[0];
 }
 
-function quoteRecordSnapshot(lead: Lead, gstBreakdown?: QuoteGstBreakdown): QuoteCustomerSnapshot {
+function quoteRecordSnapshot(lead: Lead, gstBreakdown?: QuoteGstBreakdown, revision = 0): QuoteCustomerSnapshot {
   return {
     leadId: lead.id,
+    revision,
     name: lead.name,
     phone: lead.phone,
+    email: lead.email,
     company: lead.company,
     area: lead.area,
     address: lead.address,
@@ -773,22 +772,11 @@ async function repairDuplicateOfferNumbersUnlocked() {
       });
     }
   }
-  await invalidate("quotes");
-}
-
-async function ensureUniqueQuoteNumbers() {
-  if (Date.now() - lastQuoteUniquenessCheck < 60_000) return;
-  quoteUniquenessCheck ??= withQuoteWriteLock(async () => {
-    if (Date.now() - lastQuoteUniquenessCheck < 60_000) return;
-    await repairDuplicateOfferNumbersUnlocked();
-    lastQuoteUniquenessCheck = Date.now();
-  }).finally(() => { quoteUniquenessCheck = undefined; });
-  await quoteUniquenessCheck;
 }
 
 export async function suggestedZohoOfferNo(): Promise<string> {
-  await ensureUniqueQuoteNumbers();
-  return nextOfferNo(await allOfferNumbers(), todayIST());
+  const offerNumbers = await cached("quotes:offer-numbers", LONG, allOfferNumbers, { keepStale: true });
+  return nextOfferNo(offerNumbers, todayIST());
 }
 
 function isProductFieldSetError(error: unknown): boolean {
@@ -1023,12 +1011,7 @@ export const zohoRepository: CrmRepository = {
       assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id,
       remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [actor.name],
     };
-    scheduleSideEffects("lead creation", secondaryWrites, async () => {
-      await patchCachedValues("leads", (value) => Array.isArray(value)
-        ? [createdLead, ...value.filter((lead) => (lead as Lead).id !== createdLead.id)]
-        : undefined, SHORT);
-      await invalidate("users", "visits");
-    });
+    scheduleSideEffects("lead creation", secondaryWrites, () => markStale("leads", "users", "visits"));
     return createdLead;
     } finally {
       release();
@@ -1177,7 +1160,6 @@ export const zohoRepository: CrmRepository = {
         throw new ZohoError(`Fix assigned leads failed for ${lead.name}: ${error instanceof Error ? error.message : "Zoho rejected the update"}`);
       }
     }
-    await invalidate("leads");
     return stale.length;
   },
   async listFixableAssignedLeads(actor) {
@@ -1218,6 +1200,10 @@ export const zohoRepository: CrmRepository = {
       record.Lead_Status = WRITE_LEAD_STATUS[p.status];
       parts.push(`Result: ${p.status}`);
     }
+    if (p.lostReason !== undefined && p.lostReason !== current.lostReason) {
+      record[FIELD.lead.lostReason] = p.lostReason || null;
+      parts.push(p.lostReason ? `Lost reason: ${p.lostReason}` : "Lost reason cleared");
+    }
     if (p.assignedTo !== undefined && p.assignedTo !== current.assignedTo) {
       if (p.assignedTo) {
         updatedOwner = await userByName(p.assignedTo);
@@ -1243,6 +1229,7 @@ export const zohoRepository: CrmRepository = {
       ...(p.phone !== undefined ? { phone: p.phone.trim() } : {}),
       ...(p.source !== undefined ? { source: p.source } : {}),
       ...(p.status !== undefined ? { status: p.status } : {}),
+      ...(p.lostReason !== undefined ? { lostReason: p.lostReason } : {}),
       ...(p.remarks !== undefined ? { remarks: p.remarks.trim() } : {}),
       ...(p.followUp !== undefined ? { followUp: p.followUp } : {}),
       ...(p.assignedTo !== undefined ? {
@@ -1267,14 +1254,7 @@ export const zohoRepository: CrmRepository = {
         });
       }]);
     }
-    scheduleSideEffects("lead update", sideEffects, () => invalidate("users", "visits"));
-    await patchCachedValues("leads", (value) => {
-      if (Array.isArray(value)) return value.map((lead) => (lead as Lead).id === id ? updatedLead : lead);
-      if (value && typeof value === "object" && "leads" in value && Array.isArray(value.leads)) {
-        return { ...value, leads: value.leads.map((lead) => (lead as Lead).id === id ? updatedLead : lead) };
-      }
-      return undefined;
-    }, SHORT);
+    scheduleSideEffects("lead update", sideEffects, () => markStale("leads", "users", "visits"));
     return updatedLead;
   },
 
@@ -1284,7 +1264,6 @@ export const zohoRepository: CrmRepository = {
     if (!result || result.code !== "SUCCESS") {
       throw new ZohoError(result?.message ?? "Zoho could not delete the lead", undefined, result?.code);
     }
-    await invalidate("leads", "users");
   },
 
   async getLeadHistory(id) {
@@ -1292,6 +1271,10 @@ export const zohoRepository: CrmRepository = {
       query: { fields: NOTE_FIELDS.join(","), sort_by: "Created_Time", sort_order: "desc", per_page: 50 },
     });
     return (json?.data ?? []).map(mapNote);
+  },
+
+  async addLeadNote(id, title, content) {
+    await addNote(id, title, content);
   },
 
   async getLeadTimeline(id): Promise<LeadTimelineItem[]> {
@@ -1363,7 +1346,31 @@ export const zohoRepository: CrmRepository = {
         return [];
       }),
     ]);
-    const status = CALL_STATUS_BY_OUTCOME[input.outcome];
+    const previousCalls = await zoho<{ data?: ZCall[] }>("GET", `/Leads/${leadId}/Calls`, {
+      query: { fields: CALL_FIELDS.join(","), page: 1, per_page: 200, sort_by: "Call_Start_Time", sort_order: "desc" },
+    });
+    const knownOutcomes: CallOutcome[] = ["Connected", "No Answer", "Busy", "Wrong Number", "Call Back Later"];
+    const callDate = zohoDateTime();
+    const callHistory: CallActivity[] = (previousCalls?.data ?? []).flatMap((call) => {
+      const outcome = call[FIELD.call.result];
+      return typeof outcome === "string" && knownOutcomes.includes(outcome as CallOutcome)
+        ? [{
+            id: String(call.id),
+            leadId,
+            ownerId: String(call.Owner?.id ?? ""),
+            date: call.Call_Start_Time ?? "",
+            outcome: outcome as CallOutcome,
+          }]
+        : [];
+    });
+    callHistory.push({ id: "pending", leadId, ownerId: actor.id, date: callDate, outcome: input.outcome });
+    const threshold = input.notResponsiveAttempts ?? DEFAULT_NOT_RESPONSIVE_ATTEMPTS;
+    const callSummary = summarizeLeadCalls(callHistory, leadId, threshold);
+    const status = input.outcome === "Wrong Number"
+      ? lead.status
+      : input.outcome === "No Answer" || input.outcome === "Busy"
+        ? callSummary.attempts >= threshold ? "Not Responsive" : "Attempted to Contact"
+        : CALL_STATUS_BY_OUTCOME[input.outcome];
     const description = [lead.remarks.trim(), input.remarks.trim()].filter(Boolean).join("\n");
     const leadPayload = completeRecordFromMetadata({
       Lead_Status: WRITE_LEAD_STATUS[status],
@@ -1380,7 +1387,7 @@ export const zohoRepository: CrmRepository = {
       Subject: `${input.outcome} - ${lead.name}`,
       ...relatedToLead(leadId), Call_Type: "Outbound",
       [FIELD.call.result]: input.outcome,
-      [FIELD.call.startTime]: zohoDateTime(),
+      [FIELD.call.startTime]: callDate,
       Description: input.remarks || undefined,
       ...(callOwner?.id.trim() ? { Owner: { id: callOwner.id.trim() } } : {}),
     }, callFields, input.outcome, "Calls");
@@ -1412,9 +1419,14 @@ export const zohoRepository: CrmRepository = {
         });
       }]);
     }
-    scheduleSideEffects("call outcome", sideEffects, () => invalidate("leads", "users", "visits"));
-    await invalidate("leads", "users", "visits");
-    return { ...(historyWarning ? { historyWarning } : {}), ...(callLogPending ? { callLogPending: true } : {}) };
+    scheduleSideEffects("call outcome", sideEffects, () => markStale("leads", "users", "visits"));
+    return {
+      ...(historyWarning ? { historyWarning } : {}),
+      ...(callLogPending ? { callLogPending: true } : {}),
+      attempts: callSummary.attempts,
+      lastOutcome: callSummary.lastOutcome,
+      status,
+    };
   },
 
   async listCalls(): Promise<CallActivity[]> {
@@ -1424,7 +1436,8 @@ export const zohoRepository: CrmRepository = {
         id: String(call.id).trim(),
         leadId: String(call.What_Id?.id ?? "").trim(),
         ownerId: String(call.Owner?.id ?? "").trim(),
-        date: call.Call_Start_Time?.slice(0, 10) ?? "",
+        date: call.Call_Start_Time ?? "",
+        ...(typeof call[FIELD.call.result] === "string" ? { outcome: call[FIELD.call.result] as CallOutcome } : {}),
       }));
     }, { keepStale: true });
   },
@@ -1432,6 +1445,7 @@ export const zohoRepository: CrmRepository = {
   async listProducts() {
     return cached("products", PRODUCTS_TTL, async () => {
       const fieldAttempts = [
+        ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit", "Tax"],
         ["Product_Name", "Product_Code", "Unit_Price", "Product_Active", "Usage_Unit"],
         ["Product_Name", "Unit_Price", "Product_Code", "Product_Active"],
         ["Product_Name", "Unit_Price"],
@@ -1473,6 +1487,25 @@ export const zohoRepository: CrmRepository = {
       }
       throw new ZohoError("Zoho rejected all supported Products field sets.", 400, "INVALID_PRODUCT_FIELDS");
     }, { keepStale: true });
+  },
+
+  async createProduct(input: NewProduct) {
+    const taxPercent = Number((input.gstRate * 100).toFixed(2));
+    const id = await zohoWrite("POST", "/Products", {
+      Product_Name: input.name,
+      Product_Code: input.code,
+      Usage_Unit: input.unit,
+      Unit_Price: input.price,
+      Tax: [{ percentage: taxPercent, name: `GST ${taxPercent}%` }],
+    });
+    return {
+      id,
+      model: input.name,
+      code: input.code,
+      unit: input.unit,
+      price: input.price,
+      gstRate: input.gstRate,
+    };
   },
 
   async listQuotes() {
@@ -1519,8 +1552,12 @@ export const zohoRepository: CrmRepository = {
     const leadId = rawLead && typeof rawLead === "object" && "id" in rawLead
       ? String(rawLead.id ?? "").trim()
       : typeof rawLead === "string" ? rawLead.trim() : "";
+    const snapshot = parseQuoteCustomerSnapshot(record);
+    const hasSnapshotDetails = Boolean(
+      snapshot.name || snapshot.phone || snapshot.company || snapshot.area || snapshot.address,
+    );
     let lead: Lead | null = null;
-    if (leadId) {
+    if (leadId && !hasSnapshotDetails) {
       try {
         lead = await this.getLead(leadId);
       } catch (error) {
@@ -1533,12 +1570,11 @@ export const zohoRepository: CrmRepository = {
         });
       }
     }
-    const snapshot = parseQuoteCustomerSnapshot(record);
     const lookupName = (value: unknown) =>
       value && typeof value === "object" ? String((value as { name?: string }).name ?? "").trim() : "";
     const customerName = snapshot.name || lookupName(record.Contact_Name) || lookupName(record.Account_Name);
     const quotePhone = String(snapshot.phone ?? record.Mobile ?? record.Phone ?? "").trim();
-    if (!lead && customerName) {
+    if (!lead && !hasSnapshotDetails && customerName) {
       try {
         const normalizedName = customerName.toLowerCase();
         lead = (await this.listLeads()).find((candidate) =>
@@ -1551,7 +1587,7 @@ export const zohoRepository: CrmRepository = {
         });
       }
     }
-    if (!lead && quotePhone) {
+    if (!lead && !hasSnapshotDetails && quotePhone) {
       try {
         lead = (await this.findLeadByPhone(quotePhone))?.lead ?? null;
       } catch (error) {
@@ -1561,13 +1597,18 @@ export const zohoRepository: CrmRepository = {
         });
       }
     }
-    const products = await this.listProducts().catch((error: unknown) => {
+    const lineItems = record[lineItemsField] ?? [];
+    const needsProductLookup = lineItems.length === 0 || lineItems.some((item) => {
+      const product = item.product ?? item.Product_Name;
+      return typeof product === "string" ? !product.trim() : !product?.name?.trim();
+    });
+    const products = needsProductLookup ? await this.listProducts().catch((error: unknown) => {
       console.warn("[zoho] quote products unavailable; mapping saved item snapshots", {
         quoteId: id,
         message: error instanceof Error ? error.message : String(error),
       });
       return [];
-    });
+    }) : [];
     const map = new Map(lead ? [[lead.id, lead]] : []);
     return mapQuote(record, map, new Map(products.map((product) => [product.id, product])), schema.fieldNames);
   },
@@ -1579,7 +1620,6 @@ export const zohoRepository: CrmRepository = {
       ?.map((item) => item.actual_value ?? item.display_value ?? "")
       .find((value) => value.toLowerCase() === "sent") ?? "Sent";
     await zohoWrite("PUT", `/Quotes/${encodeURIComponent(id)}`, { Status: sentValue });
-    await invalidate("quotes");
   },
 
   async createQuote(input, actor, executive) {
@@ -1598,7 +1638,8 @@ export const zohoRepository: CrmRepository = {
       const p = products.find((x) => x.id === i.productId);
       if (!p) throw new ZohoError("Unknown product");
       const discount = Math.min(p.price * i.qty, Math.max(0, i.discount));
-      return { p, qty: i.qty, discount, amount: p.price * i.qty - discount };
+      const taxRate = i.taxRate ?? p.gstRate ?? GST_RATE;
+      return { p, qty: i.qty, discount, amount: p.price * i.qty - discount, taxRate };
     });
     const savedItems = lines.map((line) => ({
       productId: line.p.id,
@@ -1608,8 +1649,10 @@ export const zohoRepository: CrmRepository = {
       qty: line.qty,
       price: line.p.price,
       discount: line.discount,
+      taxRate: line.taxRate,
     }));
-    const gstBreakdown = quotationGstBreakdown(savedItems);
+    const extraCharges = input.extraCharges ?? [];
+    const gstBreakdown = quotationGstBreakdown(savedItems, extraCharges);
     const totals = gstBreakdown;
     const customer = lead.company || lead.name;
     const leadReference = leadReferenceField ? quoteLeadReference(leadReferenceField, lead.id) : undefined;
@@ -1750,7 +1793,16 @@ export const zohoRepository: CrmRepository = {
             gstAmount: totals.zoho.tax,
             quotePayloadKeys: Object.keys(quoteRecord),
           });
-          const fallbackRecord: Record<string, unknown> = { ...quoteRecord, Adjustment: totals.zoho.tax };
+          const fallbackLines = (quoteRecord[lineItemsField] as Record<string, unknown>[]).map((item) => {
+            const line = { ...item };
+            delete line.Line_Tax;
+            return line;
+          });
+          const fallbackRecord: Record<string, unknown> = {
+            ...quoteRecord,
+            [lineItemsField]: fallbackLines,
+            Adjustment: totals.zoho.tax + totals.zoho.adjustment,
+          };
           delete fallbackRecord.Tax;
           return zohoWrite("POST", "/Quotes", fallbackRecord);
         }
@@ -1758,14 +1810,12 @@ export const zohoRepository: CrmRepository = {
       let offerNo = allocate(currentOfferNos);
       try {
         const id = await write(offerNo);
-        lastQuoteUniquenessCheck = Date.now();
         return { id, offerNo };
       } catch (error) {
         if (!(error instanceof ZohoError) || error.code !== "DUPLICATE_DATA") throw error;
         const latestOfferNos = await allOfferNumbers();
         offerNo = allocate([...latestOfferNos, offerNo]);
         const id = await write(offerNo);
-        lastQuoteUniquenessCheck = Date.now();
         return { id, offerNo };
       }
     });
@@ -1773,7 +1823,6 @@ export const zohoRepository: CrmRepository = {
       lead.id, "Quotation created", `Quotation ${created.offerNo} created by ${actor.name}`,
       { action: "create quote", quoteId: created.id },
     )]]);
-    await invalidate("quotes", "leads");
     return {
       id: created.id,
       offerNo: created.offerNo,
@@ -1782,6 +1831,7 @@ export const zohoRepository: CrmRepository = {
       contactName: lead.name,
       company: lead.company,
       phone: lead.phone,
+      email: lead.email,
       area: lead.area,
       address: lead.address,
       executive,
@@ -1791,6 +1841,188 @@ export const zohoRepository: CrmRepository = {
       items: savedItems,
       gstBreakdown,
     };
+  },
+
+  async updateQuote(id, input, actor) {
+    const current = await this.getQuote(id);
+    if (!current) throw new ZohoError("Quotation not found.", 404, "NOT_FOUND");
+    if (current.leadId !== input.leadId) {
+      throw new ZohoError("The customer cannot be changed while editing a quotation.", 400, "INVALID_LEAD_REFERENCE");
+    }
+    const [lead, products] = await Promise.all([this.getLead(input.leadId), this.listProducts()]);
+    if (!lead) throw new ZohoError("Lead not found.", 404);
+    const schema = await quoteSchema();
+    const lineItemsField = quoteLineItemsField(schema.fieldNames);
+    const lineItemsMetadata = schema.fieldsByName.get(lineItemsField);
+    const lines = input.items.map((item) => {
+      const product = products.find((candidate) => candidate.id === item.productId);
+      if (!product) throw new ZohoError("Unknown product.", 400, "INVALID_PRODUCT");
+      const discount = Math.min(product.price * item.qty, Math.max(0, item.discount));
+      return {
+        p: product,
+        qty: item.qty,
+        discount,
+        amount: product.price * item.qty - discount,
+        taxRate: item.taxRate ?? product.gstRate ?? GST_RATE,
+      };
+    });
+    const savedItems = lines.map((line) => ({
+      productId: line.p.id,
+      model: line.p.model,
+      description: line.p.description,
+      unit: line.p.unit,
+      qty: line.qty,
+      price: line.p.price,
+      discount: line.discount,
+      taxRate: line.taxRate,
+    }));
+    const revision = (current.revision ?? 0) + 1;
+    const extraCharges = input.extraCharges ?? [];
+    const gstBreakdown = quotationGstBreakdown(savedItems, extraCharges);
+    const title = input.subject?.trim()
+      || current.subject?.replace(/^Offer\s+.+?\s+-\s+/i, "").trim()
+      || offerSubject(savedItems.map((item) => item.model));
+    const record: Record<string, unknown> = {
+      Subject: `Offer ${current.offerNo}/R${revision} - ${title}`,
+      [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata),
+      Sub_Total: gstBreakdown.zoho.subtotal,
+      Discount: gstBreakdown.zoho.discount,
+      Tax: gstBreakdown.zoho.tax,
+      Adjustment: gstBreakdown.zoho.adjustment,
+    };
+    if (schema.fieldNames.has(FIELD.quote.offerNo) && schema.fieldsByName.get(FIELD.quote.offerNo)?.read_only !== true) {
+      record[FIELD.quote.offerNo] = current.offerNo;
+    }
+    const snapshotField = customerSnapshotField(schema.fields);
+    const customerSnapshot = JSON.stringify(quoteRecordSnapshot(lead, gstBreakdown, revision));
+    if (snapshotField?.api_name) record[snapshotField.api_name] = customerSnapshot;
+    else if (schema.fieldNames.has("Description") && schema.fieldsByName.get("Description")?.read_only !== true) {
+      record.Description = customerSnapshot;
+    }
+    for (const [field, value] of [["Customer_Name", lead.name], ["Mobile", lead.phone], ["Phone", lead.phone]] as const) {
+      if (schema.fieldNames.has(field) && schema.fieldsByName.get(field)?.read_only !== true) record[field] = value;
+    }
+
+    const write = async (payload: Record<string, unknown>) => {
+      await zohoWrite("PUT", `/Quotes/${encodeURIComponent(id)}`, payload);
+    };
+    try {
+      await write(record);
+    } catch (error) {
+      if (!isTaxFieldWriteFailure(error)) throw error;
+      const fallbackLines = (record[lineItemsField] as Record<string, unknown>[]).map((line) => {
+        const fallbackLine = { ...line };
+        delete fallbackLine.Line_Tax;
+        return fallbackLine;
+      });
+      const fallbackRecord = {
+        ...record,
+        [lineItemsField]: fallbackLines,
+        Adjustment: gstBreakdown.zoho.tax + gstBreakdown.zoho.adjustment,
+      };
+      delete fallbackRecord.Tax;
+      await write(fallbackRecord);
+    }
+    scheduleSideEffects("revise quotation", [["history note", () => addHistoryNoteBestEffort(
+      lead.id, "Quotation revised", `Quotation ${current.offerNo} revised R${revision} by ${actor.name}`,
+      { action: "revise quotation", quoteId: id },
+    )]]);
+    return {
+      ...current,
+      offerNo: current.offerNo,
+      revision,
+      leadId: lead.id,
+      customer: lead.company || lead.name,
+      contactName: lead.name,
+      company: lead.company,
+      phone: lead.phone,
+      email: lead.email,
+      area: lead.area,
+      address: lead.address,
+      subject: record.Subject as string,
+      total: gstBreakdown.total,
+      items: savedItems,
+      gstBreakdown,
+    };
+  },
+
+  async listInvoices() {
+    return cached("invoices", SHORT, async () => {
+      const rows = await zohoList<ZohoInvoiceRecord>("Invoices", [
+        "Subject", "Status", "Created_Time", "Account_Name",
+        FIELD.invoice.invoiceNo, FIELD.invoice.customerGstin,
+        FIELD.invoice.sourceQuoteId, FIELD.invoice.snapshot,
+      ], env().ZOHO_MAX_LEADS);
+      return rows.map(mapZohoInvoice);
+    }, { keepStale: true });
+  },
+
+  async getInvoice(id) {
+    const response = await zoho<{ data?: ZohoInvoiceRecord[] }>("GET", `/Invoices/${encodeURIComponent(id)}`, {
+      query: {
+        fields: [
+          "Subject", "Status", "Created_Time", "Account_Name",
+          FIELD.invoice.invoiceNo, FIELD.invoice.customerGstin,
+          FIELD.invoice.sourceQuoteId, FIELD.invoice.snapshot,
+        ].join(","),
+      },
+    });
+    const record = response?.data?.[0];
+    return record ? mapZohoInvoice(record) : null;
+  },
+
+  async createInvoice(quote, lead, actor, gstin) {
+    const existing = (await this.listInvoices()).find((invoice) => invoice.quoteId === quote.id);
+    if (existing) return existing;
+    const accountId = quote.accountId || lead.accountId;
+    if (!accountId) {
+      throw new ZohoError(
+        "Link this lead to a Zoho Account before converting its quotation to an invoice.",
+        400, "INVOICE_ACCOUNT_REQUIRED", "Account_Name",
+      );
+    }
+    if (!quote.items?.length || quote.items.some((item) => !item.productId)) {
+      throw new ZohoError(
+        "This quotation contains an item without a Zoho Product. Update the quotation before converting it.",
+        400, "INVOICE_PRODUCT_REQUIRED", "Product_Details",
+      );
+    }
+    const invoiceNo = await nextInvoiceNumber();
+    const invoice = invoiceSnapshot(quote, lead, invoiceNo, actor, gstin, todayIST());
+    const items = invoice.items.map((item) => ({
+      p: {
+        id: item.productId!,
+        model: item.model,
+        description: item.description,
+        unit: item.unit,
+        price: item.price,
+      },
+      qty: item.qty,
+      discount: item.discount ?? 0,
+      amount: Math.max(0, item.qty * item.price - (item.discount ?? 0)),
+      taxRate: item.taxRate ?? GST_RATE,
+    }));
+    const extraCharges = invoice.gstBreakdown.extraCharges ?? [];
+    const payload: Record<string, unknown> = {
+      Subject: `Invoice ${invoiceNo} - ${invoice.customer}`,
+      Invoice_Date: invoice.date,
+      Account_Name: { id: accountId },
+      Product_Details: quoteLineItemsPayload("Product_Details", items),
+      Sub_Total: invoice.gstBreakdown.subtotal,
+      Discount: invoice.gstBreakdown.discount,
+      Tax: invoice.gstBreakdown.gst,
+      Adjustment: extraCharges.reduce((sum, charge) => sum + charge.amount, 0),
+      Grand_Total: invoice.total,
+      [FIELD.invoice.invoiceNo]: invoiceNo,
+      [FIELD.invoice.customerGstin]: gstin,
+      [FIELD.invoice.sourceQuoteId]: quote.id,
+      [FIELD.invoice.snapshot]: JSON.stringify(invoice),
+    };
+    const id = await zohoWrite("POST", "/Invoices", payload);
+    if (!id) throw new ZohoError("Zoho did not return the created invoice ID.", undefined, "INVOICE_ID_MISSING");
+    const saved = { ...invoice, id };
+    await invalidate("invoices");
+    return saved;
   },
 
   async listVisits() {
@@ -1874,8 +2106,7 @@ export const zohoRepository: CrmRepository = {
         Description: input.nextAction || undefined,
       });
     }]);
-    scheduleSideEffects("schedule work", sideEffects, () => invalidate("leads", "visits"));
-    await invalidate("visits");
+    scheduleSideEffects("schedule work", sideEffects, () => markStale("leads", "visits"));
     return createdVisit;
   },
 
@@ -1910,7 +2141,6 @@ export const zohoRepository: CrmRepository = {
           visitId: id,
         })]]);
       }
-      await invalidate("visits");
       return;
     }
     const record: Record<string, unknown> = {};
@@ -1933,6 +2163,5 @@ export const zohoRepository: CrmRepository = {
         { taskId: id, operation: "update task" },
       )]]);
     }
-    await invalidate("visits");
   },
 };

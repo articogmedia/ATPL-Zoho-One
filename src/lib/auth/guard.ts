@@ -1,7 +1,7 @@
 import "server-only";
 import { redirect } from "next/navigation";
 import { canAccess, type Section, type User } from "@/lib/domain";
-import { cached } from "@/lib/cache";
+import { passwordStore } from "@/lib/auth/password-store";
 import { readSession } from "./session";
 import { STATIC_USERS, portalRole, staticUserAsPortalUser } from "./users";
 
@@ -15,11 +15,14 @@ export class ForbiddenError extends Error {
 export async function currentUser(): Promise<User | null> {
   const s = await readSession();
   if (!s) return null;
-  const staticUser = STATIC_USERS.find((u) => u.username === s.username && portalRole(u.role) === s.role);
-  const resolved = staticUser
+  const staticUser = STATIC_USERS.find((u) =>
+    portalRole(u.role) === s.role &&
+    (u.username === s.username || u.name.toLowerCase() === s.name.toLowerCase()));
+  const sessionUsername = staticUser?.username ?? s.username;
+  if (s.sessionVersion !== await passwordStore.getSessionVersion(sessionUsername)) return null;
+  return staticUser
     ? staticUserAsPortalUser(staticUser, s.zohoUserId || staticUser.zohoUserId || s.uid)
     : { id: s.zohoUserId || s.uid, name: s.name, role: s.role };
-  return cached(`auth:portal-user:${s.uid}`, 5 * 60_000, async () => resolved);
 }
 
 /** For pages: redirect to login if signed out. */

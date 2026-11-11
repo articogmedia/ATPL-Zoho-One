@@ -5,6 +5,11 @@ import { currentUser } from "@/lib/auth/guard";
 import { env } from "@/lib/env";
 import { newErrorReference } from "@/lib/crm-action-errors";
 import { quotationRequestSchema } from "@/lib/quotation-request";
+import { logPerf } from "@/lib/perf-log";
+import { crm } from "@/lib/crm";
+import { visibleFor, type Quotation } from "@/lib/domain";
+import { getStoredQuotationPdf, saveStoredQuotationPdf } from "@/lib/quotation-pdf-store";
+import { signQuotationPdfSnapshot, verifyQuotationPdfSnapshot } from "@/lib/quotation-pdf-snapshot";
 
 export const runtime = "nodejs";
 export const preferredRegion = "bom1";
@@ -15,7 +20,7 @@ function redactPayload(value: unknown): unknown {
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [
       key,
-      /^(mobile|phone)$/i.test(key) && item != null
+      /^(mobile|phone|quoteSnapshotToken)$/i.test(key) && item != null
         ? `******${String(item).replace(/\D/g, "").slice(-2)}`
         : redactPayload(item),
     ]));
@@ -23,8 +28,9 @@ function redactPayload(value: unknown): unknown {
   return value;
 }
 
-export async function POST(request: NextRequest) {
-  if (!await currentUser()) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
+async function handlePost(request: NextRequest) {
+  const user = await currentUser();
+  if (!user) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
 
   let payload: unknown;
   try {
@@ -51,19 +57,37 @@ export async function POST(request: NextRequest) {
     }, { status: 400 });
   }
 
-  const blobToken = env().BLOB_READ_WRITE_TOKEN;
-  if (!blobToken) {
-    const reference = newErrorReference();
-    console.error("[api] quotation share storage is not configured", {
-      reference, requiredEnvironmentVariable: "BLOB_READ_WRITE_TOKEN",
-    });
-    return NextResponse.json({
-      error: `PDF sharing is not configured. Set BLOB_READ_WRITE_TOKEN. (Ref: ${reference})`,
-      reference,
-    }, { status: 503 });
-  }
-
   try {
+    let savedQuote: Quotation | null = null;
+    if (parsed.data.quoteId) {
+      const stored = await getStoredQuotationPdf(parsed.data.quoteId);
+      if (stored) {
+        if (visibleFor(user, [{ ownerId: stored.ownerId, executive: stored.executive }]).length === 0) {
+          return NextResponse.json({ error: "Quotation not found or access denied." }, { status: 403 });
+        }
+        return NextResponse.json({ url: stored.url });
+      }
+      savedQuote = parsed.data.quoteSnapshotToken
+        ? verifyQuotationPdfSnapshot(parsed.data.quoteSnapshotToken, user.id, parsed.data.quoteId)
+        : await crm().getQuote(parsed.data.quoteId);
+      if (!savedQuote || visibleFor(user, [savedQuote]).length === 0) {
+        return NextResponse.json({ error: "Quotation not found or access denied." }, { status: 403 });
+      }
+    }
+
+    const blobToken = env().BLOB_READ_WRITE_TOKEN;
+    if (!blobToken) {
+      const reference = newErrorReference();
+      console.error("[api] quotation share storage is not configured", {
+        reference, requiredEnvironmentVariable: "BLOB_READ_WRITE_TOKEN",
+      });
+      return NextResponse.json({
+        error: `PDF sharing is not configured. Set BLOB_READ_WRITE_TOKEN. (Ref: ${reference})`,
+        reference,
+      }, { status: 503 });
+    }
+
+    const pdfStarted = Date.now();
     const pdfUrl = new URL("/api/quotations/pdf", request.url);
     const pdfResponse = await fetch(pdfUrl, {
       method: "POST",
@@ -72,8 +96,12 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json",
         ...(request.headers.get("cookie") ? { Cookie: request.headers.get("cookie")! } : {}),
       },
-      body: JSON.stringify(parsed.data),
+      body: JSON.stringify({
+        ...parsed.data,
+        ...(savedQuote ? { quoteSnapshotToken: signQuotationPdfSnapshot(savedQuote, user.id) } : {}),
+      }),
     });
+    logPerf("api.quotations.share.pdf", Date.now() - pdfStarted, { status: pdfResponse.status });
     if (!pdfResponse.ok) {
       const body = await pdfResponse.text();
       let errorMessage = `Could not prepare the quotation PDF (HTTP ${pdfResponse.status}).`;
@@ -95,11 +123,20 @@ export async function POST(request: NextRequest) {
     if (pdf.length === 0 || pdf.subarray(0, 4).toString("ascii") !== "%PDF") {
       throw new Error("The generated quotation file is empty or invalid.");
     }
+    const blobStarted = Date.now();
     const blob = await put(`quotations/${randomUUID()}.pdf`, pdf, {
       access: "public",
       contentType: "application/pdf",
       token: blobToken,
     });
+    logPerf("api.quotations.share.upload", Date.now() - blobStarted, { bytes: pdf.length });
+    if (savedQuote) {
+      await saveStoredQuotationPdf(savedQuote.id, {
+        url: blob.url,
+        ownerId: savedQuote.ownerId,
+        executive: savedQuote.executive,
+      });
+    }
     return NextResponse.json({ url: blob.url });
   } catch (error) {
     const reference = newErrorReference();
@@ -113,5 +150,14 @@ export async function POST(request: NextRequest) {
       error: `Could not prepare a shareable quotation PDF. (Ref: ${reference})`,
       reference,
     }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const started = Date.now();
+  try {
+    return await handlePost(request);
+  } finally {
+    logPerf("api.quotations.share", Date.now() - started);
   }
 }

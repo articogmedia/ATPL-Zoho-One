@@ -1,15 +1,16 @@
 import type {
-  CallActivity, CallOutcome, Lead, LeadSource, LeadStatus, LeadTimelineItem, LeadUpdate, NewVisit, Product, Quotation, User, Visit, VisitStatus,
+  CallActivity, CallOutcome, Invoice, Lead, LeadSource, LeadStatus, LeadTimelineItem, LeadUpdate, LostReason, NewVisit, Product, Quotation, QuoteExtraCharge, User, Visit, VisitStatus,
 } from "@/lib/domain";
 
 export type NewLead = { name: string; company: string; phone: string; area: string; source: LeadSource; remarks: string };
 export type LeadPatch = {
   name?: string; company?: string; phone?: string; source?: LeadSource;
-  status?: LeadStatus; remarks?: string; assignedTo?: string | null; followUp?: string;
+  status?: LeadStatus; lostReason?: LostReason; remarks?: string; assignedTo?: string | null; followUp?: string;
 };
-export type NewQuote = { offerNo: string; leadId: string; subject?: string; items: { productId: string; qty: number; discount: number }[] };
+export type NewQuote = { offerNo: string; leadId: string; subject?: string; items: { productId: string; qty: number; discount: number; taxRate?: number }[]; extraCharges?: QuoteExtraCharge[] };
+export type NewProduct = { name: string; code: string; unit: string; price: number; gstRate: number };
 export type VisitPatch = { status?: VisitStatus; notes?: string; date?: string; time?: string; followUp?: string };
-export type LogCallInput = { leadId: string; outcome: CallOutcome; remarks: string; followUp?: string; followUpTime?: string };
+export type LogCallInput = { leadId: string; outcome: CallOutcome; remarks: string; followUp?: string; followUpTime?: string; notResponsiveAttempts?: number };
 
 /**
  * The only thing the rest of the app knows about the CRM. Zoho CRM is the system of
@@ -34,11 +35,13 @@ export interface CrmRepository {
   updateLead(id: string, patch: LeadPatch, actor: User, current?: Lead): Promise<Lead | void>;
   deleteLead(id: string): Promise<void>;
   getLeadHistory(id: string): Promise<LeadUpdate[]>;
+  addLeadNote(id: string, title: string, content: string): Promise<void>;
   getLeadTimeline(id: string): Promise<LeadTimelineItem[]>;
-  logCall(input: LogCallInput, actor: User): Promise<{ historyWarning?: string; partialWarning?: string; callLogPending?: boolean }>;
+  logCall(input: LogCallInput, actor: User): Promise<{ historyWarning?: string; partialWarning?: string; callLogPending?: boolean; attempts?: number; lastOutcome?: CallOutcome; status?: LeadStatus }>;
   listCalls(): Promise<CallActivity[]>;
 
   listProducts(): Promise<Product[]>;
+  createProduct(input: NewProduct): Promise<Product>;
   listQuotes(): Promise<Quotation[]>;
   listQuotesPage(page: number): Promise<{ quotes: Quotation[]; hasMore: boolean; count?: number }>;
   countQuotes?(ownerId?: string): Promise<number>;
@@ -46,6 +49,10 @@ export interface CrmRepository {
   getQuote(id: string): Promise<Quotation | null>;
   markQuoteSent(id: string): Promise<void>;
   createQuote(input: NewQuote, actor: User, executive: string): Promise<Quotation>;
+  updateQuote(id: string, input: Omit<NewQuote, "offerNo">, actor: User): Promise<Quotation>;
+  listInvoices(): Promise<Invoice[]>;
+  getInvoice(id: string): Promise<Invoice | null>;
+  createInvoice(quote: Quotation, lead: Lead, actor: User, gstin: string): Promise<Invoice>;
 
   listVisits(): Promise<Visit[]>;
   getVisitsWarning?(): string | null;

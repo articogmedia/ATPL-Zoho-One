@@ -1,4 +1,4 @@
-import { quotationGstBreakdown } from "@/lib/domain";
+import { quotationGstBreakdown, type QuoteExtraCharge } from "@/lib/domain";
 
 export function canCreateQuotationPdf(
   quotation: { offerNo: string; customer: string; leadId: string; items?: readonly { productId?: string }[] },
@@ -17,7 +17,18 @@ export type QuotationPresentationItem = {
   qty: number;
   price: number;
   discount?: number;
+  taxRate?: number;
 };
+
+const OFFER_BRANDS = ["SAMSUNG", "DAIKIN", "GENERAL", "LG", "HITACHI", "VOLTAS", "PANASONIC", "MITSUBISHI", "CARRIER", "BLUE STAR", "TOSHIBA", "HAIER"];
+
+export function formatOfferReference(offerNo: string, items: readonly Pick<QuotationPresentationItem, "model">[], revision = 0) {
+  const brands = new Set(items.flatMap(({ model }) => OFFER_BRANDS.filter((brand) =>
+    new RegExp(`\\b${brand.replace(" ", "\\s+")}\\b`, "i").test(model),
+  )));
+  const brand = brands.size === 1 ? [...brands][0] : brands.size > 1 ? "MULTI-BRAND" : "";
+  return `${offerNo.trim()}${brand ? `/${brand}` : ""}${revision > 0 ? ` /R${revision}` : ""}`;
+}
 
 const internalText = /\b(?:selling\s+price\s+(?:excl(?:usive)?\.?\s*|excluding\s*)?gst|price\s+(?:list|circular))\b/i;
 
@@ -57,14 +68,14 @@ export function splitQuotationItems(items: readonly QuotationPresentationItem[])
   };
 }
 
-export function partTotal(items: readonly QuotationPresentationItem[]) {
-  return quotationGstBreakdown([...items]).total;
+export function partTotal(items: readonly QuotationPresentationItem[], extraCharges: readonly QuoteExtraCharge[] = []) {
+  return quotationGstBreakdown([...items], extraCharges).total;
 }
 
-export function quotationPresentation(items: readonly QuotationPresentationItem[]) {
+export function quotationPresentation(items: readonly QuotationPresentationItem[], extraCharges: readonly QuoteExtraCharge[] = []) {
   const parts = splitQuotationItems(items);
   const totalUnits = parts.equipment.reduce((sum, item) => sum + item.qty, 0);
-  const totals = quotationGstBreakdown([...items]);
+  const totals = quotationGstBreakdown([...items], extraCharges);
   return { ...parts, totalUnits, totals, grandTotal: totals.total };
 }
 

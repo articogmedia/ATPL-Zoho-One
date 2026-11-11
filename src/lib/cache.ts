@@ -56,7 +56,16 @@ function redisKeys(key: string) {
 
 async function redisCommand(args: string[]): Promise<unknown | undefined> {
   const config = redisConfig();
-  if (!config || (g.__atplCacheRedisUnavailableUntil ?? 0) > Date.now()) return undefined;
+  if (!config) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required for shared production cache state.");
+    }
+    return undefined;
+  }
+  if ((g.__atplCacheRedisUnavailableUntil ?? 0) > Date.now()) {
+    if (process.env.NODE_ENV === "production") throw new Error("Upstash Redis is temporarily unavailable; shared production cache state is required.");
+    return undefined;
+  }
   try {
     const response = await fetch(config.url, {
       method: "POST",
@@ -72,11 +81,14 @@ async function redisCommand(args: string[]): Promise<unknown | undefined> {
   } catch (error) {
     g.__atplCacheRedisUnavailableUntil = Date.now() + 60_000;
     if (!g.__atplCacheRedisWarningLogged) {
-      console.error("[cache] Upstash cache unavailable; using process-local cache", {
+      console.error("[cache] Upstash cache unavailable", {
         errorName: error instanceof Error ? error.name : typeof error,
         message: error instanceof Error ? error.message : String(error),
       });
       g.__atplCacheRedisWarningLogged = true;
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Upstash Redis is unavailable; refusing to use process-local production cache state.", { cause: error });
     }
     return undefined;
   }
@@ -172,7 +184,12 @@ export async function withIdempotency<T>(key: string, task: () => Promise<T>): P
 
 async function redisPipeline(commands: string[][]): Promise<void> {
   const config = redisConfig();
-  if (!config || (g.__atplCacheRedisUnavailableUntil ?? 0) > Date.now() || !commands.length) return;
+  if (!config || (g.__atplCacheRedisUnavailableUntil ?? 0) > Date.now() || !commands.length) {
+    if (process.env.NODE_ENV === "production" && commands.length) {
+      throw new Error("Upstash Redis is required for shared production cache invalidation.");
+    }
+    return;
+  }
   try {
     const response = await fetch(`${config.url}/pipeline`, {
       method: "POST",
@@ -193,6 +210,9 @@ async function redisPipeline(commands: string[][]): Promise<void> {
         message: error instanceof Error ? error.message : String(error),
       });
       g.__atplCacheRedisWarningLogged = true;
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Upstash Redis is unavailable; refusing to use process-local production cache state.", { cause: error });
     }
   }
 }
@@ -219,7 +239,12 @@ function parseCachedValue(value: unknown): unknown | undefined {
 }
 
 async function writeRedisValue(key: string, value: unknown, ttlMs: number, keepStale = false) {
-  if (!redisConfig()) return;
+  if (!redisConfig()) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required for shared production cache state.");
+    }
+    return;
+  }
   const keys = redisKeys(key);
   const serialized = JSON.stringify(value);
   if (serialized === undefined) throw new TypeError(`Cache value "${key}" is not JSON serializable.`);
@@ -334,19 +359,25 @@ export async function cached<T>(
   return task as Promise<T>;
 }
 
-export async function setCachedValue<T>(key: string, ttlMs: number, value: T): Promise<void> {
+export async function setCachedValue<T>(
+  key: string,
+  ttlMs: number,
+  value: T,
+  options: { keepStale?: boolean } = {},
+): Promise<void> {
+  const keepStale = options.keepStale === true;
   store.generations.set(key, (store.generations.get(key) ?? 0) + 1);
   store.inflight.delete(key);
   const entry: CacheEntry = {
     value,
     expiresAt: Date.now() + ttlMs,
-    staleUntil: Date.now() + STALE_TTL_MS,
+    staleUntil: keepStale ? Number.POSITIVE_INFINITY : Date.now() + STALE_TTL_MS,
     ttlMs,
-    keepStale: false,
+    keepStale,
     load: async () => value,
   };
   store.values.set(key, entry);
-  await writeRedisValue(key, value, ttlMs);
+  await writeRedisValue(key, value, ttlMs, keepStale);
 }
 
 export async function patchCachedValues(
@@ -429,6 +460,29 @@ async function invalidateRedisPrefix(prefix: string) {
   await redisPipeline([["DEL", ...redisEntryKeys], ["SREM", index, ...matching]]);
 }
 
+async function staleRedisPrefix(prefix: string) {
+  const index = `atpl:cache:index:${tagFor(prefix)}`;
+  const keys = await redisCommand(["SMEMBERS", index]);
+  if (!Array.isArray(keys)) return;
+  const matching = keys.filter((item): item is string =>
+    typeof item === "string" && (item === prefix || item.startsWith(`${prefix}:`)),
+  );
+  if (!matching.length) return;
+  const freshKeys = matching.map((key) => redisKeys(key).fresh);
+  const aggregateKeys = matching
+    .filter((key) => key.endsWith(":aggregate"))
+    .flatMap((key) => {
+      const redis = redisKeys(key);
+      return [redis.fresh, redis.stale];
+    });
+  const aggregateNames = matching.filter((key) => key.endsWith(":aggregate"));
+  const commands: string[][] = [["DEL", ...freshKeys]];
+  if (aggregateKeys.length) {
+    commands.push(["DEL", ...aggregateKeys], ["SREM", index, ...aggregateNames]);
+  }
+  await redisPipeline(commands);
+}
+
 export async function invalidate(...prefixes: string[]): Promise<void> {
   const work: Promise<void>[] = [];
   for (const prefix of prefixes) {
@@ -440,6 +494,30 @@ export async function invalidate(...prefixes: string[]): Promise<void> {
       if (key === prefix || key.startsWith(`${prefix}:`)) store.inflight.delete(key);
     }
     work.push(invalidateRedisPrefix(prefix));
+    revalidateTag(tagFor(prefix));
+  }
+  await Promise.all(work);
+}
+
+/** Expires fresh values but preserves stale copies for immediate reads while they refresh. */
+export async function markStale(...prefixes: string[]): Promise<void> {
+  const work: Promise<void>[] = [];
+  for (const prefix of prefixes) {
+    store.generations.set(prefix, (store.generations.get(prefix) ?? 0) + 1);
+    for (const key of [...store.values.keys()]) {
+      if (key !== prefix && !key.startsWith(`${prefix}:`)) continue;
+      const entry = store.values.get(key);
+      if (!entry) continue;
+      if (key.endsWith(":aggregate")) {
+        store.values.delete(key);
+      } else {
+        entry.expiresAt = 0;
+      }
+    }
+    for (const key of store.inflight.keys()) {
+      if (key === prefix || key.startsWith(`${prefix}:`)) store.inflight.delete(key);
+    }
+    work.push(staleRedisPrefix(prefix));
     revalidateTag(tagFor(prefix));
   }
   await Promise.all(work);

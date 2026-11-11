@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { crm } from "@/lib/crm";
 import { env } from "@/lib/env";
 import { createSession } from "@/lib/auth/session";
+import { STATIC_USERS } from "@/lib/auth/users";
 import { hosts, ZohoError } from "@/lib/zoho/client";
 
 export const dynamic = "force-dynamic";
@@ -63,7 +64,10 @@ export async function GET(req: NextRequest) {
     const user = await crm().findUserByEmail(info.Email);
     if (!user) return fail("no_access");
 
-    await createSession(user);
+    const portalUser = STATIC_USERS.find((candidate) =>
+      candidate.email?.trim().toLowerCase() === info.Email!.trim().toLowerCase() ||
+      candidate.name.trim().toLowerCase() === user.name.trim().toLowerCase());
+    await createSession(user, portalUser?.username ?? user.name.toLowerCase());
     const res = NextResponse.redirect(`${home}/home`);
     res.cookies.delete({ name: "atpl_oauth_state", path: "/api/auth/zoho" });
     return res;

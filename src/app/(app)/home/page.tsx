@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { BarChart3, ClipboardList, FileText, MapPin } from "lucide-react";
+import { BarChart3, ClipboardList, FileText, MapPin, ReceiptText } from "lucide-react";
 import { crm } from "@/lib/crm";
 import { requireUser } from "@/lib/auth/guard";
-import { canAccess, hourIST, visibleFor, type Section, type User } from "@/lib/domain";
+import { canAccess, visibleFor, type Section, type User } from "@/lib/domain";
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { withPageTimeout } from "@/lib/page-timeout";
 import { PageLoadError } from "@/components/PageLoadError";
 import { WarmCacheOnce } from "./WarmCacheOnce";
+import { Greeting } from "./Greeting";
+import { ManagerPasswordReset } from "@/components/ManagerPasswordReset";
+import { STATIC_USERS } from "@/lib/auth/users";
 
 export const metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
@@ -23,6 +26,7 @@ async function HomeCount({ section, user }: { section: Section; user: User }) {
       return <Count>{count}</Count>;
     }
     if (section === "quotations") return <Count>{visibleFor(user, await withPageTimeout(repo.listQuotes())).length}</Count>;
+    if (section === "invoices") return <Count>{visibleFor(user, await withPageTimeout(repo.listInvoices())).length}</Count>;
     if (section === "visits") return <Count>{visibleFor(user, await withPageTimeout(repo.listVisits())).filter((visit) => !visit.done).length}</Count>;
     return null;
   } catch (error) {
@@ -41,14 +45,14 @@ function Count({ children }: { children: number }) {
 export default async function Home() {
   const perf = beginPagePerf("home");
   const user = await requireUser();
-  const hour = hourIST();
-  const part = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 
   const cards: { s: Section; to: string; label: string; desc: string; icon: typeof ClipboardList }[] = [
     { s: "leads", to: "/leads", label: "Manage Leads", icon: ClipboardList,
       desc: user.role === "Calling Team" ? "Add new customer enquiries and keep them updated." : "Track enquiries and update their status." },
     { s: "quotations", to: "/quotations", label: "Create Quotation", icon: FileText,
       desc: "Pick products, auto-fill approved prices and create the offer." },
+    { s: "invoices", to: "/invoices", label: "Invoices", icon: ReceiptText,
+      desc: "Convert accepted quotations and view or email invoices." },
     { s: "visits", to: "/visits", label: "My Work & Site Visits", icon: MapPin,
       desc: "Your assignments, site visits and follow-ups." },
     { s: "performance", to: "/performance", label: "Performance", icon: BarChart3, desc: "Lead sources, visits, conversions and executive results." },
@@ -60,7 +64,7 @@ export default async function Home() {
       <WarmCacheOnce />
       <section className="mb-6 rounded-xl bg-primary p-5 text-primary-foreground shadow-elegant sm:p-6">
         <p className="text-sm font-medium opacity-80">{user.role}</p>
-        <h1 className="mt-1 text-[28px] font-bold leading-tight">{part}, {user.name}</h1>
+        <Greeting name={user.name} />
         <p className="mt-2 max-w-xl text-sm opacity-90">Your sales workspace for leads, quotations, site visits and performance.</p>
       </section>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -80,6 +84,7 @@ export default async function Home() {
           </Link>
         ))}
       </div>
+      {user.role === "Manager" && <ManagerPasswordReset users={STATIC_USERS.map(({ username, name }) => ({ username, name }))} />}
     </>
   );
 }

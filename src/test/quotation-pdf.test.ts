@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { PDFDocument, PDFPage, StandardFonts } from "pdf-lib";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
-import { canCreateQuotationPdf, formatQuotationMoney, needsPdfTotalsPage, quotationPresentation, splitQuotationItems } from "@/lib/quotation-presentation";
+import { canCreateQuotationPdf, formatOfferReference, formatQuotationMoney, needsPdfTotalsPage, quotationPresentation, splitQuotationItems } from "@/lib/quotation-presentation";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 
@@ -20,6 +20,7 @@ vi.mock("@/lib/crm", () => ({ crm: vi.fn(() => quoteRepository) }));
 describe("quotation PDF route", () => {
   beforeEach(() => {
     currentUser.mockReset();
+    process.env.SESSION_SECRET = "pdf-snapshot-test-secret-that-is-long-enough";
     quoteRepository.getLead.mockReset().mockResolvedValue(null);
     quoteRepository.getQuote.mockReset().mockResolvedValue(null);
     quoteRepository.listProducts.mockReset().mockResolvedValue([]);
@@ -90,6 +91,16 @@ describe("quotation PDF route", () => {
     expect(offerSubject(["Samsung 4 Way AC"])).not.toContain("Samsung");
   });
 
+  it("formats offer references with the product brand and revision", () => {
+    expect(formatOfferReference("236/26-27", [{ model: "Samsung 4 Way Cassette AC" }], 1))
+      .toBe("236/26-27/SAMSUNG /R1");
+    expect(formatOfferReference("238/26-27", [{ model: "Split AC" }])).toBe("238/26-27");
+    expect(formatOfferReference("239/26-27", [
+      { model: "Samsung Split AC" },
+      { model: "Daikin Split AC" },
+    ])).toBe("239/26-27/MULTI-BRAND");
+  });
+
   it("wraps long descriptions and set codes inside the fixed description column", async () => {
     const pdf = await PDFDocument.create();
     const font = await pdf.embedFont(StandardFonts.Helvetica);
@@ -143,11 +154,67 @@ describe("quotation PDF route", () => {
     const pdfBytes = Buffer.from(await response.arrayBuffer());
     expect(pdfBytes.subarray(0, 4).toString("ascii")).toBe("%PDF");
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
-    expect(renderedText).toContain("Nos");
-    expect(renderedText).not.toContain("Set");
-    expect(renderedText).toContain("Taxes: GST @ 18% extra on all items, as shown above");
+    expect(renderedText).toContain("Set");
+    expect(renderedText).not.toContain("Nos");
+    expect(renderedText).toContain("Grand Total");
+    expect(renderedText).not.toContain("SHIP TO");
+    expect(renderedText).toContain("Taxes: GST at applicable line-item and extra-charge rates, as shown above");
     expect(renderedText).toContain("GST @ 18%");
     expect(drawText.mock.calls.filter(([value]) => String(value).includes("Long equipment")).length).toBeGreaterThan(1);
+    drawText.mockRestore();
+  });
+
+  it("uses a signed quote snapshot without fetching the quote and revalidates prices server-side", async () => {
+    currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
+    const quote = {
+      id: "Q-SNAPSHOT",
+      offerNo: "241/26-27",
+      leadId: "L1",
+      customer: "Customer Co",
+      contactName: "Customer",
+      company: "Customer Co",
+      phone: "9876543210",
+      area: "",
+      address: "",
+      subject: "Air conditioning quotation",
+      executive: "User",
+      total: 118,
+      date: "2026-11-09",
+      ownerId: "U1",
+      items: [{ productId: "P1", model: "Saved AC", unit: "Nos", qty: 1, price: 100 }],
+      gstBreakdown: {
+        subtotal: 100, discount: 0, gst: 18, total: 118, rate: 0.18,
+        partA: { subtotal: 100, discount: 0, gst: 18, total: 118 },
+        partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+      },
+    };
+    process.env.SESSION_SECRET = "pdf-snapshot-test-secret-that-is-long-enough";
+    const { signQuotationPdfSnapshot } = await import("@/lib/quotation-pdf-snapshot");
+    const token = signQuotationPdfSnapshot(quote, "U1");
+    quoteRepository.listProducts.mockResolvedValue([
+      { id: "P1", model: "Saved AC", price: 200, unit: "Nos" },
+    ]);
+    const drawText = vi.spyOn(PDFPage.prototype, "drawText");
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+
+    const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "Q-SNAPSHOT",
+        quoteSnapshotToken: token,
+        offerNo: "241/26-27",
+        subject: "Air conditioning quotation",
+        items: [{ qty: 1 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(quoteRepository.getQuote).not.toHaveBeenCalled();
+    expect(quoteRepository.getLead).not.toHaveBeenCalled();
+    expect(quoteRepository.listProducts).toHaveBeenCalledOnce();
+    const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
+    expect(renderedText).toContain("Rs. 200.00");
+    expect(renderedText).toContain("Rs. 236.00");
     drawText.mockRestore();
   });
 
@@ -178,15 +245,15 @@ describe("quotation PDF route", () => {
 
     expect(response.status).toBe(200);
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
-    expect(renderedText).toContain("Part A subtotal");
+    expect(renderedText).toContain("Subtotal - Part A");
     expect(renderedText).toContain("Rs. 59,724.00");
-    expect(renderedText).toContain("Part A GST @ 18%");
+    expect(renderedText).toContain("GST @ 18%");
     expect(renderedText).toContain("Rs. 10,750.32");
-    expect(renderedText).toContain("Part A total");
+    expect(renderedText).toContain("Total - Part A");
     expect(renderedText).toContain("Rs. 70,474.32");
-    expect(renderedText).toContain("Part B subtotal");
+    expect(renderedText).toContain("Subtotal - Part B");
     expect(renderedText).toContain("Rs. 1,220.00");
-    expect(renderedText).toContain("Part B GST @ 18%");
+    expect(renderedText).toContain("Total - Part B");
     expect(renderedText).toContain("Rs. 219.60");
     expect(renderedText).toContain("Grand Total");
     expect(renderedText).toContain("Rs. 60,944.00");
@@ -344,6 +411,14 @@ describe("quotation PDF route", () => {
       items: [{ qty: 1 }],
     };
     expect(quotationRequestSchema.safeParse(request).success).toBe(true);
+    expect(quotationRequestSchema.safeParse({
+      ...request,
+      items: [{ productId: "P1", qty: 1, taxRate: 0.05 }],
+      extraCharges: [{ label: "Freight", amount: 10, taxRate: 0.12 }],
+    }).success).toBe(true);
+    expect(quotationRequestSchema.safeParse({
+      ...request, extraCharges: [{ label: "", amount: 10 }],
+    }).success).toBe(false);
     expect(quotationRequestSchema.safeParse({
       ...request, quoteId: undefined, leadId: "L1",
     }).success).toBe(false);

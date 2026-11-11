@@ -111,7 +111,7 @@ describe("offer numbering", () => {
     expect(quoteTotals([
       { model: "AC", unit: "Nos", qty: 2, price: 50000, discount: 5000 },
       { model: "Stand", unit: "Nos", qty: 1, price: 10000, discount: 0 },
-    ])).toEqual({ subtotal: 105000, discount: 5000, gst: 18900, total: 123900 });
+    ])).toEqual({ subtotal: 110000, discount: 5000, gst: 18900, total: 123900 });
   });
   it("rounds GST to two decimals and provides totals for both quotation parts", () => {
     expect(quoteTotals([{ model: "Fractional item", unit: "Nos", qty: 1, price: 19.99 }])).toEqual({
@@ -124,12 +124,47 @@ describe("offer numbering", () => {
       { model: "Equipment", unit: "Nos", qty: 1, price: 100.01 },
       { model: "B - Installation", unit: "Nos", qty: 1, price: 50.03, discount: 0.02 },
     ])).toEqual({
-      subtotal: 150.02, discount: 0.02, gst: 27, total: 177.02, rate: 0.18,
+      subtotal: 150.04, discount: 0.02, gst: 27, total: 177.02, rate: 0.18,
       partAGstMode: "extra",
       partA: { subtotal: 100.01, discount: 0, gst: 18, total: 118.01 },
-      partB: { subtotal: 50.01, discount: 0.02, gst: 9, total: 59.01 },
-      zoho: { subtotal: 150.02, discount: 0, tax: 27, adjustment: 0 },
+      partB: { subtotal: 50.03, discount: 0.02, gst: 9, total: 59.01 },
+      gstByRate: [{ rate: 0.18, taxableAmount: 150.02, amount: 27 }],
+      extraCharges: [],
+      zoho: { subtotal: 150.04, discount: 0.02, tax: 27, adjustment: 0 },
     });
+  });
+  it("groups mixed GST rates and rounds each line and extra-charge tax to paise", () => {
+    const breakdown = quotationGstBreakdown([
+      { model: "AC", unit: "Nos", qty: 1, price: 100.01, taxRate: 0.05 },
+      { model: "Installation", unit: "Nos", qty: 1, price: 50.03, discount: 0.02, taxRate: 0.12 },
+    ], [
+      { label: "Freight", amount: 10.01, taxRate: 0.05 },
+      { label: "Transport", amount: 20 },
+    ]);
+    expect(breakdown).toMatchObject({
+      subtotal: 150.04,
+      discount: 0.02,
+      gst: 11.5,
+      total: 191.53,
+      gstByRate: [
+        { rate: 0.05, taxableAmount: 110.02, amount: 5.5 },
+        { rate: 0.12, taxableAmount: 50.01, amount: 6 },
+      ],
+      extraCharges: [
+        { label: "Freight", amount: 10.01, taxRate: 0.05 },
+        { label: "Transport", amount: 20 },
+      ],
+      zoho: { subtotal: 150.04, discount: 0.02, tax: 11.5, adjustment: 30.01 },
+    });
+    expect(quoteTotals([
+      { model: "AC", unit: "Nos", qty: 1, price: 100.01, taxRate: 0.05 },
+      { model: "Installation", unit: "Nos", qty: 1, price: 50.03, discount: 0.02, taxRate: 0.12 },
+    ], [
+      { label: "Freight", amount: 10.01, taxRate: 0.05 },
+      { label: "Transport", amount: 20 },
+    ]).total).toBe(breakdown.total);
+    expect(Math.round((breakdown.zoho.subtotal - breakdown.zoho.discount + breakdown.zoho.tax + breakdown.zoho.adjustment) * 100) / 100)
+      .toBe(breakdown.total);
   });
   it.each([
     ["Part A only", [{ model: "Samsung 4 Way 3.0 TR", unit: "Nos", qty: 1, price: 112240 }], 132443.2],

@@ -25,6 +25,9 @@ export default defineConfig({
       ALLOW_DEMO_LOGIN: "true",
       DATA_SOURCE: "mock",
       SESSION_SECRET: "playwright-quotation-test-session-secret-32chars",
+      ATPL_CALLING_USERNAME: "calling",
+      ATPL_CALLING_PASSWORD: "playwright-calling-password",
+      ATPL_CALLING_NAME: "Calling Team",
     },
   },
 });

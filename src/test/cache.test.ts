@@ -66,6 +66,20 @@ describe("shared cache stale-while-revalidate", () => {
     await expect(cached("leads", 1_000, load, { keepStale: true })).resolves.toBe("new");
   });
 
+  it("serves warm CRM data while refreshing it after a soft invalidation", async () => {
+    let value = "before edit";
+    const load = vi.fn(async () => value);
+    const { cached, markStale } = await import("@/lib/cache");
+    await expect(cached("leads:page", 1_000, load, { keepStale: true })).resolves.toBe("before edit");
+    value = "after edit";
+
+    await markStale("leads");
+
+    await expect(cached("leads:page", 1_000, load, { keepStale: true })).resolves.toBe("before edit");
+    await afterTasks.shift()?.();
+    await expect(cached("leads:page", 1_000, load, { keepStale: true })).resolves.toBe("after edit");
+  });
+
   it("deletes fresh and stale Redis entries before invalidation resolves", async () => {
     process.env.UPSTASH_REDIS_REST_URL = "https://redis.example";
     process.env.UPSTASH_REDIS_REST_TOKEN = "test-token";
@@ -100,6 +114,18 @@ describe("shared cache stale-while-revalidate", () => {
     await expect(getCachedValue("assignment-warnings:request-1")).resolves.toBeUndefined();
     await setCachedValue("assignment-warnings:request-1", 60_000, { taskWarning: "Task failed." });
     await expect(getCachedValue("assignment-warnings:request-1")).resolves.toEqual({ taskWarning: "Task failed." });
+  });
+
+  it("fails closed in production when shared Upstash cache configuration is missing", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const { cached } = await import("@/lib/cache");
+      await expect(cached("leads", 1_000, async () => "instance-only")).rejects.toThrow(
+        "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("does not repopulate invalidated values from an older in-flight load", async () => {

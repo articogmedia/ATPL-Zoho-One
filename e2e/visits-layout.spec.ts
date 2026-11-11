@@ -13,7 +13,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     await page.goto("/login");
     await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-    await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+    await page.waitForURL(/\/home$/);
     await page.goto("/visits");
 
     const tabs = [
@@ -75,7 +75,7 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/visits");
 
   const task = page.locator("#work-list article")
@@ -129,7 +129,7 @@ test("work actions start, reschedule, and confirm completion", async ({ page }) 
 test("visits page has no critical or serious accessibility violations", async ({ page }) => {
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/visits");
 
   const results = await new AxeBuilder({ page })

@@ -12,6 +12,7 @@ const schema = z
     ATPL_RESHMA_PASSWORD: z.string().optional(),
     ATPL_PAVAN_PASSWORD: z.string().optional(),
     ATPL_SAIKIRAN_PASSWORD: z.string().optional(),
+    NOT_RESPONSIVE_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(3),
 
     ZOHO_DC: z.enum(["in", "com", "eu", "au"]).default("in"),
     ZOHO_SANDBOX: z.enum(["true", "false"]).default("false"),
@@ -28,6 +29,9 @@ const schema = z
     ZOHO_CLIENT_SECRET: z.string().optional(),
     ZOHO_REFRESH_TOKEN: z.string().optional(),
     BLOB_READ_WRITE_TOKEN: z.string().optional(),
+    EMAIL_PROVIDER: z.enum(["disabled", "resend"]).default("disabled"),
+    EMAIL_FROM: z.string().email().optional(),
+    RESEND_API_KEY: z.string().optional(),
     /** "Sign in with Zoho" uses its own Server-based client (separate from the data/self client above). */
     ZOHO_LOGIN_CLIENT_ID: z.string().optional(),
     ZOHO_LOGIN_CLIENT_SECRET: z.string().optional(),
@@ -51,6 +55,7 @@ const schema = z
       });
     }
     if (e.AUTH_MODE === "zoho") need(["ZOHO_LOGIN_CLIENT_ID", "ZOHO_LOGIN_CLIENT_SECRET", "ZOHO_LOGIN_REDIRECT_URI"], "AUTH_MODE=zoho");
+    if (e.EMAIL_PROVIDER === "resend") need(["EMAIL_FROM", "RESEND_API_KEY"], "EMAIL_PROVIDER=resend");
     const validateApiUrl = (value: string, key: "ZOHO_API_DOMAIN" | "ZOHO_API_BASE_URL") => {
       try {
         const domain = new URL(value.includes("://") ? value : `https://${value}`);

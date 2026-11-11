@@ -18,6 +18,7 @@ vi.mock("@/app/actions/crm", () => ({
   fixAssignedLeadsAction: vi.fn(),
   getAssignableUsersAction: vi.fn(),
   getLeadTimelineAction: vi.fn(),
+  listFixableAssignedLeadsAction: vi.fn(async () => ({ ok: true, data: [] })),
   logCallAction: vi.fn(),
   reassignLeadAction: vi.fn(),
   saveLeadUpdateAction: vi.fn(),

@@ -2,64 +2,30 @@
 
 import Link, { useLinkStatus } from "next/link";
 import Image from "next/image";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, RotateCw } from "lucide-react";
+import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, ReceiptText, RotateCw } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
-import { startNavigationWatchdog, trackableNavigation } from "@/lib/navigation-stall";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
 
 const NAV = [
   { s: "leads" as Section, to: "/leads", label: "Manage Leads", short: "Leads", icon: ClipboardList },
   { s: "quotations" as Section, to: "/quotations", label: "Create Quotation", short: "Quotes", icon: FileText },
+  { s: "invoices" as Section, to: "/invoices", label: "Invoices", short: "Invoices", icon: ReceiptText },
   { s: "visits" as Section, to: "/visits", label: "My Work & Site Visits", short: "Visits", icon: MapPin },
   { s: "performance" as Section, to: "/performance", label: "Performance", short: "Stats", icon: BarChart3 },
 ];
 
 export function AppShell({ user, inactivityMinutes = 30, children }: { user: { name: string; role: Role }; inactivityMinutes?: number; children: ReactNode }) {
   const path = usePathname();
-  const searchParams = useSearchParams();
-  const routeKey = `${path}?${searchParams.toString()}`;
   const router = useRouter();
   const [newVersionAvailable, setNewVersionAvailable] = useState(false);
-  const pendingNavigation = useRef<{ href: string; cancelWatchdog: () => void } | null>(null);
   const lastWarmAt = useRef(0);
-  const currentPath = useRef(path);
-  currentPath.current = path;
+  const applyingServiceWorkerUpdate = useRef(false);
   const items = NAV.filter((n) => canAccess(user.role, n.s));
 
   useEffect(() => {
-    const clearNavigation = () => {
-      const current = pendingNavigation.current;
-      if (!current) return;
-      current.cancelWatchdog();
-      pendingNavigation.current = null;
-    };
-    const onNavigationClick = (event: MouseEvent) => {
-      const clicked = event.target instanceof Element ? event.target : null;
-      const anchor = clicked?.closest<HTMLAnchorElement>("a[href]");
-      if (!anchor) return;
-      const navigation = trackableNavigation({
-        defaultPrevented: event.defaultPrevented,
-        button: event.button,
-        modified: event.metaKey || event.ctrlKey || event.shiftKey || event.altKey,
-        href: anchor.href,
-        target: anchor.target,
-        download: anchor.hasAttribute("download"),
-      }, window.location.href);
-      if (!navigation) return;
-      clearNavigation();
-      const state: NonNullable<typeof pendingNavigation.current> = {
-        href: navigation.href,
-        cancelWatchdog: () => {},
-      };
-      pendingNavigation.current = state;
-      state.cancelWatchdog = startNavigationWatchdog(state.href, (href) => {
-        if (pendingNavigation.current === state) window.location.assign(href);
-      });
-    };
-    const clearOnBrowserNavigation = () => clearNavigation();
     const versionMismatch = (message: string) => {
       if (/failed to find server action|chunkloaderror|loading chunk .* failed/i.test(message)) {
         setNewVersionAvailable(true);
@@ -72,26 +38,21 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
       if (versionMismatch(message)) event.preventDefault();
     };
     const onError = (event: ErrorEvent) => { versionMismatch(`${event.message} ${event.error?.name ?? ""}`); };
-    document.addEventListener("click", onNavigationClick);
+    const onUpdateAvailable = () => setNewVersionAvailable(true);
+    const onControllerChange = () => {
+      if (applyingServiceWorkerUpdate.current) window.location.reload();
+    };
+    window.addEventListener("atpl:pwa-update-ready", onUpdateAvailable);
     window.addEventListener("unhandledrejection", onUnhandledRejection);
     window.addEventListener("error", onError);
-    window.addEventListener("pageshow", clearOnBrowserNavigation);
-    window.addEventListener("popstate", clearOnBrowserNavigation);
+    navigator.serviceWorker?.addEventListener("controllerchange", onControllerChange);
     return () => {
-      clearNavigation();
-      document.removeEventListener("click", onNavigationClick);
+      window.removeEventListener("atpl:pwa-update-ready", onUpdateAvailable);
       window.removeEventListener("unhandledrejection", onUnhandledRejection);
       window.removeEventListener("error", onError);
-      window.removeEventListener("pageshow", clearOnBrowserNavigation);
-      window.removeEventListener("popstate", clearOnBrowserNavigation);
+      navigator.serviceWorker?.removeEventListener("controllerchange", onControllerChange);
     };
   }, []);
-
-  useEffect(() => {
-    const current = pendingNavigation.current;
-    if (current) current.cancelWatchdog();
-    pendingNavigation.current = null;
-  }, [routeKey]);
 
   useEffect(() => {
     const refreshAfterRetry = () => router.refresh();
@@ -107,9 +68,6 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
     const onVisibilityChange = () => {
       if (document.visibilityState !== "visible" || Date.now() - lastWarmAt.current < 5 * 60_000) return;
       warm();
-      if (currentPath.current === "/leads" && !pendingNavigation.current) {
-        window.dispatchEvent(new Event("atpl:leads-refresh"));
-      }
     };
     lastWarmAt.current = Date.now();
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -183,7 +141,15 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
         <main className="mx-auto min-w-0 w-full max-w-[1280px] flex-1 overflow-visible px-4 pb-28 pt-5 md:px-8 md:pb-10">
           {newVersionAvailable && <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
             <span className="inline-flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" />A new version is available. Reload to continue safely.</span>
-            <Button type="button" variant="outline" className="h-10" onClick={() => window.location.reload()}><RotateCw className="h-4 w-4" /> Reload</Button>
+            <Button type="button" variant="outline" className="h-10" onClick={async () => {
+              const registration = await navigator.serviceWorker?.getRegistration();
+              if (registration?.waiting) {
+                applyingServiceWorkerUpdate.current = true;
+                registration.waiting.postMessage({ type: "SKIP_WAITING" });
+              } else {
+                window.location.reload();
+              }
+            }}><RotateCw className="h-4 w-4" /> Update now</Button>
           </div>}
           <Suspense fallback={<div className="space-y-4" aria-label="Loading"><div className="h-8 w-48 animate-pulse rounded-lg bg-secondary" /><div className="h-32 animate-pulse rounded-xl bg-secondary" /></div>}>
             {children}

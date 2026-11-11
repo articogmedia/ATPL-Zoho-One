@@ -26,13 +26,13 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/leads");
   await expect(page.getByRole("heading", { name: "Manage Leads" })).toBeVisible();
   await page.waitForTimeout(1000);
   const refreshRequests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("leads") || request.url().includes("_rsc")) refreshRequests.push(request.url());
+    if (request.url().includes("/api/warm")) refreshRequests.push(request.url());
   });
   await page.evaluate(() => {
     window.__advanceTime(10 * 60 * 1000);
@@ -127,7 +127,7 @@ test("Add Lead retries a dropped server-action request without duplicating the l
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/leads");
   await page.route("**/leads", async (route) => {
     if (route.request().method() === "POST" && route.request().headers()["next-action"]) {
@@ -164,7 +164,7 @@ test("Add Lead shows an optimistic saving row while the server is slow", async (
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/leads");
   await page.route("**/leads", async (route) => {
     if (!delayed && route.request().method() === "POST" && route.request().headers()["next-action"]) {
@@ -193,7 +193,7 @@ test("Add Lead resumes an interrupted request when the page becomes visible", as
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/leads");
   await page.route("**/leads", async (route) => {
     if (route.request().method() === "POST" && route.request().headers()["next-action"]) {
@@ -227,7 +227,7 @@ test("reassign immediately removes an owner from My Leads but keeps the lead in 
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/leads");
   await expect(page.getByRole("heading", { name: "Manage Leads" })).toBeVisible();
   const initialMineCount = Number((await page.locator('[data-tab="mine"]').textContent())?.match(/\((\d+)\)/)?.[1]);
@@ -270,7 +270,7 @@ test("mobile lead cards fit narrow viewports and have one WhatsApp action", asyn
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/leads");
 
   const cards = page.getByTestId("mobile-lead-card");
@@ -310,7 +310,7 @@ test("all call outcomes save on mobile and laptop widths", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/(?:home|leads)(?:\?.*)?$/);
+  await page.waitForURL(/\/home$/);
   await page.goto("/leads");
   await page.locator('[data-tab="all"]').click();
   const mobileCards = page.getByTestId("mobile-lead-card");

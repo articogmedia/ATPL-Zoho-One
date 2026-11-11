@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mapQuote, quoteLineItemsField } from "@/lib/zoho/mappers";
+import { mapLead, mapProduct, mapQuote, quoteLineItemsField } from "@/lib/zoho/mappers";
 import { canCreateQuotationPdf } from "@/lib/quotation-presentation";
 
 const cacheMode = vi.hoisted(() => ({ roundTrip: false }));
@@ -49,6 +49,18 @@ const quoteFields = {
   ],
 };
 
+it("maps the standard Zoho lead email field", () => {
+  const mapped = mapLead({
+    id: "lead-email",
+    First_Name: "Customer",
+    Email: "customer@example.com",
+    Lead_Source: "Direct Call",
+    Lead_Status: "Fresh Lead",
+  }, new Set());
+
+  expect(mapped.email).toBe("customer@example.com");
+});
+
 describe("Zoho quotation creation", () => {
   it("writes formula-compatible Zoho totals for Part A, Part B, and mixed quotations", async () => {
     const payloads: Record<string, unknown>[] = [];
@@ -90,6 +102,12 @@ describe("Zoho quotation creation", () => {
         { productId: "part-a", qty: 1, discount: 2240 },
         { productId: "part-b", qty: 1, discount: 100 },
       ], expected: 130862 },
+      {
+        offerNo: "304/26-27",
+        items: [{ productId: "part-a", qty: 1, discount: 0, taxRate: 0.05 }],
+        extraCharges: [{ label: "Freight", amount: 100, taxRate: 0.12 }],
+        expected: 117964,
+      },
     ];
 
     for (const quote of quotes) {
@@ -98,11 +116,12 @@ describe("Zoho quotation creation", () => {
         leadId: "lead-1",
         subject: "Mixed GST quotation",
         items: quote.items,
+        extraCharges: quote.extraCharges,
       }, actor, "Manager");
       expect(saved.total).toBe(quote.expected);
     }
 
-    expect(payloads).toHaveLength(3);
+    expect(payloads).toHaveLength(4);
     for (let index = 0; index < payloads.length; index += 1) {
       const payload = payloads[index]!;
       const zohoTotal = Number(payload.Sub_Total) - Number(payload.Discount)
@@ -110,9 +129,11 @@ describe("Zoho quotation creation", () => {
       expect(Math.round(zohoTotal * 100) / 100).toBe(quotes[index]!.expected);
       expect(payload).not.toHaveProperty("Grand_Total");
     }
-    expect(payloads[0]).toMatchObject({ Sub_Total: 110000, Discount: 0, Tax: 19800, Adjustment: 0 });
-    expect(payloads[1]).toMatchObject({ Sub_Total: 900, Discount: 0, Tax: 162, Adjustment: 0 });
-    expect(payloads[2]).toMatchObject({ Sub_Total: 110900, Discount: 0, Tax: 19962, Adjustment: 0 });
+    expect(payloads[0]).toMatchObject({ Sub_Total: 112240, Discount: 2240, Tax: 19800, Adjustment: 0 });
+    expect(payloads[1]).toMatchObject({ Sub_Total: 1000, Discount: 100, Tax: 162, Adjustment: 0 });
+    expect(payloads[2]).toMatchObject({ Sub_Total: 113240, Discount: 2340, Tax: 19962, Adjustment: 0 });
+    expect(payloads[3]).toMatchObject({ Sub_Total: 112240, Discount: 0, Tax: 5624, Adjustment: 100 });
+    expect(payloads[3]?.Quoted_Items).toMatchObject([{ Line_Tax: [{ percentage: 5, name: "GST 5%" }] }]);
   });
 
   it("loads only the first quote page and does not request the complete leads list", async () => {
@@ -144,10 +165,10 @@ describe("Zoho quotation creation", () => {
       query: expect.objectContaining({ page: 1, per_page: 200 }),
     }));
     expect(zoho).not.toHaveBeenCalledWith("GET", "/Leads", expect.anything());
-    expect(list).toHaveBeenCalledWith("Quotes", expect.arrayContaining(["Offer_No"]), 100000);
+    expect(list).not.toHaveBeenCalled();
   });
 
-  it("repairs duplicate stored offer numbers before displaying the saved-quote list", async () => {
+  it("does not scan and rewrite all quotes while displaying the saved-quote list", async () => {
     const records: Record<string, unknown>[] = [
       { id: "quote-newer", Subject: "Offer 247/26-27 - Newer quote", Offer_No: "247/26-27", Created_Time: "2026-10-02T00:00:00Z" },
       { id: "quote-older", Subject: "Offer 247/26-27 - Original quote", Offer_No: "247/26-27", Created_Time: "2026-10-01T00:00:00Z" },
@@ -177,11 +198,9 @@ describe("Zoho quotation creation", () => {
 
     const page = await zohoRepository.listQuotesPage(1);
 
-    expect(write).toHaveBeenCalledWith("PUT", "/Quotes/quote-newer", expect.objectContaining({
-      Offer_No: expect.not.stringMatching(/^247\/26-27$/),
-    }));
-    expect(records.find((record) => record.id === "quote-older")?.Offer_No).toBe("247/26-27");
-    expect(new Set(page.quotes.map((quote) => quote.offerNo)).size).toBe(page.quotes.length);
+    expect(write).not.toHaveBeenCalled();
+    expect(list).not.toHaveBeenCalled();
+    expect(page.quotes.map((quote) => quote.offerNo)).toEqual(["247/26-27", "247/26-27"]);
   });
 
   it("does not probe alternate quote fields after a transport timeout", async () => {
@@ -224,6 +243,7 @@ describe("Zoho quotation creation", () => {
         Quantity: 2,
         List_Price: 122000,
         Discount: 4000,
+        Line_Tax: [{ percentage: 12, name: "GST 12%" }],
         Total: 244000,
         Total_After_Discount: 240000,
         Net_Total: 240000,
@@ -238,7 +258,22 @@ describe("Zoho quotation creation", () => {
       price: 122000,
       qty: 2,
       discount: 4000,
+      taxRate: 0.12,
     }]);
+  });
+
+  it("maps revision suffixes separately from the base offer number", () => {
+    const mapped = mapQuote({
+      id: "quote-revision",
+      Subject: "Offer 236/26-27/R2 - Revised AC package",
+      Description: JSON.stringify({ leadId: "lead-1", revision: 2 }),
+    }, new Map());
+
+    expect(mapped).toMatchObject({
+      offerNo: "236/26-27",
+      revision: 2,
+      subject: "Offer 236/26-27/R2 - Revised AC package",
+    });
   });
 
   it("maps a saved quote to its customer, phone, validity, and discounted items", () => {
@@ -297,6 +332,8 @@ describe("Zoho quotation creation", () => {
       subtotal: 100, discount: 5, gst: 17.1, total: 112.1, rate: 0.18,
       partA: { subtotal: 100, discount: 5, gst: 17.1, total: 112.1 },
       partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+      gstByRate: [{ rate: 0.18, taxableAmount: 95, amount: 17.1 }],
+      extraCharges: [{ label: "Freight", amount: 10, taxRate: 0.05 }],
     };
     const mapped = mapQuote({
       id: "gst-quote",
@@ -309,6 +346,15 @@ describe("Zoho quotation creation", () => {
     expect(mapped.gstBreakdown).toEqual(gstBreakdown);
     expect(mapped.total).toBe(112.1);
     expect(mapped.items?.[0]?.price).toBe(100);
+  });
+
+  it("maps a Zoho product tax percentage for use as its default quote-line rate", () => {
+    expect(mapProduct({
+      id: "p-taxed",
+      Product_Name: "Taxed product",
+      Unit_Price: 100,
+      Tax: [{ name: "GST 5%", value: "5.0" }],
+    })).toMatchObject({ gstRate: 0.05 });
   });
 
   it("maps a saved customer snapshot even when its Lead_Ref record is unavailable", () => {
@@ -485,6 +531,8 @@ describe("Zoho quotation creation", () => {
       leadId: "deleted-lead",
       items: [{ model: "Cassette AC", qty: 1, price: 122000 }],
     });
+    expect(zoho.mock.calls.some((call) => call[1] === "/Leads/deleted-lead")).toBe(false);
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("writes the CRM Quoted_Items shape and keeps note failures from masking a saved quote", async () => {
@@ -524,11 +572,13 @@ describe("Zoho quotation creation", () => {
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
       id: "quote-1", offerNo: "239/26-27", leadId: "lead-1", customer: "Customer Co", total: 283200,
       gstBreakdown: {
-        subtotal: 240000, discount: 4000, gst: 43200, total: 283200, rate: 0.18,
+        subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18,
         partAGstMode: "extra",
-        partA: { subtotal: 240000, discount: 4000, gst: 43200, total: 283200 },
+        partA: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 240000, discount: 0, tax: 43200, adjustment: 0 },
+        gstByRate: [{ rate: 0.18, taxableAmount: 240000, amount: 43200 }],
+        extraCharges: [],
+        zoho: { subtotal: 244000, discount: 4000, tax: 43200, adjustment: 0 },
       },
     });
 
@@ -544,9 +594,10 @@ describe("Zoho quotation creation", () => {
         Total: 244000,
         Total_After_Discount: 240000,
         Net_Total: 240000,
+        Line_Tax: [{ percentage: 18, name: "GST 18%" }],
       }],
-      Sub_Total: 240000,
-      Discount: 0,
+      Sub_Total: 244000,
+      Discount: 4000,
       Tax: 43200,
       Adjustment: 0,
     }));
@@ -566,14 +617,16 @@ describe("Zoho quotation creation", () => {
     const writtenRecord = write.mock.calls.find((call) => call[1] === "/Quotes")?.[2] as Record<string, unknown>;
     expect(writtenRecord).not.toHaveProperty("Grand_Total");
     const savedLine = (writtenRecord.Quoted_Items as Record<string, unknown>[])[0]!;
-    expect(savedLine).not.toHaveProperty("Line_Tax");
+    expect(savedLine.Line_Tax).toEqual([{ percentage: 18, name: "GST 18%" }]);
     expect(JSON.parse(String(writtenRecord.Description))).toMatchObject({
       leadId: "lead-1", name: "Customer", phone: "9876543210", company: "Customer Co",
       gstBreakdown: {
-        subtotal: 240000, discount: 4000, gst: 43200, total: 283200, rate: 0.18, partAGstMode: "extra",
-        partA: { subtotal: 240000, discount: 4000, gst: 43200, total: 283200 },
+        subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18, partAGstMode: "extra",
+        partA: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 240000, discount: 0, tax: 43200, adjustment: 0 },
+        gstByRate: [{ rate: 0.18, taxableAmount: 240000, amount: 43200 }],
+        extraCharges: [],
+        zoho: { subtotal: 244000, discount: 4000, tax: 43200, adjustment: 0 },
       },
     });
     expect(errorLog).toHaveBeenCalledWith("[zoho] primary change succeeded but history note failed", expect.objectContaining({
@@ -647,17 +700,19 @@ describe("Zoho quotation creation", () => {
       id: "quote-tax-fallback",
       total: 283200,
       gstBreakdown: {
-        subtotal: 240000, discount: 4000, gst: 43200, total: 283200, rate: 0.18, partAGstMode: "extra",
-        partA: { subtotal: 240000, discount: 4000, gst: 43200, total: 283200 },
+        subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18, partAGstMode: "extra",
+        partA: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 240000, discount: 0, tax: 43200, adjustment: 0 },
+        gstByRate: [{ rate: 0.18, taxableAmount: 240000, amount: 43200 }],
+        extraCharges: [],
+        zoho: { subtotal: 244000, discount: 4000, tax: 43200, adjustment: 0 },
       },
     });
 
     expect(postPayloads).toHaveLength(2);
-    expect(postPayloads[0]).toMatchObject({ Sub_Total: 240000, Discount: 0, Tax: 43200, Adjustment: 0 });
+    expect(postPayloads[0]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Tax: 43200, Adjustment: 0 });
     expect(postPayloads[0]).not.toHaveProperty("Grand_Total");
-    expect(postPayloads[1]).toMatchObject({ Sub_Total: 240000, Discount: 0, Adjustment: 43200 });
+    expect(postPayloads[1]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Adjustment: 43200 });
     expect(postPayloads[1]).not.toHaveProperty("Tax");
     expect(postPayloads[1]).not.toHaveProperty("Grand_Total");
     expect(errorLog).toHaveBeenCalledWith(
@@ -800,6 +855,7 @@ describe("Zoho quotation creation", () => {
         total: 122000,
         total_after_discount: 122000,
         net_total: 122000,
+        Line_Tax: [{ percentage: 18, name: "GST 18%" }],
       }],
     }));
   });
@@ -1170,6 +1226,7 @@ describe("Zoho quotation creation", () => {
         Total: 122000,
         Total_After_Discount: 120000,
         Net_Total: 120000,
+        Line_Tax: [{ percentage: 18, name: "GST 18%" }],
       }],
     }));
   });

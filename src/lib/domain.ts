@@ -22,7 +22,14 @@ export const LEAD_SOURCES: LeadSource[] = ["Meta Ads", "Google Ads", "Direct Cal
 
 export type LeadUpdate = { date: string; user: string; note: string };
 export type CallOutcome = "Connected" | "No Answer" | "Busy" | "Wrong Number" | "Call Back Later";
-export type CallActivity = { id: string; leadId: string; ownerId: string; date: string };
+export type CallActivity = { id: string; leadId: string; ownerId: string; date: string; outcome?: CallOutcome };
+export type LeadCallSummary = { attempts: number; lastOutcome?: CallOutcome };
+export const DEFAULT_NOT_RESPONSIVE_ATTEMPTS = 3;
+export const LOST_REASONS = [
+  "Price too high", "Chose competitor", "Project postponed", "Budget unavailable",
+  "Product not suitable", "No response", "Other",
+] as const;
+export type LostReason = typeof LOST_REASONS[number];
 export type LeadTimelineItem = {
   date: string; user: string; kind: "Call" | "Note" | "Task" | "Event"; title: string; detail: string;
 };
@@ -32,9 +39,12 @@ export type Lead = {
   name: string;
   company: string;
   phone: string;
+  email?: string;
+  accountId?: string;
   area: string;
   source: LeadSource;
   status: LeadStatus;
+  lostReason?: LostReason;
   assignedTo: string | null;
   assignedToId?: string;
   ownerId?: string;
@@ -122,15 +132,18 @@ export function canAdvanceLeadStatus(current: LeadStatus, target: "Site Visit Sc
 export const leadLabel = (l: Lead) => (l.company ? `${l.name} (${l.company})` : l.name);
 export const normalizePhone = (value: string): string => value.replace(/\D/g, "").slice(-10);
 
-export type QuoteItem = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number };
+export type QuoteItem = { productId?: string; model: string; description?: string; unit: string; qty: number; price: number; discount?: number; taxRate?: number };
+export type QuoteExtraCharge = { label: string; amount: number; taxRate?: number };
 export type Quotation = {
   id: string;
   offerNo: string;
+  revision?: number;
   leadId: string;
   customer: string;
   contactName?: string;
   company?: string;
   phone?: string;
+  email?: string;
   area?: string;
   address?: string;
   subject?: string;
@@ -143,13 +156,38 @@ export type Quotation = {
   tax?: number;
   items?: QuoteItem[];
   gstBreakdown?: QuoteGstBreakdown;
+  pdfSnapshotToken?: string;
+  accountId?: string;
+};
+export type Invoice = {
+  id: string;
+  invoiceNo: string;
+  quoteId: string;
+  leadId: string;
+  ownerId?: string;
+  executive: string;
+  customer: string;
+  contactName: string;
+  company: string;
+  email?: string;
+  phone: string;
+  gstin?: string;
+  date: string;
+  status: string;
+  total: number;
+  items: QuoteItem[];
+  gstBreakdown: QuoteGstBreakdown;
+  pdfUrl?: string;
 };
 export type QuoteGstTotals = { subtotal: number; discount: number; gst: number; total: number };
+export type QuoteGstRateTotal = { rate: number; taxableAmount: number; amount: number };
 export type QuoteGstBreakdown = QuoteGstTotals & {
   rate: number;
   partAGstMode?: "included" | "extra";
   partA: QuoteGstTotals;
   partB: QuoteGstTotals;
+  gstByRate?: QuoteGstRateTotal[];
+  extraCharges?: QuoteExtraCharge[];
   zoho?: { subtotal: number; discount: number; tax: number; adjustment: number };
 };
 
@@ -210,7 +248,7 @@ export function workForTab(user: User, visits: Visit[], tab: WorkTab, today: str
   ).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 }
 
-export type Product = { id: string; model: string; code?: string; description?: string; price: number; unit: string };
+export type Product = { id: string; model: string; code?: string; description?: string; price: number; unit: string; gstRate?: number };
 
 export function uniqueProducts(products: readonly Product[]): Product[] {
   const seen = new Set<string>();
@@ -241,36 +279,61 @@ export function formatINR(n: number): string {
   });
 }
 
-export function quoteTotals(items: readonly QuoteItem[]): QuoteGstTotals {
+export function quoteTotals(items: readonly QuoteItem[], extraCharges: readonly QuoteExtraCharge[] = []): QuoteGstTotals {
   const gross = roundCurrency(items.reduce((sum, item) => sum + item.qty * item.price, 0));
   const discount = roundCurrency(items.reduce((sum, item) =>
     sum + Math.min(item.qty * item.price, item.discount ?? 0), 0,
   ));
-  const subtotal = roundCurrency(gross - discount);
-  const gst = roundCurrency(subtotal * GST_RATE);
-  return { subtotal, discount, gst, total: roundCurrency(subtotal + gst) };
+  const subtotal = gross;
+  const gst = roundCurrency([
+    ...items.map((item) => roundCurrency(Math.max(0, item.qty * item.price - (item.discount ?? 0)) * (item.taxRate ?? GST_RATE))),
+    ...extraCharges.map((charge) => roundCurrency(charge.amount * (charge.taxRate ?? 0))),
+  ].reduce((sum, amount) => sum + amount, 0));
+  const charges = roundCurrency(extraCharges.reduce((sum, charge) => sum + charge.amount, 0));
+  // Keep the GST/charge inclusion policy in this single composition step.
+  return { subtotal, discount, gst, total: roundCurrency(subtotal - discount + gst + charges) };
 }
 
-export function quotationGstBreakdown(items: readonly QuoteItem[]): QuoteGstBreakdown & {
+export function quotationGstBreakdown(items: readonly QuoteItem[], extraCharges: readonly QuoteExtraCharge[] = []): QuoteGstBreakdown & {
   zoho: NonNullable<QuoteGstBreakdown["zoho"]>;
 } {
   const equipment = items.filter((item) => !/^B\s*-\s*/i.test(item.model.trim()));
   const ancillary = items.filter((item) => /^B\s*-\s*/i.test(item.model.trim()));
   const partA = quoteTotals(equipment);
   const partB = quoteTotals(ancillary);
-  const total = roundCurrency(partA.total + partB.total);
   const subtotal = roundCurrency(partA.subtotal + partB.subtotal);
-  const gst = roundCurrency(partA.gst + partB.gst);
+  const discount = roundCurrency(partA.discount + partB.discount);
+  const rateAmounts = new Map<number, { taxableAmount: number; amount: number }>();
+  const addTax = (rate: number, taxableAmount: number) => {
+    const current = rateAmounts.get(rate) ?? { taxableAmount: 0, amount: 0 };
+    current.taxableAmount = roundCurrency(current.taxableAmount + taxableAmount);
+    current.amount = roundCurrency(current.amount + roundCurrency(taxableAmount * rate));
+    rateAmounts.set(rate, current);
+  };
+  for (const item of items) {
+    addTax(item.taxRate ?? GST_RATE, Math.max(0, item.qty * item.price - (item.discount ?? 0)));
+  }
+  for (const charge of extraCharges) {
+    if (charge.taxRate !== undefined) addTax(charge.taxRate, charge.amount);
+  }
+  const gstByRate = [...rateAmounts.entries()]
+    .sort(([rateA], [rateB]) => rateA - rateB)
+    .map(([rate, totals]) => ({ rate, ...totals }));
+  const gst = roundCurrency(gstByRate.reduce((sum, group) => sum + group.amount, 0));
+  const charges = roundCurrency(extraCharges.reduce((sum, charge) => sum + charge.amount, 0));
+  const total = quoteTotals(items, extraCharges).total;
   return {
     subtotal,
-    discount: roundCurrency(partA.discount + partB.discount),
+    discount,
     gst,
     total,
     rate: GST_RATE,
     partAGstMode: COMPANY.partAGstMode,
     partA,
     partB,
-    zoho: { subtotal, discount: 0, tax: gst, adjustment: 0 },
+    gstByRate,
+    extraCharges: extraCharges.map((charge) => ({ ...charge })),
+    zoho: { subtotal, discount, tax: gst, adjustment: charges },
   };
 }
 
@@ -295,7 +358,7 @@ export function rangeDates(range: PerfRange, today: string): { from: string; to:
 }
 
 export type PerfExecutive = { id: string; name: string; role: Role };
-export type PerfRow = { name: string; leads: number; visits: number; quotes: number; won: number; conversion: number };
+export type PerfRow = { name: string; leads: number; visits: number; quotes: number; won: number; conversion: number; open: number; inProgress: number; calls: number };
 
 export const normalizeOwnerId = (id: unknown) => String(id ?? "").trim();
 
@@ -309,13 +372,15 @@ export function perfStats(
   executives: (PerfExecutive | string)[],
   viewer?: User,
   calls: CallActivity[] = [],
+  customRange?: { from: string; to: string },
 ) {
-  const { from, to } = rangeDates(range, today);
+  const { from, to } = customRange ?? rangeDates(range, today);
   const inR = (date: string) => date >= from && date <= to;
   const ls = leads.filter((l) => inR(l.createdOn));
   const qs = quotes.filter((q) => inR(q.date));
   const vs = visits.filter((v) => v.isVisit && inR(v.date));
-  const cs = calls.filter((call) => inR(call.date));
+  const ws = visits.filter((v) => inR(v.date));
+  const cs = calls.filter((call) => inR(call.date.slice(0, 10)));
   const viewerId = normalizeOwnerId(viewer?.id);
   const viewerName = viewer?.name.trim();
   const scopedLeads = viewer?.role === "Sales Executive"
@@ -330,10 +395,18 @@ export function perfStats(
     ? vs.filter((visit) => normalizeOwnerId(visit.executiveId) === viewerId ||
       (!visit.executiveId && visit.executive === viewerName))
     : vs;
+  const scopedWork = viewer?.role === "Sales Executive"
+    ? ws.filter((visit) => normalizeOwnerId(visit.executiveId) === viewerId ||
+      (!visit.executiveId && visit.executive === viewerName))
+    : ws;
   const scopedCalls = viewer?.role === "Sales Executive"
     ? cs.filter((call) => normalizeOwnerId(call.ownerId) === viewerId)
     : cs;
-  const bySource = LEAD_SOURCES.map((source) => ({ source, count: scopedLeads.filter((l) => l.source === source).length }));
+  const bySource = LEAD_SOURCES.map((source) => {
+    const sourceLeads = scopedLeads.filter((lead) => lead.source === source);
+    const won = sourceLeads.filter((lead) => lead.status === "Won").length;
+    return { source, count: sourceLeads.length, won, conversion: sourceLeads.length ? Math.round((won / sourceLeads.length) * 100) : 0 };
+  });
   const roster = executives.map((executive) =>
     typeof executive === "string" ? { id: "", name: executive, role: "Sales Executive" as const } : executive,
   );
@@ -345,15 +418,15 @@ export function perfStats(
   const totals = new Map<string, PerfRow>();
   for (const executive of visibleRoster) {
     totals.set(executive.id ? normalizeOwnerId(executive.id) : executive.name, {
-      name: executive.name, leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0,
+      name: executive.name, leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0, open: 0, inProgress: 0, calls: 0,
     });
   }
-  const other: PerfRow = { name: "Other / Unassigned", leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0 };
+  const other: PerfRow = { name: "Other / Unassigned", leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0, open: 0, inProgress: 0, calls: 0 };
   const rowFor = (id: string | undefined, name: string | undefined) => {
     const executive = id ? byId.get(normalizeOwnerId(id)) : byName.get((name ?? "").trim());
     if (!executive) return other;
     const key = executive.id ? normalizeOwnerId(executive.id) : executive.name;
-    const existing = totals.get(key) ?? { name: executive.name, leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0 };
+    const existing = totals.get(key) ?? { name: executive.name, leads: 0, visits: 0, quotes: 0, won: 0, conversion: 0, open: 0, inProgress: 0, calls: 0 };
     totals.set(key, existing);
     return existing;
   };
@@ -361,13 +434,19 @@ export function perfStats(
     const row = rowFor(lead.ownerId ?? lead.assignedToId, lead.assignedTo ?? undefined);
     row.leads++;
     if (lead.status === "Won") row.won++;
+    else if (lead.status !== "Lost Lead" && lead.status !== "Junk Lead" && lead.status !== "Not Qualified") row.open++;
   }
   for (const visit of scopedVisits) {
     if (visit.status === "Completed") rowFor(visit.executiveId, visit.executive).visits++;
   }
+  for (const visit of scopedWork) if (visit.status === "In Progress") rowFor(visit.executiveId, visit.executive).inProgress++;
   for (const quote of scopedQuotes) rowFor(quote.ownerId, quote.executive).quotes++;
+  for (const call of scopedCalls) {
+    const executive = visibleRoster.find((member) => normalizeOwnerId(member.id) === normalizeOwnerId(call.ownerId));
+    rowFor(executive?.id, executive?.name).calls++;
+  }
   for (const row of totals.values()) row.conversion = row.leads ? Math.round((row.won / row.leads) * 100) : 0;
-  if (other.leads || other.visits || other.quotes) {
+  if (other.leads || other.visits || other.quotes || other.calls || other.inProgress) {
     other.conversion = other.leads ? Math.round((other.won / other.leads) * 100) : 0;
     totals.set("other", other);
   }
@@ -379,6 +458,9 @@ export function perfStats(
     quotes: scopedQuotes.length,
     won: scopedLeads.filter((lead) => lead.status === "Won").length,
     conversion: scopedLeads.length ? Math.round((scopedLeads.filter((lead) => lead.status === "Won").length / scopedLeads.length) * 100) : 0,
+    open: [...scopedLeads].filter((lead) => lead.status !== "Won" && lead.status !== "Lost Lead" && lead.status !== "Junk Lead" && lead.status !== "Not Qualified").length,
+    inProgress: scopedWork.filter((visit) => visit.status === "In Progress").length,
+    calls: scopedCalls.length,
   };
   return {
     from, to,
@@ -395,11 +477,30 @@ export function perfStats(
   };
 }
 
-export type Section = "home" | "leads" | "quotations" | "visits" | "performance";
+export function summarizeLeadCalls(
+  calls: readonly CallActivity[],
+  leadId: string,
+  maxAttempts = DEFAULT_NOT_RESPONSIVE_ATTEMPTS,
+): LeadCallSummary {
+  const forLead = calls.filter((call) => call.leadId === leadId && call.outcome)
+    .sort((left, right) => right.date.localeCompare(left.date) ||
+      (left.id === "pending" ? -1 : right.id === "pending" ? 1 : right.id.localeCompare(left.id, undefined, { numeric: true })));
+  let attempts = 0;
+  for (const call of forLead) {
+    if (call.outcome === "No Answer" || call.outcome === "Busy") attempts++;
+    else if (call.outcome === "Connected" || call.outcome === "Call Back Later") break;
+  }
+  return {
+    attempts: Math.min(attempts, maxAttempts),
+    ...(forLead[0]?.outcome ? { lastOutcome: forLead[0].outcome } : {}),
+  };
+}
+
+export type Section = "home" | "leads" | "quotations" | "invoices" | "visits" | "performance";
 export const ACCESS: Record<Role, Section[]> = {
   "Calling Team": ["leads"],
-  "Sales Executive": ["leads", "quotations", "visits"],
-  Manager: ["leads", "quotations", "visits", "performance"],
+  "Sales Executive": ["leads", "quotations", "invoices", "visits"],
+  Manager: ["leads", "quotations", "invoices", "visits", "performance"],
 };
 
 export function canAccess(role: Role, s: Section) {
@@ -420,6 +521,18 @@ export function canUpdateWorkItem(user: User, visit: Visit): boolean {
 
 export type LeadTab = "fresh" | "assigned" | "callback" | "mine" | "all";
 export type LeadBucket = "fresh" | "assigned" | "callback" | "other";
+export type LeadTabCounts = Record<LeadTab, number>;
+
+export function summarizeLeads(user: User, leads: Lead[], date = todayIST()) {
+  const visible = visibleFor(user, leads);
+  const tabs: LeadTab[] = ["fresh", "assigned", "callback", "mine", "all"];
+  return {
+    total: visible.length,
+    tabCounts: Object.fromEntries(tabs.map((tab) => [tab, leadsForTab(user, visible, tab).length])) as LeadTabCounts,
+    todaysFollowUps: leadsForTab(user, visible, "callback").filter((lead) => lead.followUp === date).length,
+    hasAnyLeads: visible.length > 0,
+  };
+}
 
 export function leadBucket(lead: Lead): LeadBucket {
   const hasAssignee = !!lead.assignedTo?.trim() || !!lead.assignedToId?.trim();
@@ -507,6 +620,7 @@ function leadTabMembership(
 export function leadsForTab(
   user: User, leads: Lead[], tab: LeadTab, search = "", source: LeadSource | "All" = "All", filters: LeadFilters = {},
 ): Lead[] {
+  if (user.role === "Calling Team" && tab !== "fresh" && tab !== "callback") return [];
   if (tab === "fresh" && user.role === "Sales Executive") return [];
   if (tab === "all" && user.role !== "Manager") return [];
   return visibleFor(user, leads).filter((l) => {

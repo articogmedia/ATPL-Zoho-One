@@ -2,8 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { CalendarClock, CalendarDays, CheckCircle2, ClipboardList, FileText, LoaderCircle, MapPin, Phone, Play, UserRound } from "lucide-react";
 import { toast } from "sonner";
@@ -54,7 +53,6 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
   callWarning?: string;
   visitsWarning?: string;
 }) {
-  const router = useRouter();
   const [tab, setTab] = useState<WorkTab>("assigned");
   const [exec, setExec] = useState("all");
   const [executiveNames, setExecutiveNames] = useState(executives);
@@ -69,10 +67,6 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
   const [range, setRange] = useState<PerfRange>("week");
   const isManager = user.role === "Manager";
   const summary = performance?.[range === "week" ? "week" : "month"];
-  const refreshSilently = useCallback(() => {
-    startTransition(() => router.refresh());
-  }, [router]);
-
   useEffect(() => {
     setVisitRows(applyVisitOverrides(visits, visitOverrides.current));
   }, [visits]);
@@ -162,7 +156,7 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
       <section className="min-w-0 rounded-xl border border-primary/30 bg-accent p-3 shadow-sm sm:p-4">
         <h2 className="mb-3 text-lg font-semibold">Today&apos;s visits ({todays.length})</h2>
         <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {todays.map((visit) => <Item key={`today-${visit.id}`} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} onMutationSuccess={refreshSilently} />)}
+          {todays.map((visit) => <Item key={`today-${visit.id}`} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} />)}
           {!todays.length && <p className="text-sm text-muted-foreground">No visits today.</p>}
         </div>
       </section>
@@ -176,18 +170,17 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
       </div>
 
       <div id="work-list" className="grid min-w-0 grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {list.map((visit) => <Item key={visit.id} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} onMutationSuccess={refreshSilently} />)}
+        {list.map((visit) => <Item key={visit.id} v={visit} today={today} onOptimisticChange={applyOptimisticUpdate} />)}
         {!list.length && <p className="col-span-full rounded-xl border border-dashed bg-card px-4 py-8 text-center text-sm text-muted-foreground">{activeTab.empty}</p>}
       </div>
     </div>
   );
 }
 
-const Item = memo(function Item({ v, today, onOptimisticChange, onMutationSuccess }: {
+const Item = memo(function Item({ v, today, onOptimisticChange }: {
   v: Visit;
   today: string;
   onOptimisticChange: (id: string, patch: VisitPatch) => () => void;
-  onMutationSuccess: () => void;
 }) {
   const [mode, setMode] = useState<"none" | "complete" | "reschedule">("none");
   const [callOpen, setCallOpen] = useState(false);
@@ -216,7 +209,6 @@ const Item = memo(function Item({ v, today, onOptimisticChange, onMutationSucces
         toast.error(result.error);
         return;
       }
-      onMutationSuccess();
       toast.success(ok);
       setMode("none");
     } catch (error) {
@@ -359,7 +351,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange, onMutationSucces
         </div>
       )}
 
-      {callOpen && <CallLeadModal lead={{ id: v.leadId, name: v.customer, phone: v.phone ?? "" }} onClose={() => setCallOpen(false)} onSaved={() => { setCallOpen(false); onMutationSuccess(); }} />}
+      {callOpen && <CallLeadModal lead={{ id: v.leadId, name: v.customer, phone: v.phone ?? "" }} onClose={() => setCallOpen(false)} onSaved={() => setCallOpen(false)} />}
     </article>
   );
 });

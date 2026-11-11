@@ -31,7 +31,15 @@ export function zohoLeadSource(source: LeadSource, configuredValues: string[], f
 
 /** Custom fields that must exist in Zoho (Setup > Customization > Modules and Fields). */
 export const FIELD = {
+  lead: { email: "Email", state: "State", accountId: "ATPL_Account_ID", lostReason: "Lost_Reason" },
   quote: { offerNo: "Offer_No", lead: "Lead_Ref" /* Lookup -> Leads */ },
+  invoice: {
+    invoiceNo: "ATPL_Invoice_No",
+    customerGstin: "Customer_GSTIN",
+    sourceQuoteId: "ATPL_Source_Quote_ID",
+    snapshot: "ATPL_Invoice_Snapshot",
+  },
+  account: { customerGstin: "Customer_GSTIN" },
   task: {
     isSiteVisit: "Is_Site_Visit" /* Checkbox */,
     visitTime: "Visit_Time" /* Single line, HH:mm */,

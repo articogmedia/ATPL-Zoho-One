@@ -1,6 +1,7 @@
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
-import { leadsForTab, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
+import { summarizeLeadCalls, summarizeLeads, visibleFor, type LeadTab } from "@/lib/domain";
+import { getCachedLeadSummary } from "@/lib/lead-aggregate";
 import { LeadsClient } from "./LeadsClient";
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { PageLoadError } from "@/components/PageLoadError";
@@ -17,15 +18,15 @@ export default async function LeadsPage() {
   const perf = beginPagePerf("leads");
   const user = await requireSection("leads");
   const repo = crm();
-  let allLeads: Awaited<ReturnType<typeof repo.listLeads>>;
-  let totalLeads = 0;
-  let fixableLeads: Awaited<ReturnType<typeof repo.listFixableAssignedLeads>> = [];
+  let pageData: { leads: Awaited<ReturnType<typeof repo.listLeads>>; total: number; hasMore: boolean };
+  let calls: Awaited<ReturnType<typeof repo.listCalls>> = [];
+  let summary: Awaited<ReturnType<typeof getCachedLeadSummary>>;
   let assignableUsers: Awaited<ReturnType<typeof repo.listAssignableUsers>> = [];
   let leadSources: Awaited<ReturnType<typeof repo.listLeadSources>> = [];
   let assignableUsersFailed = false;
   let leadSourcesUnavailable = false;
+
   const optionalData = withPageTimeout(Promise.allSettled([
-    user.role === "Manager" ? repo.listFixableAssignedLeads(user) : Promise.resolve([]),
     repo.listAssignableUsers(),
     repo.listLeadSources(),
   ]), 2_500).catch((error: unknown) => {
@@ -33,27 +34,31 @@ export default async function LeadsPage() {
     return null;
   });
   try {
-    allLeads = await withPageTimeout(repo.listLeads());
-    const visibleLeads = visibleFor(user, allLeads);
-    totalLeads = visibleLeads.length;
-    if (allLeads.length >= env().ZOHO_MAX_LEADS && repo.listLeadsPage) {
-      totalLeads = await withPageTimeout(repo.listLeadsPage(
-        1, 1, user.role === "Sales Executive" ? user.id : undefined,
-      )).then((page) => page.total);
+    const [page, cachedSummary, callRows] = await withPageTimeout(Promise.all([
+      repo.listLeadsPage
+        ? repo.listLeadsPage(1, 50, user.role === "Sales Executive" ? user.id : undefined)
+        : repo.listLeads().then((leads) => ({ leads, total: visibleFor(user, leads).length, hasMore: false })),
+      getCachedLeadSummary(user),
+      repo.listCalls(),
+    ]));
+    pageData = page;
+    summary = cachedSummary;
+    calls = callRows;
+    if (!summary && env().DATA_SOURCE !== "zoho") {
+      summary = summarizeLeads(user, await repo.listLeads());
     }
   } catch (error) {
     console.error("[page] leads data load failed", { message: error instanceof Error ? error.message : String(error) });
     endPagePerf(perf);
     return <PageLoadError message="Lead data is temporarily unavailable. Retry without leaving this page." />;
   }
+
   const optionalResults = await optionalData;
   if (!optionalResults) {
     assignableUsersFailed = true;
     leadSourcesUnavailable = true;
   } else {
-    const [fixableResult, assigneesResult, sourcesResult] = optionalResults;
-    if (fixableResult.status === "fulfilled") fixableLeads = fixableResult.value;
-    else console.error("[page] fixable assigned leads unavailable", { message: String(fixableResult.reason) });
+    const [assigneesResult, sourcesResult] = optionalResults;
     if (assigneesResult.status === "fulfilled") assignableUsers = assigneesResult.value;
     else {
       assignableUsersFailed = true;
@@ -67,23 +72,26 @@ export default async function LeadsPage() {
   }
   assignableUsersFailed ||= assignableUsers.length === 0;
   leadSourcesUnavailable ||= leadSources.length === 0;
-  const visibleLeads = visibleFor(user, allLeads);
-  const tabs: LeadTab[] = ["fresh", "assigned", "callback", "mine", "all"];
-  const tabCounts = Object.fromEntries(tabs.map((tab) => [tab, leadsForTab(user, visibleLeads, tab).length])) as Record<LeadTab, number>;
+
+  const visibleLeads = visibleFor(user, pageData.leads);
+  const pageSummary = summarizeLeads(user, visibleLeads);
+  const tabCounts = summary?.tabCounts ?? pageSummary.tabCounts;
+  const totalLeads = summary?.total ?? pageData.total;
   const initialTab: LeadTab = user.role === "Manager" && tabCounts.fresh === 0 ? "all" : user.role === "Sales Executive" ? "mine" : "fresh";
-  const todaysFollowUps = leadsForTab(user, visibleLeads, "callback").filter((lead) => lead.followUp === todayIST()).length;
+  const todaysFollowUps = summary?.todaysFollowUps ?? pageSummary.todaysFollowUps;
   console.info(`[page] leads ${Date.now() - started}ms (${visibleLeads.length}/${totalLeads} rows)`);
   endPagePerf(perf);
   return (
     <LeadsClient
       user={{ id: user.id, name: user.name, role: user.role }}
       leads={visibleLeads}
-      initialHasMore={false}
+      callStats={Object.fromEntries(visibleLeads.map((lead) => [lead.id, summarizeLeadCalls(calls, lead.id, env().NOT_RESPONSIVE_ATTEMPTS)]))}
+      initialHasMore={pageData.hasMore}
       initialTab={initialTab}
       initialCount={totalLeads}
       tabCounts={tabCounts}
       todaysFollowUps={todaysFollowUps}
-      hasAnyLeads={visibleLeads.length > 0}
+      hasAnyLeads={summary?.hasAnyLeads ?? pageData.total > 0}
       executives={assignableUsers.map((u) => u.name)}
       assignees={assignableUsers.map(({ id, name }) => ({ id, name }))}
       assigneesUnavailable={assignableUsersFailed}
@@ -91,7 +99,7 @@ export default async function LeadsPage() {
       leadSourcesUnavailable={leadSourcesUnavailable}
       owners={assignableUsers.map((u) => u.name)}
       canAssign={user.role === "Manager" || user.role === "Calling Team"}
-      fixableLeads={fixableLeads}
+      fixableLeads={[]}
     />
   );
 }

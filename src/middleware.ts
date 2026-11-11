@@ -31,6 +31,7 @@ export async function middleware(req: NextRequest) {
         const refreshed = await new SignJWT({
           username: payload.username, name: payload.name, role: payload.role,
           zohoUserId: payload.zohoUserId ?? payload.sub, lastActivity: Date.now(),
+          sessionVersion: payload.sessionVersion ?? 0,
         }).setProtectedHeader({ alg: "HS256" })
           .setSubject(String(payload.sub))
           .setIssuedAt()

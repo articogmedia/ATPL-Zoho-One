@@ -4,7 +4,9 @@ import { currentUser } from "@/lib/auth/guard";
 import { crm } from "@/lib/crm";
 import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
-import { LEAD_SOURCES, LEAD_STATUSES, leadsForTab, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
+import { LEAD_SOURCES, LEAD_STATUSES, leadsForTab, summarizeLeadCalls, todayIST, visibleFor, type LeadTab } from "@/lib/domain";
+import { getCachedLeadSummary } from "@/lib/lead-aggregate";
+import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 export const preferredRegion = "bom1";
@@ -27,6 +29,7 @@ function listFields(lead: Awaited<ReturnType<ReturnType<typeof crm>["listLeads"]
   return {
     id: lead.id, name: lead.name, company: lead.company, phone: lead.phone, area: lead.area,
     source: lead.source, status: lead.status, assignedTo: lead.assignedTo,
+    lostReason: lead.lostReason,
     assignedToId: lead.assignedToId, ownerId: lead.ownerId, remarks: lead.remarks,
     createdOn: lead.createdOn, address: lead.address, touchedBy: lead.touchedBy,
     followUp: lead.followUp, followUpTime: lead.followUpTime,
@@ -58,21 +61,32 @@ export async function GET(request: NextRequest) {
             hasMore: rows.length > offset + PAGE_SIZE,
           };
         });
+    const calls = await repository.listCalls();
     const visibleLeads = visibleFor(user, pageData.leads);
     const filters = { owner: parsed.data.owner, stage: parsed.data.stage, from: parsed.data.from, to: parsed.data.to };
     const source = parsed.data.source;
-    const allForTab = (tab: LeadTab) => leadsForTab(user, visibleLeads, tab, parsed.data.search, source, filters);
+    const hasFilters = source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to;
+    const aggregate = !parsed.data.search && !hasFilters ? await getCachedLeadSummary(user) : undefined;
+    const unavailableTab = user.role === "Sales Executive" && (parsed.data.tab === "fresh" || parsed.data.tab === "all")
+      || user.role === "Calling Team" && !["fresh", "callback"].includes(parsed.data.tab);
+    const allForTab = (tab: LeadTab) =>
+      user.role === "Sales Executive" && (tab === "fresh" || tab === "all")
+        || user.role === "Calling Team" && tab !== "fresh" && tab !== "callback"
+        ? []
+        : leadsForTab(user, visibleLeads, tab, parsed.data.search, source, filters);
     const matching = allForTab(parsed.data.tab);
-    const tabCounts = Object.fromEntries(TABS.map((tab) => [tab, allForTab(tab).length])) as Record<LeadTab, number>;
+    const tabCounts = aggregate?.tabCounts ??
+      Object.fromEntries(TABS.map((tab) => [tab, allForTab(tab).length])) as Record<LeadTab, number>;
     const offset = (parsed.data.page - 1) * PAGE_SIZE;
     const filtered = usesServerPaging ? matching : matching.slice(offset, offset + PAGE_SIZE);
     return NextResponse.json({
       leads: filtered.map(listFields),
-      total: usesServerPaging ? pageData.total : matching.length,
-      hasMore: usesServerPaging ? pageData.hasMore : matching.length > offset + PAGE_SIZE,
+      callStats: Object.fromEntries(filtered.map((lead) => [lead.id, summarizeLeadCalls(calls, lead.id, env().NOT_RESPONSIVE_ATTEMPTS)])),
+      total: unavailableTab ? 0 : aggregate ? aggregate.tabCounts[parsed.data.tab] : usesServerPaging ? pageData.total : matching.length,
+      hasMore: unavailableTab ? false : usesServerPaging ? pageData.hasMore : matching.length > offset + PAGE_SIZE,
       tabCounts,
-      todaysFollowUps: allForTab("callback").filter((lead) => lead.followUp === todayIST()).length,
-      hasAnyLeads: pageData.total > 0,
+      todaysFollowUps: aggregate?.todaysFollowUps ?? allForTab("callback").filter((lead) => lead.followUp === todayIST()).length,
+      hasAnyLeads: aggregate?.hasAnyLeads ?? pageData.total > 0,
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     const reference = newErrorReference();

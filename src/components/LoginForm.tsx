@@ -3,6 +3,7 @@
 import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import { useActionState, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
+import Link from "next/link";
 import { toast } from "sonner";
 import { loginAction } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
@@ -97,7 +98,7 @@ export function LoginForm() {
       {state?.error && <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">{state.error}</p>}
       {timedOut && <div role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">Sign-in is taking too long. Check your connection and try again.<Button type="button" variant="link" className="h-auto px-1 text-sm" onClick={() => { setTimedOut(false); setRetried(true); if (formRef.current) action(new FormData(formRef.current)); }}>Retry</Button></div>}
       <LoginSubmit pending={pending} />
-      <p className="text-center text-[13px] text-slate-500">Forgot your password? Contact your manager.</p>
+      <p className="text-center text-[13px] text-slate-500"><Link href="/forgot-password" className="text-primary underline-offset-4 hover:underline">Forgot password?</Link></p>
     </form>
   );
 }

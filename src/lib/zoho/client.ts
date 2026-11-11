@@ -85,7 +85,7 @@ const g = globalThis as unknown as {
 export function zohoRuntimeStatus() {
   const sharedTokenStoreConfigured = Boolean(redisConfig());
   const warning = process.env.NODE_ENV === "production" && !sharedTokenStoreConfigured
-    ? "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are not configured; Zoho token sharing and shared caching are unavailable."
+    ? "UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required for shared Zoho token and cache state."
     : undefined;
   if (warning && !g.__atplZohoRedisWarningLogged) {
     console.warn("[zoho] shared token store is not configured in production", {
@@ -208,7 +208,18 @@ function sharedTokenKeys() {
 
 async function redisCommand(args: string[]): Promise<unknown | undefined> {
   const config = redisConfig();
-  if (!config || (g.__atplZohoRedisUnavailableUntil ?? 0) > Date.now()) return undefined;
+  if (!config) {
+    if (process.env.NODE_ENV === "production") {
+      throw new ZohoError("Configure UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for shared production Zoho token state.", undefined, "UPSTASH_REQUIRED");
+    }
+    return undefined;
+  }
+  if ((g.__atplZohoRedisUnavailableUntil ?? 0) > Date.now()) {
+    if (process.env.NODE_ENV === "production") {
+      throw new ZohoError("Upstash Redis is temporarily unavailable; shared production Zoho token state is required.", undefined, "UPSTASH_UNAVAILABLE");
+    }
+    return undefined;
+  }
   try {
     const response = await fetch(config.url, {
       method: "POST",
@@ -232,6 +243,11 @@ async function redisCommand(args: string[]): Promise<unknown | undefined> {
         message: error instanceof Error ? error.message : String(error),
       });
       g.__atplZohoRedisWarningLogged = true;
+    }
+    if (process.env.NODE_ENV === "production") {
+      throw new ZohoError("Upstash Redis is unavailable; refusing to use process-local production Zoho token state.", undefined, "UPSTASH_UNAVAILABLE", undefined, undefined, undefined, {
+        cause: error instanceof Error ? error.message : String(error),
+      });
     }
     return undefined;
   }
@@ -293,7 +309,7 @@ async function releaseSharedLock(key: string, value: string) {
 
 async function requestSharedAccessToken(rejectedToken?: string): Promise<{ value: string; exp: number }> {
   if (process.env.NODE_ENV === "production" && !redisConfig()) {
-    return requestAccessToken(3_000);
+    throw new ZohoError("Configure UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for shared production Zoho token state.", undefined, "UPSTASH_REQUIRED");
   }
   const refreshWithRateLimitRetry = async () => {
     try {
@@ -356,6 +372,9 @@ async function requestSharedAccessToken(rejectedToken?: string): Promise<{ value
 }
 
 async function accessToken(force = false, rejectedToken?: string): Promise<string> {
+  if (process.env.NODE_ENV === "production" && !redisConfig()) {
+    throw new ZohoError("Configure UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN for shared production Zoho token state.", undefined, "UPSTASH_REQUIRED");
+  }
   const cached = g.__atplZohoToken;
   if (force && cached && cached.value !== rejectedToken && cached.exp > Date.now()) return cached.value;
   if (force && cached?.value === rejectedToken) g.__atplZohoToken = undefined;

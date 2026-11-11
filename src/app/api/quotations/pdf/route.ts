@@ -9,20 +9,27 @@ import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { GST_RATE, quotationGstBreakdown, todayIST, visibleFor, type QuoteGstTotals } from "@/lib/domain";
-import { formatQuotationMoney, quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
+import { formatOfferReference, formatQuotationMoney, quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 import { quotationRequestSchema } from "@/lib/quotation-request";
+import { logPerf } from "@/lib/perf-log";
+import { verifyQuotationPdfSnapshot } from "@/lib/quotation-pdf-snapshot";
 
 export const runtime = "nodejs";
 export const preferredRegion = "bom1";
 export const maxDuration = 30;
+
+const logoBytes = readFile(path.join(process.cwd(), "public", "brand", "atpl-mark-180.png"));
+// Standard font data is built into pdf-lib; its PDFFont handles must be embedded per document.
+const pdfFonts = Object.freeze({ regular: StandardFonts.Helvetica, bold: StandardFonts.HelveticaBold });
+const formatTaxRate = (rate: number) => String(Number((rate * 100).toFixed(2)));
 
 function redactPayload(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactPayload);
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [
       key,
-      /^(mobile|phone)$/i.test(key) && item != null
+      /^(mobile|phone|quoteSnapshotToken)$/i.test(key) && item != null
         ? `******${String(item).replace(/\D/g, "").slice(-2)}`
         : redactPayload(item),
     ]));
@@ -31,6 +38,7 @@ function redactPayload(value: unknown): unknown {
 }
 
 export async function POST(request: NextRequest) {
+  const started = Date.now();
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
 
@@ -55,13 +63,23 @@ export async function POST(request: NextRequest) {
 
   try {
   const repository = crm();
-  const savedQuote = parsed.quoteId ? await repository.getQuote(parsed.quoteId) : null;
+  const savedQuote = parsed.quoteSnapshotToken
+    ? verifyQuotationPdfSnapshot(parsed.quoteSnapshotToken, user.id, parsed.quoteId ?? "")
+    : parsed.quoteId ? await repository.getQuote(parsed.quoteId) : null;
+  if (parsed.quoteSnapshotToken && !savedQuote) {
+    return NextResponse.json({ error: "Quotation snapshot is invalid or expired." }, { status: 403 });
+  }
   if (parsed.quoteId && (!savedQuote || visibleFor(user, [savedQuote]).length === 0)) {
     return NextResponse.json({ error: "Quotation not found or access denied." }, { status: 403 });
   }
   const linkedLeadId = savedQuote?.leadId || parsed.leadId || "";
+  const savedCustomerDetails = Boolean(
+    savedQuote?.contactName || savedQuote?.company || savedQuote?.phone ||
+    savedQuote?.area || savedQuote?.address || savedQuote?.email,
+  );
+  const needsPriceValidation = Boolean(savedQuote?.items?.some((item) => item.productId));
   const [linkedLead, products] = await Promise.all([
-    linkedLeadId
+    linkedLeadId && (!savedQuote || !savedCustomerDetails)
       ? repository.getLead(linkedLeadId).catch((error: unknown) => {
         if (!savedQuote) throw error;
         console.warn("[api] saved quote lead lookup failed; rendering from its stored customer details", {
@@ -73,7 +91,7 @@ export async function POST(request: NextRequest) {
         return null;
       })
       : Promise.resolve(null),
-    savedQuote?.items?.length ? Promise.resolve([]) : repository.listProducts(),
+    savedQuote?.items?.length && !needsPriceValidation ? Promise.resolve([]) : repository.listProducts(),
   ]);
   if (!linkedLead && !savedQuote) {
     return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
@@ -93,40 +111,48 @@ export async function POST(request: NextRequest) {
   const offerNo = savedQuote?.offerNo || parsed.offerNo;
   const subject = savedQuote?.subject || parsed.subject || offerSubject((savedQuote?.items ?? []).map((item) => item.model));
   const items = savedQuote?.items?.length
-    ? savedQuote.items.map((item) => ({
-        model: item.model,
-        description: item.description ?? "",
-        unit: item.unit,
-        qty: item.qty,
-        price: item.price,
-        discount: item.discount ?? 0,
-      }))
+    ? savedQuote.items.map((item, index) => {
+        const product = item.productId ? products.find((candidate) => candidate.id === item.productId) : undefined;
+        if (item.productId && !product) throw new Error(`Product not found at row ${index + 1}.`);
+        return {
+          model: item.model,
+          description: item.description ?? "",
+          unit: item.unit,
+          qty: item.qty,
+          price: product?.price ?? item.price,
+          discount: item.discount ?? 0,
+          taxRate: item.taxRate ?? GST_RATE,
+        };
+      })
     : parsed.items.map((row, index) => {
         const product = products.find((candidate) => candidate.id === row.productId);
         if (!product) throw new Error(`Product not found at row ${index + 1}.`);
         return {
           model: product.model, description: product.description ?? "", unit: product.unit,
-          qty: row.qty, price: product.price, discount: row.discount ?? 0,
+          qty: row.qty, price: product.price, discount: row.discount ?? 0, taxRate: row.taxRate ?? product.gstRate ?? GST_RATE,
         };
       });
-  const presentation = quotationPresentation(items);
+  const offerReference = formatOfferReference(offerNo, items, savedQuote?.revision ?? 0);
+  const extraCharges = savedQuote?.gstBreakdown?.extraCharges ?? parsed.extraCharges ?? [];
+  const presentation = quotationPresentation(items, extraCharges);
   const isLegacySavedQuote = !!savedQuote && !savedQuote.gstBreakdown;
   const legacySubtotal = items.reduce((sum, item) => sum + item.qty * item.price, 0);
   const legacyDiscount = items.reduce((sum, item) => sum + (item.discount ?? 0), 0);
-  const totals = savedQuote?.gstBreakdown ?? (isLegacySavedQuote
+  const savedBreakdown = needsPriceValidation ? undefined : savedQuote?.gstBreakdown;
+  const totals = savedBreakdown ?? (isLegacySavedQuote
+    && !needsPriceValidation
     ? { subtotal: legacySubtotal, discount: legacyDiscount, gst: 0, total: savedQuote.total }
     : presentation.totals);
-  const isPartTaxConvention = !savedQuote || savedQuote.gstBreakdown?.partAGstMode === "extra";
-  const computedBreakdown = quotationGstBreakdown(items);
-  const partATotals = savedQuote?.gstBreakdown?.partA ?? computedBreakdown.partA;
-  const partBTotals = savedQuote?.gstBreakdown?.partB ?? computedBreakdown.partB;
+  const computedBreakdown = quotationGstBreakdown(items, extraCharges);
+  const partATotals = savedBreakdown?.partA ?? computedBreakdown.partA;
+  const partBTotals = savedBreakdown?.partB ?? computedBreakdown.partB;
   const pdf = await PDFDocument.create();
-  const regular = await pdf.embedFont(StandardFonts.Helvetica);
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const regular = await pdf.embedFont(pdfFonts.regular);
+  const bold = await pdf.embedFont(pdfFonts.bold);
   const width = 595.28;
   const height = 841.89;
   const margin = 36;
-  const logo = await pdf.embedPng(await readFile(path.join(process.cwd(), "public", "brand", "atpl-logo.png")));
+  const logo = await pdf.embedPng(await logoBytes);
 
   const text = (page: PDFPage, value: string, x: number, y: number, size = 8, font = regular) =>
     page.drawText(value.replaceAll("₹", "Rs."), { x, y, size, font, color: rgb(0.12, 0.16, 0.22) });
@@ -152,7 +178,7 @@ export async function POST(request: NextRequest) {
   drawHeader(page);
   let y = height - 112;
   text(page, "OFFER REF", margin, y, 8, bold);
-  text(page, offerNo, margin + 75, y, 10, bold);
+  text(page, offerReference, margin + 75, y, 10, bold);
   text(page, `DATE: ${formatOfferDate(todayIST())}`, 330, y, 8, bold);
   y -= 20;
   const customerName = lead.name.trim() && lead.name.trim() !== "(no name)" ? lead.name.trim() : "";
@@ -161,23 +187,17 @@ export async function POST(request: NextRequest) {
   const hasCustomerDetails = !!(customerName || customerCompany || lead.phone.trim() || customerAddress);
   if (hasCustomerDetails) {
     text(page, "CLIENT", margin, y, 8, bold);
-    text(page, customerName || customerCompany, margin + 75, y, 9);
-    y -= 18;
-  }
-  if (hasCustomerDetails) {
-    text(page, "BILL TO", margin, y, 8, bold);
-    text(page, "SHIP TO", 320, y, 8, bold);
     y -= 14;
     for (const [label, value] of [
       ["Name", customerName || customerCompany],
       ...(customerCompany && customerCompany !== customerName ? [["Company", customerCompany]] : []),
       ["Address", customerAddress],
       ["Phone", lead.phone.trim()],
+      ["Email", savedQuote?.email || linkedLead?.email || ""],
     ] as [string, string][]) {
       if (!value) continue;
       text(page, label, margin, y, 7, bold);
       text(page, value, margin + 75, y, 7);
-      text(page, value, 375, y, 7);
       y -= 12;
     }
     y -= 10;
@@ -195,8 +215,9 @@ export async function POST(request: NextRequest) {
     { key: "description", label: "Description", width: 252, align: "left" },
     { key: "unit", label: "Unit", width: 42, align: "center" },
     { key: "qty", label: "Qty", width: 38, align: "right" },
-    { key: "rate", label: "Basic Rate (Rs)", width: 82, align: "right" },
-    { key: "amount", label: "Amount (Rs)", width: contentWidth - 442, align: "right" },
+    { key: "rate", label: "Basic Rate (Rs)", width: 72, align: "right" },
+    { key: "tax", label: "GST %", width: 36, align: "right" },
+    { key: "amount", label: "Amount (Rs)", width: contentWidth - 468, align: "right" },
   ] as const;
   const cellPadding = 4;
   const tableFontSize = 7;
@@ -275,20 +296,16 @@ export async function POST(request: NextRequest) {
     }
   };
 
-  const partBlockRows = (partTotals: QuoteGstTotals, partName: string, gstNote: string) => isLegacySavedQuote
+  const partBlockRows = (partTotals: QuoteGstTotals, partName: string, gstNote: string, partItems: QuotationPresentationItem[]) => isLegacySavedQuote
     ? [
         ["Basic Sub Total", partTotals.subtotal - partTotals.discount, true] as const,
         [gstNote, null, false] as const,
       ]
-    : !isPartTaxConvention ? [
+    : [
         [`Subtotal - ${partName}`, partTotals.subtotal, true] as const,
         ...(partTotals.discount > 0 ? [["Discount", -partTotals.discount, false] as const] : []),
-        [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
+        ...(quotationGstBreakdown(partItems).gstByRate ?? []).map((group) => [`GST @ ${formatTaxRate(group.rate)}%`, group.amount, false] as const),
         [`Total - ${partName}`, partTotals.total, true] as const,
-      ] : [
-        [`${partName} subtotal`, partTotals.subtotal, true] as const,
-        [`${partName} GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, partTotals.gst, false] as const,
-        [`${partName} total`, partTotals.total, true] as const,
       ];
 
   const drawTotalsBlock = (rows: readonly (readonly [string, number | null, boolean])[], rowHeight = 15) => {
@@ -317,9 +334,10 @@ export async function POST(request: NextRequest) {
       const bodyValues = [
         `${index + 1}`,
         descriptionLines[0] ?? "",
-        "Nos",
+        item.unit,
         `${item.qty}`,
         money(item.price),
+        `${formatTaxRate(item.taxRate ?? GST_RATE)}%`,
         money(item.qty * item.price - (item.discount ?? 0)),
       ];
       columns.forEach((column, columnIndex) => {
@@ -347,7 +365,7 @@ export async function POST(request: NextRequest) {
       y -= rowHeight;
     });
     const partName = title.includes("PART A") ? "Part A" : "Part B";
-    drawTotalsBlock(partBlockRows(partTotals, partName, gstNote));
+    drawTotalsBlock(partBlockRows(partTotals, partName, gstNote, partItems));
   };
 
   const { equipment, ancillary } = splitQuotationItems(items);
@@ -355,15 +373,11 @@ export async function POST(request: NextRequest) {
   if (ancillary.length) drawPart(ancillary, OFFER_TEXT.partB, OFFER_TEXT.partBGst, partBTotals);
   const finalRows: (readonly [string, number | null, boolean])[] = isLegacySavedQuote
     ? [["TOTAL PART A + B", totals.total, true]]
-    : !isPartTaxConvention ? [
-        ["TOTAL PART A + B", totals.total, true],
+    : [
         ["Subtotal", totals.subtotal, false],
         ...(totals.discount > 0 ? [["Discount", -totals.discount, false] as const] : []),
-        [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
-        ["Grand Total", totals.total, true],
-      ] : [
-        ["Subtotal", totals.subtotal, false],
-        [`GST @ ${Math.round((savedQuote?.gstBreakdown?.rate ?? GST_RATE) * 100)}%`, totals.gst, false],
+        ...(computedBreakdown.gstByRate ?? []).map((group) => [`GST @ ${formatTaxRate(group.rate)}%`, group.amount, false] as const),
+        ...extraCharges.map((charge) => [`Extra charge: ${charge.label}`, charge.amount, false] as const),
         ["Grand Total", totals.total, true],
       ];
   drawTotalsBlock(finalRows, 16);
@@ -393,7 +407,7 @@ export async function POST(request: NextRequest) {
 
   const bytes = await pdf.save();
   return new NextResponse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
-    headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="offer-${offerNo.replace("/", "-")}.pdf"`, "Cache-Control": "private, no-store" },
+    headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="offer-${offerReference.replaceAll("/", "-")}.pdf"`, "Cache-Control": "private, no-store" },
   });
   } catch (error) {
     const reference = newErrorReference();
@@ -410,6 +424,8 @@ export async function POST(request: NextRequest) {
       ? friendlyZohoError(error.status, error.code, error.message, error.field, reference, error.operation)
       : `Unable to create the PDF. (Ref: ${reference})`;
     return NextResponse.json({ error: message, reference }, { status: 500 });
+  } finally {
+    logPerf("api.quotations.pdf", Date.now() - started, { savedQuote: !!parsed.quoteId });
   }
 }
 

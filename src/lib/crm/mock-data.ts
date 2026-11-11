@@ -109,6 +109,7 @@ export const MOCK_LEADS: Lead[] = [
     "name": "Srinivas Rao",
     "company": "Sri Lakshmi Textiles",
     "phone": "98480 12345",
+    "email": "srinivas@example.com",
     "area": "Ameerpet",
     "source": "Meta Ads",
     "status": "Quotation Sent",

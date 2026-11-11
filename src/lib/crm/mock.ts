@@ -1,4 +1,4 @@
-import { canAdvanceLeadStatus, nextOfferNo, quotationGstBreakdown, type CallActivity, type Lead, type LeadTimelineItem, type LeadUpdate, type Quotation, type Visit } from "@/lib/domain";
+import { canAdvanceLeadStatus, DEFAULT_NOT_RESPONSIVE_ATTEMPTS, GST_RATE, nextOfferNo, quotationGstBreakdown, summarizeLeadCalls, todayIST, type CallActivity, type Invoice, type Lead, type LeadTimelineItem, type LeadUpdate, type Product, type Quotation, type Visit } from "@/lib/domain";
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME } from "@/lib/zoho/fields";
 
 export function advanceMockLeadStatus(lead: Lead, target: "Site Visit Scheduled" | "Quotation Sent"): boolean {
@@ -6,22 +6,28 @@ export function advanceMockLeadStatus(lead: Lead, target: "Site Visit Scheduled"
   lead.status = target;
   return true;
 }
-import type { CrmRepository, LogCallInput } from "./repository";
+import type { CrmRepository, LogCallInput, NewProduct } from "./repository";
 import { isAssignable, normalizePhone } from "@/lib/domain";
 import { env } from "@/lib/env";
 import { MOCK_HISTORY, MOCK_LEADS, MOCK_PRODUCTS, MOCK_QUOTES, MOCK_USERS, MOCK_VISITS } from "./mock-data";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-type State = { leads: Lead[]; history: Record<string, LeadUpdate[]>; quotes: Quotation[]; visits: Visit[] };
+type State = { leads: Lead[]; history: Record<string, LeadUpdate[]>; calls: CallActivity[]; quotes: Quotation[]; invoices: Invoice[]; visits: Visit[]; products: Product[] };
 // Survive dev hot-reloads so demo edits are not lost on every file save.
 const g = globalThis as unknown as { __atplMock?: State };
 const state = (g.__atplMock ??= {
   leads: structuredClone(MOCK_LEADS),
   history: structuredClone(MOCK_HISTORY),
+  calls: [],
   quotes: structuredClone(MOCK_QUOTES),
+  invoices: [],
   visits: structuredClone(MOCK_VISITS),
+  products: structuredClone(MOCK_PRODUCTS),
 });
+state.products ??= structuredClone(MOCK_PRODUCTS);
+state.invoices ??= [];
+state.calls ??= [];
 
 const note = (id: string, user: string, text: string) => {
   (state.history[id] ??= []).unshift({ date: today(), user, note: text });
@@ -107,9 +113,16 @@ export const mockRepository: CrmRepository = {
     if (p.phone?.trim() && p.phone.trim() !== l.phone) { l.phone = p.phone.trim(); parts.push("Phone updated"); }
     if (p.source && p.source !== l.source) { l.source = p.source; parts.push(`Source: ${p.source}`); }
     if (p.status && p.status !== l.status) { parts.push(`Result: ${p.status}`); l.status = p.status; }
+    if (p.lostReason !== undefined && p.lostReason !== l.lostReason) {
+      l.lostReason = p.lostReason;
+      if (p.lostReason) parts.push(`Lost reason: ${p.lostReason}`);
+    }
     if (p.assignedTo !== undefined && p.assignedTo !== l.assignedTo) {
       parts.push(p.assignedTo ? `Assigned to ${p.assignedTo}` : "Unassigned");
       l.assignedTo = p.assignedTo;
+      const assignee = p.assignedTo ? MOCK_USERS.find((user) => user.name === p.assignedTo) : undefined;
+      l.assignedToId = assignee?.id;
+      l.ownerId = assignee?.id;
     }
     if (p.remarks !== undefined && p.remarks.trim() !== l.remarks) {
       parts.push(p.remarks.trim() ? `"${p.remarks.trim()}"` : "Remarks cleared");
@@ -128,6 +141,9 @@ export const mockRepository: CrmRepository = {
     state.leads.splice(index, 1);
   },
   async getLeadHistory(id) { return state.history[id] ?? []; },
+  async addLeadNote(id, title, content) {
+    note(id, "Portal", `${title}: ${content}`);
+  },
   async getLeadTimeline(id): Promise<LeadTimelineItem[]> {
     return (state.history[id] ?? []).map((item) => ({
       date: item.date, user: item.user, kind: "Note" as const, title: "Note", detail: item.note,
@@ -136,16 +152,35 @@ export const mockRepository: CrmRepository = {
   async logCall(input: LogCallInput, actor) {
     const lead = state.leads.find((item) => item.id === input.leadId);
     if (!lead) throw new Error("Lead not found");
-    lead.status = CALL_STATUS_BY_OUTCOME[input.outcome];
+    state.calls.push({ id: `mock-call-${state.calls.length + 1}`, leadId: lead.id, ownerId: actor.id, date: new Date().toISOString(), outcome: input.outcome });
+    const threshold = input.notResponsiveAttempts ?? DEFAULT_NOT_RESPONSIVE_ATTEMPTS;
+    const summary = summarizeLeadCalls(state.calls, lead.id, threshold);
+    lead.status = input.outcome === "Wrong Number"
+      ? lead.status
+      : input.outcome === "No Answer" || input.outcome === "Busy"
+        ? summary.attempts >= threshold ? "Not Responsive" : "Attempted to Contact"
+        : CALL_STATUS_BY_OUTCOME[input.outcome];
     lead.followUp = input.followUp;
     lead.followUpTime = input.followUpTime;
     note(lead.id, actor.name, `Call: ${input.outcome}${input.remarks ? ` · ${input.remarks}` : ""}`);
     if (!lead.touchedBy.includes(actor.name)) lead.touchedBy.push(actor.name);
-    return {};
+    return { attempts: summary.attempts, lastOutcome: summary.lastOutcome, status: lead.status };
   },
-  async listCalls(): Promise<CallActivity[]> { return []; },
+  async listCalls(): Promise<CallActivity[]> { return [...state.calls]; },
 
-  async listProducts() { return MOCK_PRODUCTS; },
+  async listProducts() { return state.products; },
+  async createProduct(input: NewProduct) {
+    const product: Product = {
+      id: `mock-product-${state.products.length + 1}`,
+      model: input.name,
+      code: input.code,
+      price: input.price,
+      unit: input.unit,
+      gstRate: input.gstRate,
+    };
+    state.products.push(product);
+    return product;
+  },
   async listQuotes() { return [...state.quotes].sort((a, b) => b.date.localeCompare(a.date)); },
   async suggestOfferNo() { return nextOfferNo(state.quotes.map((quote) => quote.offerNo), today()); },
   async listQuotesPage(page) {
@@ -166,6 +201,7 @@ export const mockRepository: CrmRepository = {
       contactName: quote.contactName || lead?.name,
       company: quote.company || lead?.company,
       phone: quote.phone || lead?.phone,
+      email: quote.email || lead?.email,
       area: quote.area || lead?.area,
       address: quote.address || lead?.address,
     };
@@ -180,20 +216,78 @@ export const mockRepository: CrmRepository = {
     if (!lead) throw new Error("Lead not found");
     const offerNo = nextOfferNo(state.quotes.map((quote) => quote.offerNo), today());
     const items = input.items.map((i) => {
-      const p = MOCK_PRODUCTS.find((x) => x.id === i.productId);
+      const p = state.products.find((x) => x.id === i.productId);
       if (!p) throw new Error("Unknown product");
-      return { productId: p.id, model: p.model, description: p.description, unit: p.unit, qty: i.qty, price: p.price, discount: Math.min(p.price * i.qty, Math.max(0, i.discount)) };
+      return {
+        productId: p.id, model: p.model, description: p.description, unit: p.unit,
+        qty: i.qty, price: p.price, discount: Math.min(p.price * i.qty, Math.max(0, i.discount)),
+        taxRate: i.taxRate ?? p.gstRate ?? GST_RATE,
+      };
     });
+    const gstBreakdown = quotationGstBreakdown(items, input.extraCharges ?? []);
     const q: Quotation = {
       id: `Q${2001 + state.quotes.length}`, offerNo, leadId: lead.id,
       customer: lead.company || lead.name, contactName: lead.name,
       company: lead.company, phone: lead.phone, area: lead.area, address: lead.address,
-      executive, date: today(), total: quotationGstBreakdown(items).total, status: "Draft", items,
-      gstBreakdown: quotationGstBreakdown(items),
+      email: lead.email,
+      executive, date: today(), total: gstBreakdown.total, status: "Draft", subject: input.subject, revision: 0, items,
+      gstBreakdown,
     };
     state.quotes.unshift(q);
     note(lead.id, actor.name, `Quotation ${q.offerNo} created`);
     return q;
+  },
+  async updateQuote(id, input, actor) {
+    const quote = state.quotes.find((item) => item.id === id);
+    if (!quote) throw new Error("Quotation not found.");
+    if (quote.leadId !== input.leadId) throw new Error("The customer cannot be changed while editing a quotation.");
+    const lead = state.leads.find((item) => item.id === input.leadId);
+    if (!lead) throw new Error("Lead not found.");
+    const items = input.items.map((item) => {
+      const product = state.products.find((candidate) => candidate.id === item.productId);
+      if (!product) throw new Error("Unknown product.");
+      return {
+        productId: product.id,
+        model: product.model,
+        description: product.description,
+        unit: product.unit,
+        qty: item.qty,
+        price: product.price,
+        discount: Math.min(product.price * item.qty, Math.max(0, item.discount)),
+        taxRate: item.taxRate ?? product.gstRate ?? GST_RATE,
+      };
+    });
+    const extraCharges = input.extraCharges ?? [];
+    const gstBreakdown = quotationGstBreakdown(items, extraCharges);
+    const revision = (quote.revision ?? 0) + 1;
+    Object.assign(quote, {
+      revision,
+      subject: input.subject?.trim() || quote.subject,
+      total: gstBreakdown.total,
+      items,
+      gstBreakdown,
+    });
+    note(lead.id, actor.name, `Quotation ${quote.offerNo} revised R${revision}`);
+    return { ...quote };
+  },
+  async listInvoices() {
+    return [...state.invoices].sort((a, b) => b.date.localeCompare(a.date));
+  },
+  async getInvoice(id) {
+    return state.invoices.find((invoice) => invoice.id === id) ?? null;
+  },
+  async createInvoice(quote, lead, actor, gstin) {
+    const existing = state.invoices.find((invoice) => invoice.quoteId === quote.id);
+    if (existing) return existing;
+    const { nextInvoiceNumber } = await import("@/lib/invoice-number");
+    const { invoiceSnapshot } = await import("@/lib/invoice-rules");
+    const invoice: Invoice = {
+      ...invoiceSnapshot(quote, lead, await nextInvoiceNumber(), actor, gstin, todayIST()),
+      id: `INV${2001 + state.invoices.length}`,
+    };
+    state.invoices.unshift(invoice);
+    note(lead.id, actor.name, `Invoice ${invoice.invoiceNo} created from quotation ${quote.offerNo}`);
+    return invoice;
   },
 
   async listVisits() {
@@ -210,6 +304,7 @@ export const mockRepository: CrmRepository = {
     const visit = {
       id: `V${state.visits.length + 1}`, leadId: lead.id, customer: lead.company || lead.name,
       phone: lead.phone,
+      email: lead.email,
       address: lead.address, area: lead.area, executive: input.executive, type: input.type,
       isVisit: input.isVisit, date: input.date, time: input.time, status: "Assigned",
       nextAction: input.nextAction, followUp: "", notes: "", done: false,

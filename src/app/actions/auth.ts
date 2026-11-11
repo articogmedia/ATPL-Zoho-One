@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { demoLoginAllowed } from "@/lib/auth/demo";
 import { createSession, destroySession } from "@/lib/auth/session";
-import { STATIC_USERS, staticUserAsPortalUser, verifyStaticCredentials } from "@/lib/auth/users";
+import { STATIC_USERS, resolvePortalUserZohoId, staticUserAsPortalUser } from "@/lib/auth/users";
+import { authenticateStaticCredentials } from "@/lib/auth/password-store";
 import { loginAttemptStore } from "@/lib/auth/login-attempt-store";
 import { crm } from "@/lib/crm";
 import { ZohoError } from "@/lib/zoho/client";
@@ -13,18 +14,13 @@ import { canAccess, type User } from "@/lib/domain";
 const LOCKOUT_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 
-function firstAllowedPage(user: User) {
-  if (!(["Calling Team", "Sales Executive", "Manager"] as const).includes(user.role)) return "/leads";
-  const first = (["leads", "quotations", "visits", "performance"] as const)
-    .find((section) => canAccess(user.role, section));
-  return first === "leads" ? "/leads"
-    : first === "quotations" ? "/quotations"
-    : first === "visits" ? "/visits"
-    : first === "performance" ? "/performance" : "/home";
+function firstAllowedPage() {
+  return "/home";
 }
 
 function allowedReturnPath(value: string, user: User, fallback: string): string {
   const allowed: Record<string, Parameters<typeof canAccess>[1]> = {
+    "/home": "home",
     "/leads": "leads",
     "/quotations": "quotations",
     "/visits": "visits",
@@ -49,7 +45,9 @@ async function prefetchLandingData(user: User, path: string) {
   });
   try {
     const repo = crm();
-    const tasks: [string, Promise<unknown>][] = path === "/leads"
+    const tasks: [string, Promise<unknown>][] = path === "/home"
+      ? [["leads", repo.listLeads()], ["products", repo.listProducts()]]
+      : path === "/leads"
       ? [
         ["leads", repo.listLeads()],
         ["assignable users", repo.listAssignableUsers()],
@@ -83,7 +81,7 @@ export async function demoLogin(userId: string) {
   const portalUser = process.env.DATA_SOURCE === "mock"
     ? { ...staticPortalUser, id: (await crm().listUsers()).find((candidate) => candidate.name === user.name)?.id ?? staticPortalUser.id }
     : staticPortalUser;
-  const destination = firstAllowedPage(portalUser);
+  const destination = firstAllowedPage();
   await createSession(portalUser, user.username);
   void prefetchLandingData(portalUser, destination);
   redirect(destination);
@@ -98,7 +96,16 @@ export async function loginAction(_: unknown, formData: FormData) {
     console.info(`[auth] login failed: locked ${Date.now() - started}ms`);
     return { error: "Too many attempts, try again in a few minutes" };
   }
-  const user = verifyStaticCredentials(username, String(formData.get("password") ?? ""));
+  let user;
+  try {
+    user = await authenticateStaticCredentials(username, String(formData.get("password") ?? ""));
+  } catch (error) {
+    console.error("[auth] password verification failed", {
+      username,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return { error: "Sign-in is temporarily unavailable. Please try again." };
+  }
   if (!user) {
     const next = state && state.lockedUntil > 0 && state.lockedUntil <= now
       ? { count: 0, lockedUntil: 0 }
@@ -116,8 +123,16 @@ export async function loginAction(_: unknown, formData: FormData) {
     return { error: "Invalid username or password" };
   }
   await loginAttemptStore.delete(username);
-  const portalUser = staticUserAsPortalUser(user);
-  const fallback = firstAllowedPage(portalUser);
+  let portalUser = staticUserAsPortalUser(user);
+  if (process.env.DATA_SOURCE === "zoho") {
+    const zohoUserId = resolvePortalUserZohoId(user, await crm().listUsers());
+    if (!zohoUserId) {
+      console.error("[auth] login failed: static account has no active Zoho user mapping", { username: user.username });
+      return { error: "Your account is not mapped to an active Zoho CRM user. Please ask an administrator to update your user mapping." };
+    }
+    portalUser = { ...portalUser, id: zohoUserId };
+  }
+  const fallback = firstAllowedPage();
   const destination = allowedReturnPath(String(formData.get("returnTo") ?? ""), portalUser, fallback);
   await createSession(portalUser, user.username);
   console.info(`[auth] login success ${Date.now() - started}ms`);

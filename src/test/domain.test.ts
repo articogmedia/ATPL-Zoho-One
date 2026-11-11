@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyVisitOverrides, canAccess, formatINR, isAssignable, leadsForTab, visibleFor, workForTab, workTabsFor, ACCESS, type Visit } from "@/lib/domain";
+import { applyVisitOverrides, canAccess, formatINR, isAssignable, leadsForTab, summarizeLeads, visibleFor, workForTab, workTabsFor, ACCESS, type Visit } from "@/lib/domain";
 import { MOCK_LEADS as SAMPLE_LEADS, MOCK_USERS as USERS, MOCK_QUOTES as SAMPLE_QUOTES, MOCK_VISITS as SAMPLE_VISITS } from "@/lib/crm/mock-data";
 
 const u = (id: string) => USERS.find((x) => x.id === id)!;
@@ -77,6 +77,14 @@ describe("access rules", () => {
     expect(visibleFor(u("anil"), SAMPLE_LEADS).every((l) => l.assignedTo === "Anil")).toBe(true);
     expect(visibleFor(u("pavan"), SAMPLE_LEADS)).toHaveLength(SAMPLE_LEADS.length);
   });
+  it("summarizes lead tabs with the same role visibility rules as the list", () => {
+    const executive = { id: "pavan-id", name: "Pavan", role: "Sales Executive" as const };
+    const summary = summarizeLeads(executive, SAMPLE_LEADS);
+    expect(summary.total).toBe(visibleFor(executive, SAMPLE_LEADS).length);
+    expect(summary.tabCounts.fresh).toBe(0);
+    expect(summary.tabCounts.all).toBe(0);
+    expect(summary.tabCounts.assigned).toBe(leadsForTab(executive, SAMPLE_LEADS, "assigned").length);
+  });
   it("shows a newly added Manager lead in both table and card views", () => {
     const manager = u("pavan");
     const added = { ...SAMPLE_LEADS[0], id: "new-lead", name: "New Lead", status: "Fresh Lead" as const, assignedTo: null, assignedToId: undefined, createdOn: "2026-11-03" } as Lead;
@@ -124,10 +132,10 @@ describe("manage leads", () => {
     expect(leadBucket(lead)).toBe("fresh");
     expect(leadsForTab({ id: "caller-id", name: "Caller", role: "Calling Team" }, [lead], "fresh")).toHaveLength(1);
   });
-  it("assigned lead leaves Fresh but stays in All", () => {
+  it("assigned lead leaves Fresh and Calling Team cannot open restricted tabs", () => {
     const leads = SAMPLE_LEADS.map((l) => (l.id === "L105" ? { ...l, assignedTo: "Ravi" } : l));
     expect(leadsForTab(u("divya"), leads, "fresh").some((l) => l.id === "L105")).toBe(false);
-    expect(leadsForTab(u("divya"), leads, "mine", "Arjun").map((l) => l.id)).toEqual(["L105"]);
+    expect(leadsForTab(u("divya"), leads, "mine", "Arjun")).toEqual([]);
   });
   it("My Leads for managers includes only owned leads, not merely touched leads", () => {
     const manager = { id: "manager-id", name: "Manager", role: "Manager" as const };
@@ -146,6 +154,14 @@ describe("manage leads", () => {
     expect(leadsForTab({ id: "ravi-id", name: "Ravi", role: "Sales Executive" }, assigned, "assigned").map((lead) => lead.assignedTo)).toEqual(["Ravi"]);
     expect(leadsForTab({ id: "ravi-id", name: "Ravi", role: "Sales Executive" }, assigned, "all")).toHaveLength(0);
     expect(leadsForTab({ id: "caller-id", name: "Caller", role: "Calling Team" }, assigned, "fresh")).toHaveLength(0);
+  });
+  it("does not expose Fresh or All lead tabs to executives", () => {
+    const executive = { id: "ravi-id", name: "Ravi", role: "Sales Executive" as const };
+    expect(leadsForTab(executive, SAMPLE_LEADS, "fresh")).toEqual([]);
+    expect(leadsForTab(executive, SAMPLE_LEADS, "all")).toEqual([]);
+    expect(leadsForTab(executive, SAMPLE_LEADS, "assigned").every((lead) =>
+      lead.assignedToId === executive.id || lead.ownerId === executive.id || lead.assignedTo === executive.name,
+    )).toBe(true);
   });
   it("applies owner, stage and date filters used by All Leads", () => {
     const lead = { ...SAMPLE_LEADS[0]!, assignedTo: "Ravi", status: "Contacted" as const, createdOn: "2026-10-20" };
@@ -167,7 +183,7 @@ describe("manage leads", () => {
   });
 });
 
-import { perfStats, rangeDates, type Lead, type PerfExecutive, type Quotation, type User } from "@/lib/domain";
+import { perfStats, rangeDates, summarizeLeadCalls, type CallActivity, type Lead, type PerfExecutive, type Quotation, type User } from "@/lib/domain";
 const EXECS = ["Anil", "Ravi"];
 describe("performance dashboard", () => {
   it("computes calendar boundaries", () => {
@@ -270,5 +286,42 @@ describe("performance dashboard", () => {
       { id: "c2", leadId: "l2", ownerId: "other", date: "2026-10-10" },
     ]);
     expect(stats.calls).toBe(1);
+  });
+  it("reports source conversion, executive open work, in-progress work and calls for custom dates", () => {
+    const roster: PerfExecutive[] = [{ id: "pavan-id", name: "Pavan", role: "Sales Executive" }];
+    const leadRows = [
+      { ...SAMPLE_LEADS[0], id: "won", source: "Meta Ads", createdOn: "2026-10-10", ownerId: "pavan-id", status: "Won" },
+      { ...SAMPLE_LEADS[1], id: "open", source: "Meta Ads", createdOn: "2026-10-11", ownerId: "pavan-id", status: "Contacted" },
+    ] as Lead[];
+    const work = [{ ...SAMPLE_VISITS[0], date: "2026-10-11", isVisit: false, status: "In Progress", executiveId: "pavan-id" }] as Visit[];
+    const calls: CallActivity[] = [{ id: "c1", leadId: "won", ownerId: "pavan-id", date: "2026-10-11T09:00:00+05:30" }];
+    const stats = perfStats(leadRows, [], work, "month", "2026-10-29", roster, undefined, calls, { from: "2026-10-10", to: "2026-10-11" });
+    expect(stats.from).toBe("2026-10-10");
+    expect(stats.bySource.find((row) => row.source === "Meta Ads")).toMatchObject({ count: 2, won: 1, conversion: 50 });
+    expect(stats.rows.find((row) => row.name === "Pavan")).toMatchObject({ open: 1, inProgress: 1, calls: 1 });
+  });
+});
+
+describe("consecutive call attempt summaries", () => {
+  const makeCall = (id: string, outcome: CallActivity["outcome"], date = "2026-10-01T10:00:00Z"): CallActivity => ({
+    id, leadId: "lead-1", ownerId: "exec-1", date, outcome,
+  });
+
+  it("counts No Answer and Busy, ignores Wrong Number, and resets after Connected or Callback", () => {
+    expect(summarizeLeadCalls([
+      makeCall("1", "No Answer"), makeCall("2", "Wrong Number"), makeCall("3", "Busy"),
+    ], "lead-1")).toEqual({ attempts: 2, lastOutcome: "Busy" });
+    expect(summarizeLeadCalls([
+      makeCall("1", "No Answer"), makeCall("2", "Connected"),
+    ], "lead-1")).toEqual({ attempts: 0, lastOutcome: "Connected" });
+    expect(summarizeLeadCalls([
+      makeCall("1", "Busy"), makeCall("2", "Call Back Later"),
+    ], "lead-1")).toEqual({ attempts: 0, lastOutcome: "Call Back Later" });
+  });
+
+  it("uses the configured cap and reliably orders calls sharing a timestamp", () => {
+    expect(summarizeLeadCalls([
+      makeCall("9", "Connected"), makeCall("10", "Busy"), makeCall("11", "No Answer"),
+    ], "lead-1", 1)).toEqual({ attempts: 1, lastOutcome: "No Answer" });
   });
 });

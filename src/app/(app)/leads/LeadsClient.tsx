@@ -2,8 +2,7 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
 import { CalendarPlus, FileText, History, LoaderCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
@@ -13,10 +12,10 @@ import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
-import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getAssignmentWarningsAction, getLeadSourcesAction, getLeadTimelineAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, updateLeadAction, type DuplicateLeadResult } from "@/app/actions/crm";
+import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getAssignmentWarningsAction, getLeadSourcesAction, getLeadTimelineAction, listFixableAssignedLeadsAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, setLeadOutcomeAction, updateLeadAction, type DuplicateLeadResult } from "@/app/actions/crm";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, adjustLeadTabCounts, applyLeadOverrides as mergeLeadOverrides, canAssignLeads, leadAssigneeOptions, leadsForTab, normalizePhone, reassignLeadOptimistically, todayIST,
-  type Lead, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type User,
+  LEAD_SOURCES, LEAD_STATUSES, LOST_REASONS, adjustLeadTabCounts, applyLeadOverrides as mergeLeadOverrides, canAssignLeads, leadAssigneeOptions, leadsForTab, normalizePhone, reassignLeadOptimistically, todayIST,
+  type Lead, type LeadCallSummary, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type LostReason, type User,
 } from "@/lib/domain";
 
 const CallLeadModal = dynamic(
@@ -30,6 +29,7 @@ type Props = {
   fixableLeads: { id: string; name: string; ownerName: string }[];
   initialTab: LeadTab; initialCount: number; tabCounts: Record<LeadTab, number>;
   todaysFollowUps: number; hasAnyLeads: boolean;
+  callStats?: Record<string, LeadCallSummary>;
 };
 type DrawerMode = "edit" | "history" | "schedule";
 type LeadMutationAction = { type: "edit" | "reassign" | "delete"; lead: Lead };
@@ -71,6 +71,7 @@ type LeadsResponse = {
   tabCounts: Record<LeadTab, number>;
   todaysFollowUps?: number;
   hasAnyLeads?: boolean;
+  callStats?: Record<string, LeadCallSummary>;
   hasMore?: boolean;
 };
 
@@ -84,9 +85,10 @@ function isLeadsResponse(value: unknown): value is LeadsResponse {
     TABS.every(({ id }) => Number.isInteger(counts[id]) && counts[id] >= 0);
 }
 
-export function LeadsClient({ user, leads, initialHasMore = false, executives, assignees, assigneesUnavailable, owners, canAssign, leadSources: initialLeadSources = LEAD_SOURCES, leadSourcesUnavailable = false, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, hasAnyLeads: initialHasAnyLeads }: Props) {
-  const router = useRouter();
+export function LeadsClient({ user, leads, initialHasMore = false, executives, assignees, assigneesUnavailable, owners, canAssign, leadSources: initialLeadSources = LEAD_SOURCES, leadSourcesUnavailable = false, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, hasAnyLeads: initialHasAnyLeads, callStats: initialCallStats = {} }: Props) {
+  const [fixableLeadRows, setFixableLeadRows] = useState(fixableLeads);
   const [leadRows, setLeadRows] = useState(leads);
+  const [callStats, setCallStats] = useState(initialCallStats);
   const leadRowsRef = useRef(leadRows);
   leadRowsRef.current = leadRows;
   const [teamMembers, setTeamMembers] = useState(assignees);
@@ -126,9 +128,6 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
   const optimisticAssignments = useRef(new Map<string, Lead>());
   const optimisticCalls = useRef(new Map<string, Lead>());
   const previousServerLeads = useRef(leads);
-  const refreshSilently = useCallback(() => {
-    startTransition(() => router.refresh());
-  }, [router]);
   useEffect(() => {
     const saved = readExpiredAction<{ type: string; payload: { leadId?: string; actionType?: string } }>();
     if (saved?.type === "add-lead") setAdding(true);
@@ -193,6 +192,17 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     }
   }, [retryingLeadSources]);
   const teamLoadAttempted = useRef(false);
+  useEffect(() => {
+    if (user.role !== "Manager" || fixableLeadRows.length) return;
+    void listFixableAssignedLeadsAction().then((result) => {
+      if (result.ok && result.data) setFixableLeadRows(result.data);
+      else if (!result.ok) console.warn("[leads] fixable assigned leads unavailable", { message: result.error });
+    }).catch((error: unknown) => {
+      console.warn("[leads] fixable assigned leads unavailable", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [user.role, fixableLeadRows.length]);
   useEffect(() => {
     if (action?.type === "reassign" && !teamMembers.length && teamMembersUnavailable && !teamLoadAttempted.current) {
       teamLoadAttempted.current = true;
@@ -344,6 +354,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
       if (!leadOverrides.current.has(id)) optimisticLeadRows.current.delete(id);
     }
     setLeadRows(merged);
+    setCallStats((current) => ({ ...current, ...(result.callStats ?? {}) }));
     currentPage.current = requestedPage;
     setHasMoreRows(result.hasMore === true);
     if (leadOverrides.current.size === 0) {
@@ -397,12 +408,6 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     }
   }, [requestPage]);
   useEffect(() => {
-    const refreshVisibleLeads = () => startTransition(() => router.refresh());
-    window.addEventListener("atpl:leads-refresh", refreshVisibleLeads);
-    return () => window.removeEventListener("atpl:leads-refresh", refreshVisibleLeads);
-  }, [router]);
-
-  useEffect(() => {
     const query = debouncedSearch.trim();
     const requestKey = `${tab}:${query}:${source}:${filters.owner}:${filters.stage}:${filters.from ?? ""}:${filters.to ?? ""}`;
     if (query.length < 2 || total <= leadRows.length ||
@@ -452,9 +457,10 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     .filter((lead) => lead.followUp === todayIST()).length;
   const loadMore = async () => { await runRequest(currentPage.current + 1, true); };
   const availableTabs = TABS.filter((item) =>
-    user.role === "Calling Team" ? item.id === "fresh" || item.id === "callback"
-    : !(item.id === "fresh" && isExec) && !(item.id === "all" && user.role !== "Manager"));
-  const fixableCount = fixableLeads.length;
+    user.role === "Sales Executive" ? ["assigned", "callback", "mine"].includes(item.id)
+    : user.role === "Calling Team" ? item.id === "fresh" || item.id === "callback"
+    : true);
+  const fixableCount = fixableLeadRows.length;
   const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
   const retryPendingLead = async (id: string) => {
     const pending = pendingLeadAdds.find((item) => item.id === id);
@@ -497,15 +503,21 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
         <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
           <Button className="hidden h-11 shrink-0 sm:inline-flex" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>
           {(user.role === "Manager" || user.role === "Calling Team") && <span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}
-          {user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeads} count={fixableCount} /></span>}
+          {user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} /></span>}
         </div>
       </div>
 
-      {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads leads={fixableLeads} count={fixableCount} compact /></div>}
+      {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} compact /></div>}
 
       <div className="relative -mx-1">
       <div ref={tabListRef} className="flex gap-2 overflow-x-auto p-1 max-[480px]:scrollbar-none" role="tablist" aria-label="Lead views">
-        {availableTabs.map((item) => (
+        {availableTabs.map((item) => {
+          const label = isExec
+            ? item.id === "assigned" ? "Assigned"
+            : item.id === "callback" ? "Follow-ups/Callback"
+            : item.label
+            : item.label;
+          return (
           <button
             key={item.id}
             id={`lead-tab-${item.id}`}
@@ -515,9 +527,10 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
             onClick={() => setTab(item.id)}
             className={`h-11 shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === item.id ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
           >
-            <span className="max-[480px]:hidden">{item.label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.id === "assigned" ? "Assigned" : item.label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
+            <span className="max-[480px]:hidden">{label}</span><span className="hidden max-[480px]:inline">{item.id === "fresh" ? "Fresh" : item.id === "assigned" ? "Assigned" : label}</span> <span className="ml-1 opacity-75">({count(item.id)})</span>
           </button>
-        ))}
+          );
+        })}
       </div>
       </div>
 
@@ -591,7 +604,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
               <tbody className="divide-y divide-border">
                 {visible.map((lead) => {
                   const pendingAdd = pendingLeadAdds.find((item) => item.id === lead.id);
-                  return <DesktopRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onAction={startLeadAction} />;
+                  return <DesktopRow key={lead.id} lead={lead} callStats={callStats[lead.id]} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onAction={startLeadAction} />;
                 })}
               </tbody>
             </table>
@@ -599,7 +612,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           <div id="leads-list-mobile" className="space-y-2 max-[480px]:space-y-1.5 md:hidden">
             {visible.map((lead) => {
               const pendingAdd = pendingLeadAdds.find((item) => item.id === lead.id);
-              return <MobileRow key={lead.id} lead={lead} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onAction={startLeadAction} />;
+              return <MobileRow key={lead.id} lead={lead} callStats={callStats[lead.id]} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onAction={startLeadAction} />;
             })}
           </div>
           {hasMoreRows && <div className="flex flex-col items-center gap-2">
@@ -636,7 +649,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
         />
       )}
-      {action?.type === "call" && <CallLeadModal lead={action.lead} onClose={() => setAction(null)} onPendingChange={(pending) => setPendingLeadId(pending ? action.lead.id : null)} onOptimistic={(status, followUp, remarks) => {
+      {action?.type === "call" && <CallLeadModal lead={action.lead} currentStatus={action.lead.status} onClose={() => setAction(null)} onPendingChange={(pending) => setPendingLeadId(pending ? action.lead.id : null)} onOptimistic={(status, followUp, remarks) => {
         const before = leadRows.find((lead) => lead.id === action.lead.id) ?? action.lead;
         const after = {
           ...before,
@@ -650,10 +663,13 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
         const optimistic = optimisticCalls.current.get(action.lead.id);
         if (optimistic) updateLeadOptimistically(optimistic, action.lead);
         optimisticCalls.current.delete(action.lead.id);
-      }} onSaved={() => {
+      }} onSaved={(_status, _followUp, attempts, lastOutcome) => {
+        setCallStats((current) => ({
+          ...current,
+          [action.lead.id]: { attempts: attempts ?? current[action.lead.id]?.attempts ?? 0, ...(lastOutcome ? { lastOutcome } : {}) },
+        }));
         optimisticCalls.current.delete(action.lead.id);
         setAction(null);
-        refreshSilently();
       }} />}
       {action && action.type !== "call" && <LeadActionModal key={`${action.type}:${action.lead.id}`} action={action} assignees={teamMembers} assigneesUnavailable={teamMembersUnavailable} retryingAssignees={retryingTeamMembers} onRetryAssignees={() => { teamLoadAttempted.current = false; void reloadTeamMembers(); }} onPendingChange={(pending) => setPendingLeadId(pending ? action.lead.id : null)} onClose={() => setAction(null)} onOptimisticAssign={(member) => {
         const { lead: reassigned } = reassignLeadOptimistically(
@@ -672,7 +688,6 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
       }} onOptimisticChange={(before, after) => updateLeadOptimistically(before, after)} onRollbackChange={(before, after) => updateLeadOptimistically(before, after)} onDone={(savedLead) => {
         setAction(null);
         if (savedLead && action.type === "edit") updateLeadOptimistically(action.lead, savedLead);
-        refreshSilently();
       }} onAssigned={(assignment) => {
         const optimistic = optimisticAssignments.current.get(action.lead.id) ?? action.lead;
         const persisted: Lead = {
@@ -686,7 +701,6 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
         optimisticLeadRows.current.set(persisted.id, persisted);
         optimisticAssignments.current.delete(action.lead.id);
         setJustAdded((current) => current?.id === action.lead.id ? persisted : current);
-        refreshSilently();
         if (assignment.warningCheckId) void pollAssignmentWarnings(assignment.warningCheckId);
       }} />}
     </div>
@@ -728,21 +742,21 @@ function DesktopActionButtons({ lead, manager, pending, onAction }: { lead: Lead
   </div>;
 }
 
-const DesktopRow = memo(function DesktopRow({ lead, manager, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; pending: boolean; pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean; onRetryPending: () => void; onDiscardPending: () => void; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
+const DesktopRow = memo(function DesktopRow({ lead, callStats, manager, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onAction }: { lead: Lead; callStats?: LeadCallSummary; manager: boolean; highlighted: boolean; pending: boolean; pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean; onRetryPending: () => void; onDiscardPending: () => void; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
   return (
     <tr className={`group cursor-pointer transition-colors hover:bg-secondary/50 ${pending ? "opacity-70" : ""} ${highlighted ? "bg-success/10 ring-1 ring-inset ring-success" : ""}`} onClick={() => { if (!pendingAddStatus) onOpen(lead); }}>
       <td className="max-w-56 px-4 py-3"><div className="truncate font-semibold">{lead.name}</div>{lead.company && <div className="truncate text-xs text-muted-foreground">{lead.company}</div>}{pendingAddStatus && <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${pendingAddStatus === "failed" ? "bg-destructive/10 text-destructive" : "bg-secondary text-muted-foreground"}`}>{pendingAddStatus === "failed" ? "Not saved" : "Saving…"}</span>}</td>
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.phone || "—"}</td>
       <td className="whitespace-nowrap px-3 py-3">{lead.source}</td>
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.createdOn || "—"}</td>
-      <td className="px-3 py-3"><StatusBadge status={lead.status} />{lead.followUp && lead.followUp <= todayIST() && <div className="mt-1 text-xs font-semibold text-destructive">Overdue</div>}</td>
+      <td className="px-3 py-3"><StatusBadge status={lead.status} />{callStats && <div className="mt-1 text-xs text-muted-foreground">Calls: {callStats.attempts} consecutive{callStats.lastOutcome ? ` · Last: ${callStats.lastOutcome}` : ""}</div>}{lead.followUp && lead.followUp <= todayIST() && <div className="mt-1 text-xs font-semibold text-destructive">Overdue</div>}</td>
       <td className="max-w-36 truncate px-3 py-3">{lead.assignedTo ?? "Unassigned"}</td>
       <td className="sticky right-0 z-[1] min-w-[200px] whitespace-nowrap bg-card px-2 py-3 text-right group-hover:bg-secondary/50" onClick={(event) => event.stopPropagation()}>{pendingAddStatus === "failed" ? <div className="flex justify-end gap-2">{pendingAddRetryable && <Button type="button" className="h-9" onClick={onRetryPending}>Retry</Button>}<Button type="button" variant="outline" className="h-9" onClick={onDiscardPending}>Discard</Button></div> : <DesktopActionButtons lead={lead} manager={manager} pending={pending} onAction={(type) => onAction(type, lead)} />}{pending && <span role="status" className="sr-only">Saving lead</span>}</td>
     </tr>
   );
 });
 
-const MobileRow = memo(function MobileRow({ lead, manager, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onAction }: { lead: Lead; manager: boolean; highlighted: boolean; pending: boolean; pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean; onRetryPending: () => void; onDiscardPending: () => void; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
+const MobileRow = memo(function MobileRow({ lead, callStats, manager, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onAction }: { lead: Lead; callStats?: LeadCallSummary; manager: boolean; highlighted: boolean; pending: boolean; pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean; onRetryPending: () => void; onDiscardPending: () => void; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
   const mobile = lead.phone.replace(/\D/g, "").slice(-10);
   const company = lead.company.trim();
   const showCompany = company && company.toLocaleLowerCase() !== lead.name.trim().toLocaleLowerCase();
@@ -760,6 +774,7 @@ const MobileRow = memo(function MobileRow({ lead, manager, highlighted, pending,
         <Phone aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="truncate">{lead.phone}</span>
       </a>}
       <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] leading-5">
+        {callStats && <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground">Calls · {callStats.attempts} consecutive{callStats.lastOutcome ? ` · Last: ${callStats.lastOutcome}` : ""}</span>}
         <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground"><span className="text-muted-foreground">Source</span> · {lead.source}</span>
         <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground"><span className="text-muted-foreground">Created</span> · {lead.createdOn || "—"}</span>
         <span className={`max-w-full truncate rounded-full px-2 ${lead.assignedTo ? "bg-secondary text-secondary-foreground" : "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200"}`}><span className={lead.assignedTo ? "text-muted-foreground" : "text-amber-700 dark:text-amber-300"}>Owner</span> · {lead.assignedTo ?? "Unassigned"}</span>
@@ -950,6 +965,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
 }) {
   const [mode, setMode] = useState<DrawerMode>("edit");
   const [status, setStatus] = useState<LeadStatus>(lead.status);
+  const [lostReason, setLostReason] = useState<LostReason | "">(lead.lostReason ?? "");
   const [assignee, setAssignee] = useState(lead.assignedTo ?? "");
   const [remarks, setRemarks] = useState("");
   const [history, setHistory] = useState<LeadTimelineItem[] | null>(null);
@@ -972,10 +988,15 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
 
   const save = (saveNext = false) => {
     if (pending) return;
+    if (status === "Lost Lead" && !lostReason) {
+      toast.error("Choose a reason before marking this lead lost.");
+      return;
+    }
     const assigned = assignees.find((member) => member.name === assignee);
     const optimistic: Lead = {
       ...lead,
       status,
+      ...(status === "Lost Lead" ? { lostReason: lostReason as LostReason } : {}),
       remarks,
       ...(canAssign ? {
         assignedTo: assignee || null,
@@ -983,10 +1004,17 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
         ownerId: assignee ? assigned?.id : undefined,
       } : {}),
     };
+
     onOptimistic(optimistic);
     start(async () => {
       try {
-        const result = await executeMutation(saveLeadUpdateAction, { id: lead.id, status, remarks, ...(canAssign ? { assignedTo: assignee || null } : {}) });
+        const result = await executeMutation(saveLeadUpdateAction, {
+          id: lead.id,
+          status,
+          ...(status === "Lost Lead" ? { lostReason } : {}),
+          remarks,
+          ...(canAssign ? { assignedTo: assignee || null } : {}),
+        });
         if (!result.ok) {
           onRollback(originalLead.current);
           toast.error(result.error);
@@ -1003,6 +1031,38 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
           toast.success(`Next lead: ${nextLead.name}`);
           onNext(nextLead);
         }
+      } catch (error) {
+        onRollback(originalLead.current);
+        notifyMutationFailure(error);
+      }
+    });
+  };
+
+  const setOutcome = (outcome: "Won" | "Lost Lead") => {
+    if (outcome === "Lost Lead" && !lostReason) return;
+    return start(async () => {
+      if (outcome === "Lost Lead" && !lostReason) return;
+      const optimistic: Lead = {
+        ...lead,
+        status: outcome,
+        ...(outcome === "Lost Lead" ? { lostReason: lostReason as LostReason } : {}),
+      };
+      onOptimistic(optimistic);
+      try {
+        const result = await executeMutation(setLeadOutcomeAction, {
+          leadId: lead.id,
+          outcome,
+          ...(outcome === "Lost Lead" ? { lostReason } : {}),
+        });
+        if (!result.ok) {
+          onRollback(originalLead.current);
+          toast.error(result.error);
+          return;
+        }
+        const saved = result.data?.lead ?? optimistic;
+        onSaved(saved);
+        setStatus(outcome);
+        toast.success(outcome === "Won" ? "Lead marked won." : "Lead marked lost.");
       } catch (error) {
         onRollback(originalLead.current);
         notifyMutationFailure(error);
@@ -1050,6 +1110,16 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
           ) : (
             <div className="space-y-4">
               <label className="block font-medium">Status<SelectField className="mt-1" value={status} onValueChange={(value) => setStatus(value as LeadStatus)} options={LEAD_STATUSES.map((item) => ({ value: item, label: item }))} /></label>
+              <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2">
+                <Button type="button" variant="outline" disabled={pending || lead.status === "Won"} onClick={() => setOutcome("Won")}>Mark Won</Button>
+                <div className="flex gap-2">
+                  <select aria-label="Lost reason" className={`${fieldClass} min-w-0 flex-1 text-sm`} value={lostReason} onChange={(event) => setLostReason(event.target.value as LostReason | "")}>
+                    <option value="">Select lost reason</option>
+                    {LOST_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
+                  </select>
+                  <Button type="button" variant="destructive" disabled={pending || !lostReason || lead.status === "Lost Lead"} onClick={() => setOutcome("Lost Lead")}>Mark Lost</Button>
+                </div>
+              </div>
               {canAssign && <label className="relative block font-medium">Assign to Sales Executive
                 <button type="button" role="combobox" aria-expanded={comboboxOpen} aria-controls="lead-executive-options" className={`${fieldClass} mt-1 flex items-center justify-between text-left text-sm`} onClick={() => setComboboxOpen((value) => !value)} disabled={!executives.length}><span className={assignee ? "text-foreground" : "text-muted-foreground"}>{assignee || "Unassigned"}</span><Search className="h-4 w-4" /></button>
                 {comboboxOpen && <div id="lead-executive-options" role="listbox" className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-md border bg-card p-1 shadow-lg">

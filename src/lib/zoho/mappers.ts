@@ -1,4 +1,5 @@
-import type { Lead, LeadSource, LeadStatus, LeadUpdate, Product, Quotation, QuoteGstBreakdown, QuoteGstTotals, Role, User, Visit, VisitStatus } from "@/lib/domain";
+import type { Lead, LeadSource, LeadStatus, LeadUpdate, LostReason, Product, Quotation, QuoteGstBreakdown, QuoteGstTotals, Role, User, Visit, VisitStatus } from "@/lib/domain";
+import { LOST_REASONS } from "@/lib/domain";
 import { FIELD, READ_LEAD_STATUS, ROLE_BY_ZOHO_NAME, ROLE_KEYWORDS } from "./fields";
 
 /** Pure Zoho <-> portal mapping. No I/O, so it is fully unit-tested. */
@@ -14,11 +15,13 @@ export type ZUser = {
   email?: string; role?: { name?: string }; profile?: { name?: string };
 };
 export type ZLead = {
-  id: string | number; Last_Name?: string; First_Name?: string; Company?: string; Mobile?: string; Phone?: string;
+  id: string | number; Last_Name?: string; First_Name?: string; Company?: string; Mobile?: string; Phone?: string; Email?: string;
+  [FIELD.lead.accountId]?: string | Ref;
+  [FIELD.lead.lostReason]?: string;
   City?: string; Street?: string; Lead_Source?: string; Lead_Status?: string; Owner?: Ref; Description?: string;
   Created_Time?: string; Created_By?: Ref; Modified_By?: Ref;
 };
-export type ZProduct = { id: string; Product_Name: string; Product_Code?: string; Description?: string; Unit_Price?: number; Usage_Unit?: string };
+export type ZProduct = { id: string; Product_Name: string; Product_Code?: string; Description?: string; Unit_Price?: number; Usage_Unit?: string; Tax?: unknown };
 export type ZQuotedItem = {
   product?: Ref | string;
   quantity?: number | string;
@@ -39,6 +42,7 @@ export type ZQuotedItem = {
   Description?: string;
   Unit?: string;
   Usage_Unit?: string;
+  Line_Tax?: unknown;
 };
 export type ZQuote = { id: string; Subject?: string; Owner?: Ref; Created_Time?: string; Sub_Total?: number | string | null; Discount?: number | string | null; Tax?: number | string | null; Adjustment?: number | string | null; Grand_Total?: number; Valid_Till?: string; Mobile?: string; Phone?: string; Customer_Name?: string; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
 export type QuoteLineItemsField = "Quoted_Items" | "Product_Details";
@@ -50,8 +54,10 @@ export function quoteLineItemsField(fieldNames: Iterable<string>): QuoteLineItem
 
 export type QuoteCustomerSnapshot = {
   leadId?: string;
+  revision?: number;
   name?: string;
   phone?: string;
+  email?: string;
   company?: string;
   area?: string;
   address?: string;
@@ -80,6 +86,30 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
           ? undefined
           : { subtotal, discount, gst, total };
       };
+      const extraCharges = (value: unknown) => Array.isArray(value)
+        ? value.flatMap((charge) => {
+            if (!charge || typeof charge !== "object") return [];
+            const record = charge as Record<string, unknown>;
+            const label = typeof record.label === "string" ? record.label : "";
+            const amount = number(record, "amount");
+            const taxRate = number(record, "taxRate");
+            return label && amount !== undefined
+              ? [{ label, amount, ...(taxRate !== undefined ? { taxRate } : {}) }]
+              : [];
+          })
+        : undefined;
+      const gstByRate = (value: unknown) => Array.isArray(value)
+        ? value.flatMap((group) => {
+            if (!group || typeof group !== "object") return [];
+            const record = group as Record<string, unknown>;
+            const rate = number(record, "rate");
+            const taxableAmount = number(record, "taxableAmount");
+            const amount = number(record, "amount");
+            return rate === undefined || taxableAmount === undefined || amount === undefined
+              ? []
+              : [{ rate, taxableAmount, amount }];
+          })
+        : undefined;
       let gstBreakdown: QuoteGstBreakdown | undefined;
       if (gstValue && typeof gstValue === "object") {
         const record = gstValue as Record<string, unknown>;
@@ -103,6 +133,8 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
             rate,
             partA,
             partB,
+            ...(gstByRate(record.gstByRate) ? { gstByRate: gstByRate(record.gstByRate) } : {}),
+            ...(extraCharges(record.extraCharges) ? { extraCharges: extraCharges(record.extraCharges) } : {}),
             ...(partAGstMode ? { partAGstMode } : {}),
             ...(zohoSubtotal !== undefined && zohoDiscount !== undefined && zohoTax !== undefined && zohoAdjustment !== undefined
               ? { zoho: { subtotal: zohoSubtotal, discount: zohoDiscount, tax: zohoTax, adjustment: zohoAdjustment } }
@@ -112,8 +144,10 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
       }
       return {
         leadId: text("leadId") || undefined,
+        revision: Number.isInteger(value.revision) && Number(value.revision) >= 0 ? Number(value.revision) : undefined,
         name: text("name") || undefined,
         phone: text("phone") || undefined,
+        email: text("email") || undefined,
         company: text("company") || undefined,
         area: text("area") || undefined,
         address: text("address") || undefined,
@@ -122,7 +156,7 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
     }
   } catch {
     const values = Object.fromEntries(raw.split(/\r?\n/).flatMap((line) => {
-      const match = /^\s*(lead\s*id|customer\s*name|phone|mobile|company|area|address)\s*:\s*(.*?)\s*$/i.exec(line);
+      const match = /^\s*(lead\s*id|customer\s*name|phone|mobile|email|company|area|address)\s*:\s*(.*?)\s*$/i.exec(line);
       const key = match?.[1];
       const value = match?.[2];
       return key && value ? [[key.toLowerCase().replace(/\s+/g, ""), value]] : [];
@@ -131,6 +165,7 @@ export function parseQuoteCustomerSnapshot(record: ZQuote): QuoteCustomerSnapsho
       leadId: values.leadid || undefined,
       name: values.customername || undefined,
       phone: values.phone || values.mobile || undefined,
+      email: values.email || undefined,
       company: values.company || undefined,
       area: values.area || undefined,
       address: values.address || undefined,
@@ -239,15 +274,25 @@ export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutiv
   const isSalesOwnedFreshLead = status === "Fresh Lead" && !!zohoOwnerId && !!salesExecutives && salesExecutives.has(zohoOwnerId);
   const isAssignableOwner = !!zohoOwnerId && assignable.has(zohoOwnerId) &&
     (!salesExecutives || status !== "Fresh Lead" || isSalesOwnedFreshLead);
+  const email = z[FIELD.lead.email]?.trim();
+  const rawAccountId = z[FIELD.lead.accountId];
+  const accountId = typeof rawAccountId === "string"
+    ? rawAccountId.trim()
+    : rawAccountId && typeof rawAccountId === "object" && "id" in rawAccountId
+      ? String(rawAccountId.id).trim()
+      : "";
   return {
     id: String(z.id).trim(),
     name: [z.First_Name, z.Last_Name].filter(Boolean).join(" ").trim() || "(no name)",
     company: z.Company && z.Company !== "-" ? z.Company : "",
     phone: z.Mobile || z.Phone || "",
+    ...(email ? { email } : {}),
+    ...(accountId ? { accountId } : {}),
     area: z.City ?? "",
     address: z.Street ?? "",
     source: normalizeSource(z.Lead_Source),
     status,
+    ...(LOST_REASONS.includes(z[FIELD.lead.lostReason] as LostReason) ? { lostReason: z[FIELD.lead.lostReason] as LostReason } : {}),
     // Ownership is the assignment: an executive owner means "assigned", anyone else means the fresh queue.
     assignedTo: isAssignableOwner ? ownerName : null,
     assignedToId: isAssignableOwner ? zohoOwnerId : undefined,
@@ -259,7 +304,41 @@ export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutiv
 }
 
 export function mapProduct(z: ZProduct): Product {
-  return { id: z.id, model: z.Product_Name, code: z.Product_Code?.trim() || undefined, description: z.Description?.trim() || undefined, price: z.Unit_Price ?? 0, unit: z.Usage_Unit || "Nos" };
+  const gstRate = zohoTaxRate(z.Tax);
+  return {
+    id: z.id,
+    model: z.Product_Name,
+    code: z.Product_Code?.trim() || undefined,
+    description: z.Description?.trim() || undefined,
+    price: z.Unit_Price ?? 0,
+    unit: z.Usage_Unit || "Nos",
+    ...(gstRate !== undefined ? { gstRate } : {}),
+  };
+}
+
+function zohoTaxRate(value: unknown): number | undefined {
+  if (Array.isArray(value)) return value.length ? zohoTaxRate(value[0]) : undefined;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return zohoTaxRate(record.percentage ?? record.rate ?? record.value ?? record.name);
+  }
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100) {
+    return value > 1 ? value / 100 : value === 1 ? 0.01 : value;
+  }
+  if (typeof value === "string") {
+    const match = /(?:^|\D)(\d+(?:\.\d+)?)\s*%?/.exec(value);
+    if (match) {
+      const rate = Number(match[1]);
+      return Number.isFinite(rate) && rate >= 0 && rate <= 100
+        ? rate > 1 ? rate / 100 : rate === 1 && !value.includes(".") ? 0.01 : rate
+        : undefined;
+    }
+  }
+  return undefined;
+}
+
+function zohoLineTaxRate(value: unknown): number | undefined {
+  return zohoTaxRate(value);
 }
 
 export function mapQuote(
@@ -279,7 +358,9 @@ export function mapQuote(
   const contact = z.Contact_Name && typeof z.Contact_Name === "object" ? z.Contact_Name as Ref : undefined;
   const snapshot = parseQuoteCustomerSnapshot(z);
   const subjectMatch = /^Offer\s+(.+?)\s+-\s+(.+)$/.exec(String(z.Subject ?? "").trim());
-  const offerNo = String(z[FIELD.quote.offerNo] ?? "").trim() || subjectMatch?.[1] || "";
+  const subjectOfferNo = subjectMatch?.[1] ?? "";
+  const revisionMatch = /\/R(\d+)$/i.exec(subjectOfferNo);
+  const offerNo = String(z[FIELD.quote.offerNo] ?? "").trim() || subjectOfferNo.replace(/\/R\d+$/i, "");
   const customerRefName = contact?.name || account?.name || ref?.name || String(z.Customer_Name ?? "").trim();
   const lead = (referencedLeadId ? leadsById.get(referencedLeadId) : undefined) ??
     [...leadsById.values()].find((candidate) =>
@@ -298,17 +379,22 @@ export function mapQuote(
   return {
     id: String(z.id).trim(),
     offerNo,
+    revision: snapshot.revision ?? (revisionMatch ? Number(revisionMatch[1]) : 0),
     leadId,
     customer,
     contactName,
     company,
     phone: directLead?.phone || snapshot.phone || lead?.phone || String(z.Mobile ?? z.Phone ?? ""),
+    ...((directLead?.email || snapshot.email || lead?.email)
+      ? { email: directLead?.email || snapshot.email || lead?.email }
+      : {}),
     area: directLead?.area || snapshot.area || lead?.area || "",
     address: directLead?.address || snapshot.address || lead?.address || "",
     subject: String(z.Subject ?? ""),
     validTill: day(z.Valid_Till),
     executive: cleanZohoDisplayName(z.Owner?.name),
     ownerId: ownerId(z.Owner?.id),
+    accountId: account?.id ? String(account.id) : undefined,
     total: z.Grand_Total ?? 0,
     tax: Number.isFinite(Number(z.Tax ?? 0)) ? Number(z.Tax ?? 0) : 0,
     gstBreakdown: snapshot.gstBreakdown,
@@ -323,6 +409,7 @@ export function mapQuote(
           candidate.model.trim().toLowerCase() === String(product ?? "").trim().toLowerCase(),
         );
       const number = (value: number | string | undefined) => Number(value ?? 0);
+      const taxRate = zohoLineTaxRate(item.Line_Tax);
       return {
         productId: reference?.id ?? catalogProduct?.id,
         model: reference?.name ?? (typeof product === "string" ? product : catalogProduct?.model ?? ""),
@@ -331,6 +418,7 @@ export function mapQuote(
         price: number(item.list_price ?? item.List_Price ?? item.Unit_Price ?? item.Rate),
         qty: number(item.quantity ?? item.Quantity),
         discount: number(item.Discount ?? item.Discount_Amount),
+        ...(taxRate !== undefined ? { taxRate } : {}),
       };
     }),
   };

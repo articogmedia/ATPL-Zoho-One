@@ -70,5 +70,6 @@ export function verifyStaticCredentials(username: string, password: string): Sta
     for (const candidate of STATIC_USERS) constantTimeEqual(password, process.env[candidate.passwordEnv] ?? "");
     return null;
   }
-  return constantTimeEqual(password, process.env[user.passwordEnv] ?? "") ? user : null;
+  const expected = process.env[user.passwordEnv] ?? "";
+  return password.length > 0 && expected.length > 0 && constantTimeEqual(password, expected) ? user : null;
 }

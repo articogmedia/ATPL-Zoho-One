@@ -64,6 +64,12 @@ function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolea
     ZohoError: MockZohoError,
     zoho: vi.fn(async (_method: string, path: string, opts?: { query?: { module?: string } }) => {
       if (path === `/Leads/${leadId}`) return { data: [{ id: leadId, Last_Name: "Call test lead", Company: "Call test lead", Mobile: "9876543210", Lead_Status: "Fresh Lead", ...(options.unassignedLead ? {} : { Owner: { id: "manager-1", name: "Manager" } }) }] };
+      if (path === `/Leads/${leadId}/Calls`) return { data: calls.filter((entry) => entry.path === "/Calls").map((entry, index) => ({
+        id: String(index + 1),
+        Call_Start_Time: String(entry.record.Call_Start_Time ?? ""),
+        Call_Result: entry.record.Call_Result,
+        Owner: entry.record.Owner,
+      })) };
       if (path === "/users") return { users: [{ id: "manager-1", full_name: "Manager", role: { name: "Manager" }, profile: { name: "Administrator" } }] };
       if (path === "/settings/fields") {
         if (opts?.query?.module === "Calls") return { fields: [
@@ -91,6 +97,24 @@ function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolea
 }
 
 describe("Zoho call outcome persistence", () => {
+  it("counts consecutive missed calls, ignores Wrong Number, resets on Connected, and records each attempt", async () => {
+    const { calls } = mockRepository();
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const actor = { id: "manager-1", name: "Manager", role: "Manager" as const };
+    const outcomes = ["No Answer", "Wrong Number", "Busy", "Connected", "Busy", "No Answer", "Busy"] as const;
+    const expected = [1, 1, 2, 0, 1, 2, 3];
+    for (const [index, outcome] of outcomes.entries()) {
+      const result = await zohoRepository.logCall(
+        { leadId, outcome, remarks: "", notResponsiveAttempts: 3 },
+        actor,
+      );
+      expect(result.attempts).toBe(expected[index]);
+      if (index === outcomes.length - 1) expect(result.status).toBe("Not Responsive");
+    }
+    expect(calls.filter((call) => call.path === "/Calls")).toHaveLength(outcomes.length);
+    expect(calls.filter((call) => call.path === "/Calls").map((call) => call.record.Call_Result)).toEqual(outcomes);
+  });
+
   it("uses the Zoho v6 call and note relationship payloads and tolerates a failed history note", async () => {
     const { calls } = mockRepository({ noteFailure: true });
     const { zohoRepository } = await import("@/lib/zoho/repository");
@@ -198,7 +222,12 @@ describe("Zoho call outcome persistence", () => {
       { leadId, outcome: "Call Back Later", remarks: "", followUp: "2026-11-07" },
       { id: "manager-1", name: "Manager", role: "Manager" },
     );
-    expect(result).toEqual({ callLogPending: true });
+    expect(result).toMatchObject({
+      callLogPending: true,
+      attempts: 0,
+      lastOutcome: "Call Back Later",
+      status: "Callback in Future",
+    });
     expect(calls.some((call) => call.path === `/Leads/${leadId}` && call.method === "PUT")).toBe(true);
     expect(calls.some((call) => call.path === "/Notes")).toBe(true);
     expect(calls.filter((call) => call.path === "/Calls")).toHaveLength(1);
@@ -222,7 +251,13 @@ describe("Zoho call outcome persistence", () => {
     await flushAfterJobs();
 
     const callWrites = calls.filter((call) => call.path === "/Calls");
-    expect(result).toEqual({});
+    expect(result).toMatchObject({
+      attempts: outcome === "No Answer" ? 1 : 0,
+      lastOutcome: outcome,
+      status: outcome === "Connected" ? "Contacted"
+        : outcome === "No Answer" ? "Attempted to Contact"
+          : outcome === "Call Back Later" ? "Callback in Future" : "Fresh Lead",
+    });
     expect(callWrites).toHaveLength(2);
     expect(callWrites[0]?.record.Call_Status).toBe(callStatus);
     expect(callWrites[0]?.record.Call_Purpose).toBe("Prospecting");
@@ -243,7 +278,7 @@ describe("Zoho call outcome persistence", () => {
     ["Connected", "Contacted"],
     ["No Answer", "Attempted to Contact"],
     ["Busy", "Attempted to Contact"],
-    ["Wrong Number", "Not Responsive"],
+    ["Wrong Number", "Fresh Lead"],
     ["Call Back Later", "Callback in Future"],
   ] as const)("writes call outcome %s to Zoho and updates status", async (outcome, status) => {
     const { calls } = mockRepository();

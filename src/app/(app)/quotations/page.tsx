@@ -85,6 +85,7 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
     name: customer.name,
     company: customer.company,
     phone: customer.phone,
+    email: customer.email,
     area: customer.area,
     source: customer.source,
     status: customer.status,

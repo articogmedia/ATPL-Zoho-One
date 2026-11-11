@@ -19,14 +19,15 @@ const OUTCOMES: { value: CallOutcome; label: string; status: LeadStatus }[] = [
 ];
 
 export function CallLeadModal({
-  lead, onClose, onOptimistic, onRollback, onPendingChange, onSaved,
+  lead, currentStatus = "Not Contacted", onClose, onOptimistic, onRollback, onPendingChange, onSaved,
 }: {
   lead: { id: string; name: string; phone: string };
+  currentStatus?: LeadStatus;
   onClose: () => void;
   onOptimistic?: (status: LeadStatus, followUp?: string, remarks?: string) => void;
   onRollback?: () => void;
   onPendingChange?: (pending: boolean) => void;
-  onSaved: (status: LeadStatus, followUp?: string) => void;
+  onSaved: (status: LeadStatus, followUp?: string, attempts?: number, lastOutcome?: CallOutcome) => void;
 }) {
   const [outcome, setOutcome] = useState<CallOutcome | null>(null);
   const [followUp, setFollowUp] = useState("");
@@ -59,7 +60,8 @@ export function CallLeadModal({
   const saveOutcome = () => {
     const selected = OUTCOMES.find((item) => item.value === outcome);
     if (!selected || (selected.value === "Call Back Later" && !followUp)) return;
-    onOptimistic?.(selected.status, selected.value === "Call Back Later" ? followUp : undefined, remarks);
+    const selectedStatus = selected.value === "Wrong Number" ? currentStatus : selected.status;
+    onOptimistic?.(selectedStatus, selected.value === "Call Back Later" ? followUp : undefined, remarks);
     onPendingChange?.(true);
     onClose();
     start(async () => {
@@ -92,7 +94,7 @@ export function CallLeadModal({
         } else if (result.data?.partialWarning) toast.warning(result.data.partialWarning);
         else if (result.data?.historyWarning) toast.warning(result.data.historyWarning);
         else toast.success("Call outcome saved");
-        onSaved(selected.status, selected.value === "Call Back Later" ? followUp : undefined);
+        onSaved(selectedStatus, selected.value === "Call Back Later" ? followUp : undefined, result.data?.attempts, result.data?.lastOutcome);
       } catch (error) {
         onRollback?.();
         setRetryableError(true);
