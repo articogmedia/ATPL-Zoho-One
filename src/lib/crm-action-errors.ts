@@ -42,9 +42,19 @@ export function friendlyZohoError(
     }
     return `${field ? `Required field missing: ${field}` : "A required field is missing."}${suffix}`;
   }
+  if (code === "INVOICE_ACCOUNT_REQUIRED") {
+    return `This customer is not linked to a Zoho Account. Open the customer/lead in Zoho CRM, link or create the Account, then retry invoice conversion.${suffix}`;
+  }
+  if (code === "INVOICE_PRODUCT_REQUIRED") {
+    return `This quotation contains a line that is not linked to a Zoho Product. Update the quotation with an approved catalogue product, then retry.${suffix}`;
+  }
   if (code === "INVALID_PICKLIST" || (field === "Lead_Source" && (code === "INVALID_DATA" || responseMessage.includes("picklist")))) {
-    if (message?.startsWith("Lead source \"") && message.includes("is not set up in Zoho.")) return `${message}${suffix}`;
-    return `Lead source is not valid in CRM.${suffix}`;
+    if (field === "Lead_Status") return `The lead status value is not configured in Zoho CRM. Add the required status value in the Leads module picklist, then retry.${suffix}`;
+    if (field === "Lead_Source") {
+      if (message?.startsWith('Lead source "') && message.includes("is not set up in Zoho.")) return `${message}${suffix}`;
+      return `Lead source is not valid in CRM.${suffix}`;
+    }
+    return `${field ? `The selected value for ${field} is not configured in Zoho CRM.` : "A selected value is not configured in Zoho CRM."}${suffix}`;
   }
   if (code === "INVALID_DATA") {
     const errorPath = typeof details?.json_path === "string"

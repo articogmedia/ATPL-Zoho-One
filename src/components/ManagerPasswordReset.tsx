@@ -32,7 +32,8 @@ export function ManagerPasswordReset({ users }: Props) {
   if (users.length === 0) return null;
   return (
     <details className="mt-6 rounded-xl border border-border bg-card p-4">
-      <summary className="cursor-pointer font-semibold">Reset password for user</summary>
+      <summary className="cursor-pointer font-semibold">User access &amp; password reset</summary>
+      <p className="mt-2 text-sm text-muted-foreground">Managers can set a temporary password for a team member. Their existing sessions will be signed out after the reset.</p>
       <form onSubmit={submit} className="mt-4 grid gap-3 sm:grid-cols-2">
         <label className="text-sm font-medium">
           User

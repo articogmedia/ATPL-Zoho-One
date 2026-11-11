@@ -4,7 +4,7 @@ import Link, { useLinkStatus } from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, ReceiptText, RotateCw } from "lucide-react";
+import { AlertTriangle, BarChart3, ClipboardList, FileText, Home, LogOut, MapPin, Package, ReceiptText, RotateCw } from "lucide-react";
 import { canAccess, type Role, type Section } from "@/lib/domain";
 import { logout, logoutExpired } from "@/app/actions/auth";
 import { Button } from "@/components/ui/button";
@@ -23,7 +23,10 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
   const [newVersionAvailable, setNewVersionAvailable] = useState(false);
   const lastWarmAt = useRef(0);
   const applyingServiceWorkerUpdate = useRef(false);
-  const items = NAV.filter((n) => canAccess(user.role, n.s));
+  const items = [
+    ...NAV.filter((n) => canAccess(user.role, n.s)),
+    ...(user.role === "Manager" ? [{ to: "/products", label: "Products", short: "Products", icon: Package }] : []),
+  ];
 
   useEffect(() => {
     const versionMismatch = (message: string) => {

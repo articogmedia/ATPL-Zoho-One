@@ -19,6 +19,10 @@ describe("friendly Zoho action errors", () => {
       .toBe("Required field missing: Last_Name (Ref: R1)");
     expect(friendlyZohoError(400, "INVALID_DATA", "Invalid picklist", "Lead_Source", "R2"))
       .toBe("Lead source is not valid in CRM. (Ref: R2)");
+    expect(friendlyZohoError(400, "INVALID_PICKLIST", "Invalid value", "Lead_Status", "R9"))
+      .toBe("The lead status value is not configured in Zoho CRM. Add the required status value in the Leads module picklist, then retry. (Ref: R9)");
+    expect(friendlyZohoError(400, "INVOICE_ACCOUNT_REQUIRED", "Missing account", "Account_Name", "R10"))
+      .toBe("This customer is not linked to a Zoho Account. Open the customer/lead in Zoho CRM, link or create the Account, then retry invoice conversion. (Ref: R10)");
     expect(friendlyZohoError(
       400,
       "INVALID_PICKLIST",
