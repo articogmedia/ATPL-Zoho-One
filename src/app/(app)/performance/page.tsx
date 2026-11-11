@@ -2,6 +2,7 @@ import Link from "next/link";
 import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
 import { perfStats, todayIST, type PerfRange } from "@/lib/domain";
+import { PageHeader, ResponsiveTable } from "@/components/ui-bits";
 import { matchPortalUserToZohoUser, missingPortalUsers, portalRole, STATIC_USERS } from "@/lib/auth/users";
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { PageLoadError } from "@/components/PageLoadError";
@@ -77,7 +78,7 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
 
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-bold">{viewer.role === "Sales Executive" ? "My Performance" : "Performance"}</h1>
+      <PageHeader title={viewer.role === "Sales Executive" ? "My Performance" : "Performance"} />
       {viewer.role === "Manager" && unsetIds.length > 0 && (
         <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {unsetIds.map((name) => <div key={name}>No Zoho user found for {name}</div>)}
@@ -137,41 +138,23 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
 
       {viewer.role === "Manager" && <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
         <h2 className="mb-4 text-base font-semibold">Executive-wise Performance</h2>
-        <div className="hidden overflow-x-auto md:block">
-          <table className="min-w-[980px] w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">Executive</th>
-                <th className="py-2 pr-3 text-right font-medium">Leads Assigned</th>
-                <th className="py-2 pr-3 text-right font-medium">Open</th>
-                <th className="py-2 pr-3 text-right font-medium">In Progress</th>
-                <th className="py-2 pr-3 text-right font-medium">Calls Made</th>
-                <th className="py-2 pr-3 text-right font-medium">Visits Completed</th>
-                <th className="py-2 pr-3 text-right font-medium">Quotations Sent</th>
-                <th className="py-2 pr-3 text-right font-medium">Won</th>
-                <th className="py-2 text-right font-medium">Conversion %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {s.rows.map((r) => (
-                <tr key={r.name} className="border-b last:border-0">
-                  <td className="py-3 pr-3 font-semibold">{r.name}</td>
-                  <td className="py-3 pr-3 text-right">{r.leads}</td>
-                  <td className="py-3 pr-3 text-right">{r.open}</td>
-                  <td className="py-3 pr-3 text-right">{r.inProgress}</td>
-                  <td className="py-3 pr-3 text-right">{r.calls}</td>
-                  <td className="py-3 pr-3 text-right">{r.visits}</td>
-                  <td className="py-3 pr-3 text-right">{r.quotes}</td>
-                  <td className="py-3 pr-3 text-right">{r.won}</td>
-                  <td className="py-3 text-right font-semibold text-primary">{r.conversion}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="grid gap-3 md:hidden">
-          {s.rows.map((r) => (
-            <article key={r.name} className="rounded-xl border border-border bg-muted/40 p-4">
+        <ResponsiveTable
+          label="Executive-wise Performance"
+          rows={s.rows}
+          getKey={(row) => row.name}
+          columns={[
+            { key: "name", header: "Executive", render: (row) => <span className="font-semibold">{row.name}</span> },
+            { key: "leads", header: "Leads Assigned", align: "right", render: (row) => row.leads },
+            { key: "open", header: "Open", align: "right", render: (row) => row.open },
+            { key: "progress", header: "In Progress", align: "right", render: (row) => row.inProgress },
+            { key: "calls", header: "Calls Made", align: "right", render: (row) => row.calls },
+            { key: "visits", header: "Visits Completed", align: "right", render: (row) => row.visits },
+            { key: "quotes", header: "Quotations Sent", align: "right", render: (row) => row.quotes },
+            { key: "won", header: "Won", align: "right", render: (row) => row.won },
+            { key: "conversion", header: "Conversion %", align: "right", render: (row) => <span className="font-semibold text-primary">{row.conversion}%</span> },
+          ]}
+          renderCard={(r) => (
+            <article className="rounded-xl border border-border bg-muted/40 p-4">
               <h3 className="font-semibold">{r.name}</h3>
               <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
                 <div><dt className="text-muted-foreground">Leads assigned</dt><dd className="font-semibold">{r.leads}</dd></div>
@@ -180,11 +163,12 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
                 <div><dt className="text-muted-foreground">Calls made</dt><dd className="font-semibold">{r.calls}</dd></div>
                 <div><dt className="text-muted-foreground">Visits done</dt><dd className="font-semibold">{r.visits}</dd></div>
                 <div><dt className="text-muted-foreground">Quotes sent</dt><dd className="font-semibold">{r.quotes}</dd></div>
+                <div><dt className="text-muted-foreground">Won</dt><dd className="font-semibold">{r.won}</dd></div>
                 <div><dt className="text-muted-foreground">Conversion</dt><dd className="font-semibold text-primary">{r.conversion}%</dd></div>
               </dl>
             </article>
-          ))}
-        </div>
+          )}
+        />
       </div>}
     </div>
   );

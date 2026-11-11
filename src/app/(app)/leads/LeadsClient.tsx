@@ -10,7 +10,7 @@ import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
-import { StatusBadge, fieldClass } from "@/components/ui-bits";
+import { BottomSheet, ConfirmDialog, EmptyState as SharedEmptyState, PageHeader, ResponsivePanel, StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getAssignmentWarningsAction, getLeadSourcesAction, getLeadTimelineAction, listFixableAssignedLeadsAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, setLeadOutcomeAction, updateLeadAction, type DuplicateLeadResult } from "@/app/actions/crm";
 import {
@@ -491,21 +491,12 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
 
   return (
     <div className="space-y-4 text-sm max-[480px]:space-y-3 max-[480px]:pt-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="w-full">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="text-xl font-semibold sm:text-2xl sm:font-bold">Manage Leads</h1>
-            <Button className="sm:hidden" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add</Button>
-          </div>
-          <p className="mt-1 truncate text-sm text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
-          {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-muted-foreground sm:hidden">Today&apos;s follow-ups: {currentTodaysFollowUps}</p>}
-        </div>
-        <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
-          <Button className="hidden h-11 shrink-0 sm:inline-flex" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>
-          {(user.role === "Manager" || user.role === "Calling Team") && <span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}
-          {user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} /></span>}
-        </div>
-      </div>
+      <PageHeader
+        title="Manage Leads"
+        subtitle={<>Review enquiries, assign ownership, and track follow-ups.{(user.role === "Manager" || user.role === "Calling Team") && <span className="ml-2">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}</>}
+        action={<Button className="w-full sm:w-auto" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>}
+      />
+      {user.role === "Manager" && fixableCount > 0 && <div className="flex justify-end"><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} /></div>}
 
       {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} compact /></div>}
 
@@ -589,7 +580,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
       {visible.length === 0 ? (
         loadingRows
           ? <div role="status" className="space-y-2"><div className="h-20 animate-pulse rounded-xl bg-card" /><div className="h-20 animate-pulse rounded-xl bg-card" /></div>
-          : <EmptyState hasLeads={hasAnyLeads} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
+          : <LeadEmptyState hasLeads={hasAnyLeads} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
           <div id="leads-list" className="hidden overflow-x-auto rounded-xl border border-border bg-card shadow-sm md:block">
@@ -793,19 +784,20 @@ const MobileRow = memo(function MobileRow({ lead, callStats, manager, highlighte
   );
 });
 
-function EmptyState({ hasLeads, filtered, onClear }: { hasLeads: boolean; filtered: boolean; onClear: () => void }) {
+function LeadEmptyState({ hasLeads, filtered, onClear }: { hasLeads: boolean; filtered: boolean; onClear: () => void }) {
   const title = filtered ? "No leads match your filters" : hasLeads ? "No leads in this view" : "No leads yet";
   const detail = filtered ? "Try a different search or source." : hasLeads ? "New enquiries will appear here." : "Add a lead to get started.";
-  return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{title}</div><p className="mt-1 text-muted-foreground">{detail}</p>{filtered && <Button variant="outline" className="mt-4" onClick={onClear}>Clear filters</Button>}</div>;
+  return <SharedEmptyState message={<><span className="block font-semibold text-foreground">{title}</span><span className="mt-1 block">{detail}</span></>} action={filtered ? <Button variant="outline" onClick={onClear}>Clear filters</Button> : undefined} className="px-5 py-12" />;
 }
 
 function FixAssignedLeads({ count, compact = false, leads = [] }: { count: number; compact?: boolean; leads?: { id: string; name: string; ownerName: string }[] }) {
   const [pending, start] = useTransition();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const fix = () => {
-    const leadSummary = leads.length <= 3
-      ? leads.map((lead) => `${lead.name} (${lead.ownerName || "Sales Executive"})`).join("\n")
-      : `${leads.slice(0, 3).map((lead) => lead.name).join(", ")}, and ${leads.length - 3} more`;
-    if (!window.confirm(`Confirm correction for:\n${leadSummary}\n\nChange Lead_Status from Fresh Lead to Assigned to Sales only.`)) return;
+    setConfirmOpen(true);
+  };
+  const confirmFix = () => {
+    setConfirmOpen(false);
     start(async () => {
       try {
         const result = await executeMutation(fixAssignedLeadsAction, {});
@@ -816,7 +808,20 @@ function FixAssignedLeads({ count, compact = false, leads = [] }: { count: numbe
       }
     });
   };
-  return <Button title="Moves leads that have a sales executive but are still in Fresh Lead to Assigned to Sales." variant={compact ? "ghost" : "outline"} className={compact ? "min-w-11 px-2 font-medium underline" : "max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>;
+  return <>
+    <Button title="Moves leads that have a sales executive but are still in Fresh Lead to Assigned to Sales." variant={compact ? "ghost" : "outline"} className={compact ? "min-w-11 px-2 font-medium underline" : "max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>
+    {confirmOpen && <ConfirmDialog
+      title="Confirm lead correction"
+      description={<>
+        <p>Change Lead_Status from Fresh Lead to Assigned to Sales only.</p>
+        {leads.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">{leads.slice(0, 3).map((lead) => <li key={lead.id}>{lead.name} ({lead.ownerName || "Sales Executive"})</li>)}</ul>}
+        {leads.length > 3 && <p className="mt-1">And {leads.length - 3} more leads.</p>}
+      </>}
+      confirmLabel="Apply correction"
+      onCancel={() => setConfirmOpen(false)}
+      onConfirm={confirmFix}
+    />}
+  </>;
 }
 
 function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceChange, onClose }: {
@@ -833,7 +838,7 @@ function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceCha
   </div>;
   return <>
     <div className="hidden rounded-lg border bg-card p-3 sm:block">{content}</div>
-    {open && <div className="fixed inset-0 z-50 flex items-end bg-black/40 sm:hidden"><button className="absolute inset-0" aria-label="Close filters" onClick={onClose} /><div className="relative flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-card"><div className="overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Filter leads</h2><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close filters"><X /></Button></div>{content}<Button className="mt-4 w-full" onClick={onClose}>Apply filters</Button></div></div></div>}
+    {open && <div className="fixed inset-0 z-50 flex items-end bg-black/40 sm:hidden"><button className="absolute inset-0" aria-label="Close filters" onClick={onClose} /><BottomSheet className="relative flex max-h-[90dvh] flex-col overflow-hidden p-0"><div className="overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Filter leads</h2><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close filters"><X /></Button></div>{content}<Button className="mt-4 w-full" onClick={onClose}>Apply filters</Button></div></BottomSheet></div>}
   </>;
 }
 
@@ -974,7 +979,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
   const [pending, start] = useTransition();
   const [comboboxOpen, setComboboxOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState("");
-  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
   const originalLead = useRef(lead);
   const filteredExecutives = executives.filter((name) => name.toLowerCase().includes(assigneeSearch.toLowerCase()));
   useBodyScrollLock(true);
@@ -1093,7 +1098,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
   return (
     <div className="fixed inset-0 z-50" role="presentation">
       <button className="absolute inset-0 cursor-default bg-black/40" aria-label="Close lead details" onClick={onClose} />
-      <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title" className="absolute bottom-0 left-0 flex h-[92dvh] w-full flex-col rounded-t-2xl bg-card shadow-2xl focus-visible:outline-none md:bottom-auto md:left-auto md:right-0 md:top-0 md:h-full md:max-w-lg md:rounded-none">
+      <ResponsivePanel ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title">
         <header className="flex items-start justify-between gap-3 border-b px-4 py-4 sm:px-6">
           <div className="min-w-0"><h2 id="lead-drawer-title" className="truncate text-lg font-bold">{lead.name}</h2><p className="truncate text-xs text-muted-foreground">{lead.company || "No company"} · {lead.phone || "No phone"}</p></div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button>
@@ -1145,7 +1150,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
             </div>
           )}
         </div>
-      </aside>
+      </ResponsivePanel>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import type { Product, User } from "@/lib/domain";
 import { QuotationsClient } from "./QuotationsClient";
 import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { PageLoadError } from "@/components/PageLoadError";
+import { PageSkeleton } from "@/components/ui-bits";
 import { withPageTimeout } from "@/lib/page-timeout";
 
 export const metadata = { title: "Create Quotation" };
@@ -14,14 +15,7 @@ export const preferredRegion = "bom1";
 export const maxDuration = 30;
 
 function QuotationsShell() {
-  return <section aria-label="Create quotation" className="space-y-6">
-    <div className="flex items-center justify-between gap-3">
-      <h1 className="text-2xl font-bold">Create Quotation</h1>
-      <div className="h-11 w-40 animate-pulse rounded-lg bg-secondary" />
-    </div>
-    <div className="h-14 animate-pulse rounded-xl bg-secondary" />
-    <div className="h-64 animate-pulse rounded-xl bg-secondary" />
-  </section>;
+  return <PageSkeleton variant="quotations" />;
 }
 
 async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId: string }) {

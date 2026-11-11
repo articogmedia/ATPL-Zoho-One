@@ -17,5 +17,5 @@ export function Greeting({ name }: { name: string }) {
     };
   }, []);
 
-  return <h1 className="mt-1 text-[28px] font-bold leading-tight">{part ? `${part}, ${name}` : `Welcome, ${name}`}</h1>;
+  return <span className="text-[28px] font-bold leading-tight">{part ? `${part}, ${name}` : `Welcome, ${name}`}</span>;
 }

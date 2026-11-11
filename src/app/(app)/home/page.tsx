@@ -11,6 +11,7 @@ import { WarmCacheOnce } from "./WarmCacheOnce";
 import { Greeting } from "./Greeting";
 import { ManagerPasswordReset } from "@/components/ManagerPasswordReset";
 import { STATIC_USERS } from "@/lib/auth/users";
+import { PageHeader, Skeleton } from "@/components/ui-bits";
 
 export const metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
@@ -62,18 +63,18 @@ export default async function Home() {
   return (
     <>
       <WarmCacheOnce />
-      <section className="mb-6 rounded-xl bg-primary p-5 text-primary-foreground shadow-elegant sm:p-6">
-        <p className="text-sm font-medium opacity-80">{user.role}</p>
-        <Greeting name={user.name} />
-        <p className="mt-2 max-w-xl text-sm opacity-90">Your sales workspace for leads, quotations, site visits and performance.</p>
-      </section>
+      <PageHeader
+        className="mb-6 rounded-xl bg-primary p-5 text-primary-foreground shadow-elegant [&_h1]:text-primary-foreground [&_div]:text-primary-foreground sm:p-6"
+        title={<Greeting name={user.name} />}
+        subtitle={<><span className="font-semibold">{user.role}</span><p className="mt-1 max-w-xl">Your sales workspace for leads, quotations, site visits and performance.</p></>}
+      />
       <div className="grid gap-4 sm:grid-cols-2">
         {cards.filter((c) => canAccess(user.role, c.s)).map((c) => (
           <Link key={c.to} href={c.to}
             className="group flex min-h-36 flex-col justify-between gap-6 rounded-xl border border-border bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-primary hover:shadow-elegant sm:p-6">
             <div className="flex items-start justify-between gap-3">
               <div className="grid h-12 w-12 place-items-center rounded-xl bg-accent text-accent-foreground"><c.icon className="h-6 w-6" /></div>
-              {c.s !== "performance" && <Suspense fallback={<span className="h-7 w-10 animate-pulse rounded-full bg-secondary" aria-label="Loading count" />}>
+              {c.s !== "performance" && <Suspense fallback={<Skeleton className="h-7 w-10 rounded-full" />}>
                 <HomeCount section={c.s} user={user} />
               </Suspense>}
             </div>

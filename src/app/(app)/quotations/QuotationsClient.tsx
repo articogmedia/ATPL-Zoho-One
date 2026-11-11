@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
-import { StatusBadge, fieldClass } from "@/components/ui-bits";
+import { EmptyState, PageHeader, StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
 import { addLeadAction, createProductAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, getQuotationPdfUrlAction, markQuotationSentAction, refreshProductsAction, sendQuotationEmailAction, setLeadOutcomeAction, updateQuoteAction } from "@/app/actions/crm";
@@ -788,7 +788,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       {loadingQuoteId && <p role="status" aria-live="polite" className="shrink-0 px-4 pb-3 text-sm text-muted-foreground">Opening saved quotation PDF…</p>}
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pt-0">
         {loadingMoreQuotes && !savedQuotes.length ? <p className="text-sm text-muted-foreground">Loading quotations…</p>
-          : !savedQuotes.length ? <p className="text-sm text-muted-foreground">No quotations yet.</p>
+          : !savedQuotes.length ? <EmptyState message="No quotations yet." className="py-5" />
           : !savedMatches.length ? <p className="text-sm text-muted-foreground">No matches</p>
           : savedMatches.map((quote) => (
             <article key={quote.id} className="rounded-lg border border-border bg-card p-3">
@@ -829,13 +829,10 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   </div>;
 
   if (readOnlyPdfUrl) return <div className="space-y-4">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <h1 className="text-2xl font-bold">Saved quotation PDF</h1>
-      <div className="flex gap-2">
+    <PageHeader title="Saved quotation PDF" mobileFloating={false} action={<div className="flex flex-wrap gap-2">
         <a className="inline-flex h-10 items-center rounded-md border border-input px-4 text-sm font-medium" href={readOnlyPdfUrl} target="_blank" rel="noopener noreferrer">Open PDF</a>
         <Button type="button" variant="outline" onClick={() => { setReadOnlyPdfUrl(""); setSavedOpen(true); }}>Back to quotations</Button>
-      </div>
-    </div>
+      </div>} />
     <iframe title="Saved quotation PDF" src={readOnlyPdfUrl} className="h-[78dvh] w-full rounded-lg border border-border bg-white" />
   </div>;
 
@@ -867,12 +864,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       setReadOnlyQuote((current) => current ? { ...current, status: "Sent" } : current);
     };
     return <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold">Create Quotation</h1>
-        <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
+      <PageHeader title="Saved quotation PDF" action={<Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
           <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
-        </Button>
-      </div>
+        </Button>} mobileFloating={false} />
       <Offer
         lead={savedLead}
         offerNo={readOnlyQuote.offerNo}
@@ -903,12 +897,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   }
 
   if (step === 3 && wizard.savedQuotation && lead) return <div className="space-y-6">
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="text-2xl font-bold">Create Quotation</h1>
-      <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
+    <PageHeader title="Create Quotation" action={<Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
         <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
-      </Button>
-    </div>
+      </Button>} mobileFloating={false} />
     {pdfPreparing && <p role="status" aria-live="polite" className="rounded-lg border border-border bg-muted p-3 text-sm">Generating and storing the quotation PDF…</p>}
     {quoteSaveError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{quoteSaveError}</p>}
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
@@ -920,12 +911,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
   return (
     <div className={`min-w-0 space-y-6 ${lead && productsValid ? "pb-[calc(14rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold">Create Quotation</h1>
-        <Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
+      <PageHeader title="Create Quotation" action={<Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
           <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
-        </Button>
-      </div>
+        </Button>} mobileFloating={false} />
       <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} customerLocked={!!wizard.editingQuoteId} onStep={setStep} />
       {step === 1 && <section id="quote-step-customer" className="scroll-mt-20 space-y-3 rounded-xl bg-card p-4 shadow-sm sm:p-6">
         <h2 className="text-lg font-semibold">Step 1 · Choose customer</h2>
