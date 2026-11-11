@@ -108,17 +108,19 @@ export const ResponsiveTabList = forwardRef<HTMLDivElement, HTMLAttributes<HTMLD
   return <div ref={ref} className={cn("flex min-w-0 flex-wrap gap-2 p-1", className)} {...props} />;
 });
 
-export function ResponsiveTable<T>({ rows, columns, getKey, renderCard, label, className }: {
+export function ResponsiveTable<T>({ rows, columns, getKey, renderCard, label, className, cardsOnly = false }: {
   rows: readonly T[];
   columns: readonly ResponsiveColumn<T>[];
   getKey: (row: T, index: number) => string;
   renderCard: (row: T) => ReactNode;
   label: string;
   className?: string;
+  /** Always render cards (use inside narrow drawers/panels where a table cannot fit). */
+  cardsOnly?: boolean;
 }) {
   return (
     <div className={className}>
-      <div className="hidden overflow-hidden rounded-lg border lg:block">
+      {!cardsOnly && <div className="hidden overflow-hidden rounded-lg border lg:block">
         <table aria-label={label} className="w-full table-fixed text-left text-sm">
           <thead className="bg-muted/70 text-muted-foreground">
             <tr>{columns.map((column) => <th key={column.key} scope="col" className={cn("px-2 py-3 font-medium sm:px-3", column.align === "right" && "text-right", column.align === "center" && "text-center", column.className)}>{column.header}</th>)}</tr>
@@ -129,8 +131,8 @@ export function ResponsiveTable<T>({ rows, columns, getKey, renderCard, label, c
             </tr>
           ))}</tbody>
         </table>
-      </div>
-      <div className="grid gap-3 lg:hidden">
+      </div>}
+      <div className={cardsOnly ? "grid gap-3" : "grid gap-3 lg:hidden"}>
         {rows.map((row, index) => <div key={getKey(row, index)}>{renderCard(row)}</div>)}
       </div>
     </div>

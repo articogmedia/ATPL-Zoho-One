@@ -817,6 +817,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
           : !savedQuotes.length ? <EmptyState message="No quotations yet." className="py-5" />
           : !savedMatches.length ? <p className="text-sm text-muted-foreground">No matches</p>
           : <ResponsiveTable
+            cardsOnly
             label="Saved quotations"
             rows={savedMatches}
             getKey={(quote) => quote.id}
@@ -1025,12 +1026,12 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
           {productsValid && <Button type="button" variant="outline" className="shrink-0" disabled={pending} onClick={previewOffer}>Retry save</Button>}
         </div>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
-        <div className="grid gap-4 lg:grid-cols-[minmax(280px,1fr)_minmax(280px,320px)]">
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
-        <div className="hidden min-w-0 overflow-x-auto lg:block">
-          <table className="w-full min-w-[1000px] table-fixed text-sm">
+        <div className="hidden min-w-0 overflow-x-auto xl:block">
+          <table className="w-full min-w-[880px] table-fixed text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
-              <tr><th className="w-12 p-2">S.No</th><th className="p-2">Product</th><th className="w-20 p-2">Unit</th><th className="w-28 p-2">Qty</th><th className="w-32 p-2 text-right">Rate</th><th className="w-36 p-2 text-right">Discount</th><th className="w-24 p-2">GST %</th><th className="w-36 p-2 text-right">Amount</th><th className="w-12" /></tr>
+              <tr><th className="w-12 p-2">S.No</th><th className="p-2">Product</th><th className="w-16 p-2">Unit</th><th className="w-24 p-2">Qty</th><th className="w-28 p-2 text-right">Rate</th><th className="w-28 p-2 text-right">Discount</th><th className="w-24 p-2">GST %</th><th className="w-32 p-2 text-right">Amount</th><th className="w-12" /></tr>
             </thead>
             <tbody>
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
@@ -1048,7 +1049,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
             </tbody>
           </table>
         </div>
-        <div className="space-y-3 lg:hidden">
+        <div className="space-y-3 xl:hidden">
           {rows.map((r, i) => { const p = byId.get(r.productId); return (
             <div key={i} className="space-y-3 rounded-xl border border-border bg-card p-3 shadow-sm">
               <div className="flex min-h-11 items-center justify-between"><span className="font-semibold">Item {i + 1}</span>
@@ -1088,7 +1089,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         </section>
         </div>
         <aside className="hidden lg:block">
-          <div className="sticky top-24"><Totals t={t} /></div>
+          <div className="2xl:sticky 2xl:top-24"><Totals t={t} /></div>
         </aside>
         </div>
         <div className={`fixed inset-x-0 bottom-[calc(8rem+env(safe-area-inset-bottom))] z-20 p-3 lg:hidden ${lead && productsValid ? "" : "hidden"}`}>
