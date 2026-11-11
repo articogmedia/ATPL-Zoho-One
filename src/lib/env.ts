@@ -32,6 +32,10 @@ const schema = z
     EMAIL_PROVIDER: z.enum(["disabled", "resend"]).default("disabled"),
     EMAIL_FROM: z.string().email().optional(),
     RESEND_API_KEY: z.string().optional(),
+    APP_URL: z.preprocess(
+      (value) => typeof value === "string" && !value.trim() ? undefined : value,
+      z.string().trim().url().optional(),
+    ),
     /** "Sign in with Zoho" uses its own Server-based client (separate from the data/self client above). */
     ZOHO_LOGIN_CLIENT_ID: z.string().optional(),
     ZOHO_LOGIN_CLIENT_SECRET: z.string().optional(),
@@ -55,7 +59,22 @@ const schema = z
       });
     }
     if (e.AUTH_MODE === "zoho") need(["ZOHO_LOGIN_CLIENT_ID", "ZOHO_LOGIN_CLIENT_SECRET", "ZOHO_LOGIN_REDIRECT_URI"], "AUTH_MODE=zoho");
-    if (e.EMAIL_PROVIDER === "resend") need(["EMAIL_FROM", "RESEND_API_KEY"], "EMAIL_PROVIDER=resend");
+    if (e.EMAIL_PROVIDER === "resend") {
+      need(["EMAIL_FROM", "RESEND_API_KEY", "APP_URL"], "EMAIL_PROVIDER=resend");
+      if (e.APP_URL) {
+        const appUrl = new URL(e.APP_URL);
+        const localDevelopmentUrl =
+          process.env.NODE_ENV !== "production" &&
+          appUrl.protocol === "http:" &&
+          ["localhost", "127.0.0.1"].includes(appUrl.hostname);
+        if (appUrl.protocol !== "https:" && !localDevelopmentUrl) {
+          ctx.addIssue({ code: "custom", path: ["APP_URL"], message: "APP_URL must use HTTPS except for localhost development." });
+        }
+        if (appUrl.username || appUrl.password || appUrl.search || appUrl.hash) {
+          ctx.addIssue({ code: "custom", path: ["APP_URL"], message: "APP_URL must not include credentials, a query, or a fragment." });
+        }
+      }
+    }
     const validateApiUrl = (value: string, key: "ZOHO_API_DOMAIN" | "ZOHO_API_BASE_URL") => {
       try {
         const domain = new URL(value.includes("://") ? value : `https://${value}`);

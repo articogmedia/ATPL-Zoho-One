@@ -1,107 +1,162 @@
+
 import { Suspense } from "react";
 import { crm } from "@/lib/crm";
-import { env } from "@/lib/env";
 import { requireSection } from "@/lib/auth/guard";
-import { perfStats, todayIST, visibleFor, type PerfRange, type User } from "@/lib/domain";
+import {
+  perfStats,
+  todayIST,
+  visibleFor,
+  type PerfRange,
+  type User,
+} from "@/lib/domain";
 import { VisitsClient } from "./VisitsClient";
-import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { RouteLoading } from "@/components/RouteLoading";
-import { PageDataTimeoutError } from "@/lib/page-timeout";
 
 export const metadata = { title: "My Work & Site Visits" };
 export const dynamic = "force-dynamic";
 export const preferredRegion = "bom1";
 export const maxDuration = 30;
 
-async function VisitsData({ user }: { user: User }) {
-  const started = Date.now();
-  const perf = beginPagePerf("visits");
-  const settings = env();
-  console.info("[page] visits Zoho environment", {
-    dataSource: settings.DATA_SOURCE,
-    environment: settings.DATA_SOURCE !== "zoho" ? "mock" : settings.ZOHO_SANDBOX === "true" ? "sandbox" : "live",
-    dataCenter: settings.ZOHO_DC,
-  });
+const DATA_TIMEOUT_MS = 8_000;
 
-  const repo = crm();
-  const executivePerformance = user.role === "Sales Executive";
-  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    deadlineTimer = setTimeout(() => reject(new PageDataTimeoutError()), 12_000);
-  });
-  const withinDeadline = <T,>(request: Promise<T>) => Promise.race([request, deadline]);
+async function withTimeout<T>(
+  request: Promise<T>,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
-  let results: [
-    PromiseSettledResult<Awaited<ReturnType<typeof repo.listVisits>>>,
-    PromiseSettledResult<Awaited<ReturnType<typeof repo.listAssignableUsers>>>,
-    PromiseSettledResult<Awaited<ReturnType<typeof repo.listLeads>>>,
-    PromiseSettledResult<Awaited<ReturnType<typeof repo.listQuotes>>>,
-    PromiseSettledResult<Awaited<ReturnType<typeof repo.listCalls>>>,
-  ];
   try {
-    results = await Promise.allSettled([
-      withinDeadline(repo.listVisits()),
-      withinDeadline(repo.listAssignableUsers()),
-      withinDeadline(executivePerformance ? repo.listLeads() : Promise.resolve([])),
-      withinDeadline(executivePerformance ? repo.listQuotes() : Promise.resolve([])),
-      withinDeadline(executivePerformance ? repo.listCalls() : Promise.resolve([])),
+    return await Promise.race([
+      request,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} took too long. Please retry.`)),
+          DATA_TIMEOUT_MS,
+        );
+      }),
     ]);
   } finally {
-    if (deadlineTimer) clearTimeout(deadlineTimer);
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function VisitsData({ user }: { user: User }) {
+  const repo = crm();
+  const today = todayIST();
+  const isExecutive = user.role === "Sales Executive";
+
+  console.info("[visits] Loading page data", {
+    role: user.role,
+    dataSource: process.env.DATA_SOURCE,
+  });
+
+  const [visitsResult, usersResult, leadsResult, quotesResult, callsResult] =
+    await Promise.allSettled([
+      withTimeout(repo.listVisits(), "Visits"),
+      withTimeout(
+        user.role === "Manager"
+          ? repo.listAssignableUsers()
+          : Promise.resolve([]),
+        "Team members",
+      ),
+      withTimeout(
+        isExecutive ? repo.listLeads() : Promise.resolve([]),
+        "Leads",
+      ),
+      withTimeout(
+        isExecutive ? repo.listQuotes() : Promise.resolve([]),
+        "Quotations",
+      ),
+      withTimeout(
+        isExecutive ? repo.listCalls() : Promise.resolve([]),
+        "Calls",
+      ),
+    ]);
+
+  const visits =
+    visitsResult.status === "fulfilled" ? visitsResult.value : [];
+
+  const assignableUsers =
+    usersResult.status === "fulfilled" ? usersResult.value : [];
+
+  const leads =
+    leadsResult.status === "fulfilled" ? leadsResult.value : [];
+
+  const quotes =
+    quotesResult.status === "fulfilled" ? quotesResult.value : [];
+
+  const calls =
+    callsResult.status === "fulfilled" ? callsResult.value : [];
+
+  if (visitsResult.status === "rejected") {
+    console.error("[visits] Visit loading failed:", visitsResult.reason);
   }
 
-  const [visitsResult, usersResult, leadsResult, quotesResult, callsResult] = results;
-  for (const [name, result] of [
-    ["visits", visitsResult],
-    ["assignable users", usersResult],
-    ["leads", leadsResult],
-    ["quotations", quotesResult],
-    ["calls", callsResult],
-  ] as const) {
-    if (result.status === "rejected") {
-      console.error(`[page] visits ${name} load failed`, {
-        message: result.reason instanceof Error ? result.reason.message : String(result.reason),
-      });
-    }
+  if (usersResult.status === "rejected") {
+    console.error("[visits] Team loading failed:", usersResult.reason);
   }
 
-  const callsError = callsResult.status === "rejected"
-    ? callsResult.reason instanceof Error ? callsResult.reason.message : String(callsResult.reason)
-    : "";
-  const callsScopeMismatch = /scope|permission/i.test(callsError);
-  const callWarning = executivePerformance && callsResult.status === "rejected"
-    ? callsScopeMismatch
-      ? "Call history is unavailable because the Zoho refresh token lacks Calls permission. Re-authorize Zoho with ZohoCRM.modules.calls.ALL, then reconnect."
-      : "Call history is temporarily unavailable. Visits are still shown."
-    : undefined;
-  const visits = visitsResult.status === "fulfilled" ? visitsResult.value : [];
-  const visitsWarning = visitsResult.status === "rejected"
-    ? `Unable to load Zoho work items: ${visitsResult.reason instanceof Error ? visitsResult.reason.message : String(visitsResult.reason)}`
-    : repo.getVisitsWarning?.() ?? undefined;
-  const assignableUsers = usersResult.status === "fulfilled" ? usersResult.value : [];
-  const assignableUsersUnavailable = usersResult.status === "rejected" || assignableUsers.length === 0;
-  const leads = leadsResult.status === "fulfilled" ? leadsResult.value : [];
-  const quotes = quotesResult.status === "fulfilled" ? quotesResult.value : [];
-  const calls = callsResult.status === "fulfilled" ? callsResult.value : [];
+  if (callsResult.status === "rejected") {
+    console.error("[visits] Call history loading failed:", callsResult.reason);
+  }
 
-  console.info(`[page] visits ${Date.now() - started}ms`);
-  endPagePerf(perf);
+  const visitsWarning =
+    visitsResult.status === "rejected"
+      ? visitsResult.reason instanceof Error
+        ? visitsResult.reason.message
+        : "Unable to retrieve visits from Zoho CRM."
+      : repo.getVisitsWarning?.() ?? undefined;
+
+  const callsWarning =
+    isExecutive && callsResult.status === "rejected"
+      ? "Call history is temporarily unavailable. Your scheduled work is still accessible."
+      : undefined;
+
   const performance = (range: PerfRange) => {
-    const stats = perfStats(leads, quotes, visits, range, todayIST(), [{ id: user.id, name: user.name, role: user.role }], user, calls);
+    const stats = perfStats(
+      leads,
+      quotes,
+      visits,
+      range,
+      today,
+      [{ id: user.id, name: user.name, role: user.role }],
+      user,
+      calls,
+    );
+
     return {
-      leads: stats.totalLeads, calls: stats.calls, visits: stats.completed, quotes: stats.quotesSent,
-      won: stats.won, conversion: stats.conversion,
+      leads: stats.totalLeads,
+      calls: stats.calls,
+      visits: stats.completed,
+      quotes: stats.quotesSent,
+      won: stats.won,
+      conversion: stats.conversion,
     };
   };
+
   return (
     <VisitsClient
-      user={{ id: user.id, name: user.name, role: user.role }}
+      user={{
+        id: user.id,
+        name: user.name,
+        role: user.role,
+      }}
       visits={visibleFor(user, visits)}
-      executives={assignableUsers.map((u) => u.name)}
-      executivesUnavailable={assignableUsersUnavailable}
-      today={todayIST()}
-      performance={executivePerformance ? { week: performance("week"), month: performance("month") } : undefined}
-      callWarning={callWarning}
+      executives={assignableUsers.map((member) => member.name)}
+      executivesUnavailable={
+        user.role === "Manager" &&
+        (usersResult.status === "rejected" || assignableUsers.length === 0)
+      }
+      today={today}
+      performance={
+        isExecutive
+          ? {
+              week: performance("week"),
+              month: performance("month"),
+            }
+          : undefined
+      }
+      callWarning={callsWarning}
       visitsWarning={visitsWarning}
     />
   );
@@ -109,8 +164,13 @@ async function VisitsData({ user }: { user: User }) {
 
 export default async function VisitsPage() {
   const user = await requireSection("visits");
+
   return (
-    <Suspense fallback={<RouteLoading title="My Work and Site Visits" cards={3} />}>
+    <Suspense
+      fallback={
+        <RouteLoading title="My Work & Site Visits" cards={3} />
+      }
+    >
       <VisitsData user={user} />
     </Suspense>
   );

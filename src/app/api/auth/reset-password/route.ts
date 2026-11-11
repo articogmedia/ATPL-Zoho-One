@@ -7,6 +7,10 @@ export const dynamic = "force-dynamic";
 const requestSchema = z.object({
   token: z.string().min(1).max(256),
   password: z.string().min(10).max(128),
+  confirmPassword: z.string().min(1).max(128),
+}).refine((value) => value.password === value.confirmPassword, {
+  path: ["confirmPassword"],
+  message: "Passwords do not match.",
 });
 
 export async function POST(request: NextRequest) {
@@ -19,7 +23,10 @@ export async function POST(request: NextRequest) {
 
   const parsed = requestSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: "Password must be between 10 and 128 characters." }, { status: 400 });
+    const mismatch = parsed.error.issues.some((issue) => issue.path.includes("confirmPassword") && issue.message === "Passwords do not match.");
+    return NextResponse.json({
+      error: mismatch ? "Passwords do not match." : "Password must be between 10 and 128 characters.",
+    }, { status: 400 });
   }
 
   try {

@@ -53,9 +53,11 @@ function initials(name: string) {
     .toUpperCase();
 }
 
-export default async function Login({ searchParams }: { searchParams?: Promise<{ error?: string }> }) {
+export default async function Login({ searchParams }: { searchParams?: Promise<{ error?: string; passwordReset?: string }> }) {
   if (await currentUser()) redirect("/home");
-  const error = (await searchParams)?.error;
+  const params = await searchParams;
+  const error = params?.error;
+  const passwordReset = params?.passwordReset === "success";
   const demo = demoLoginAllowed();
   const users = demo ? STATIC_USERS.map((user) => ({ id: user.zohoUserId?.trim() || user.username, name: user.name, role: portalRole(user.role) })) : [];
 
@@ -85,6 +87,7 @@ export default async function Login({ searchParams }: { searchParams?: Promise<{
           </div>
 
           {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{ERRORS[error] ?? ERRORS.server}</p>}
+          {passwordReset && <p role="status" className="mb-4 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800">Your password has been reset. Sign in with your new password.</p>}
 
           {env().AUTH_MODE === "zoho" && (
             <Button asChild size="lg" className="mb-4 w-full justify-between rounded-lg bg-primary text-sm text-primary-foreground hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-primary">

@@ -140,14 +140,18 @@ After a user's first successful login, their password is migrated to a salted
 scrypt hash in Upstash Redis; subsequent logins use the stored hash. Password
 storage and reset rate limits require `UPSTASH_REDIS_REST_URL` and
 `UPSTASH_REDIS_REST_TOKEN` in production.
-Reset email delivery is intentionally disabled until an email provider is
-selected and configured in `src/lib/email.ts`. Reset requests still return a
-generic response. Reset links are single-use and expire after 30 minutes;
-Managers can use **Reset password for user** on Home as an administrative
-fallback. A successful reset invalidates that user's existing portal sessions.
-Quotation email is configured separately: set `EMAIL_PROVIDER=resend`,
-`EMAIL_FROM` to a verified sender address, and `RESEND_API_KEY` to enable the
-Resend adapter in `src/lib/email.ts`. Until configured, email sending is disabled.
+Password reset and quotation email use the existing `sendEmail()` adapter.
+To enable branded password reset messages, configure
+`EMAIL_PROVIDER=resend`, `EMAIL_FROM` with a verified sender, `RESEND_API_KEY`,
+and `APP_URL` with the portal's deployed HTTPS origin. Also set each staff
+member's registered address in `ATPL_RESHMA_EMAIL`, `ATPL_PAVAN_EMAIL`,
+`ATPL_SAIKIRAN_EMAIL`, and, when enabled, `ATPL_CALLING_EMAIL`. Reset requests
+ask for an email address and always return the same response whether it is
+registered or not. Reset tokens are stored only as hashes, are single-use, and
+expire after 30 minutes. A successful reset invalidates that user's existing
+portal sessions. Managers can use **Reset password for user** on Home as an
+administrative fallback. Email delivery remains disabled until configured.
+Quotation email is also enabled by the Resend settings above.
 Quotation emails include the stored PDF link and are limited to 10 sends per
 user per hour and 3 sends per quotation per hour; production rate limits use
 the shared Upstash Redis instance.

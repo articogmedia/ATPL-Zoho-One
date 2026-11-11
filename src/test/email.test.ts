@@ -17,6 +17,7 @@ describe("sendEmail", () => {
       EMAIL_FROM: "quotes@example.com",
       RESEND_API_KEY: "test-key",
     });
+
     const fetch = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal("fetch", fetch);
     const { sendEmail } = await import("@/lib/email");
@@ -33,6 +34,28 @@ describe("sendEmail", () => {
         text: "PDF link",
       }),
     }));
+  });
+
+  it("includes the branded HTML body when supplied", async () => {
+    envMock.env.mockReturnValue({
+      EMAIL_PROVIDER: "resend",
+      EMAIL_FROM: "portal@example.com",
+      RESEND_API_KEY: "test-key",
+    });
+    const fetch = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetch);
+    const { sendEmail } = await import("@/lib/email");
+
+    await sendEmail({
+      to: "staff@example.com",
+      subject: "Reset password",
+      text: "Reset your password",
+      html: "<p>Reset your password</p>",
+    });
+
+    expect(JSON.parse(fetch.mock.calls[0]?.[1].body as string)).toMatchObject({
+      html: "<p>Reset your password</p>",
+    });
   });
 
   it("fails explicitly when email delivery is disabled or rejected", async () => {

@@ -5,6 +5,7 @@ export type EmailMessage = {
   to: string;
   subject: string;
   text: string;
+  html?: string;
 };
 
 export async function sendEmail(message: EmailMessage): Promise<void> {
@@ -24,6 +25,7 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
         to: [message.to],
         subject: message.subject,
         text: message.text,
+        ...(message.html ? { html: message.html } : {}),
       }),
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
