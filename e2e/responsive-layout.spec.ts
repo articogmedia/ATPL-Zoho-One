@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import path from "node:path";
+import { loginAs } from "./login";
 
 const users = [
   { name: "Reshma", role: "Manager", slug: "manager" },
@@ -63,8 +64,7 @@ for (const user of users) {
     await assertPrimaryVisible(page, page.getByRole("button", { name: "Sign in" }));
     await assertResponsive(page, user.slug, "login");
 
-    await page.getByRole("button", { name: `Continue as ${user.name}, ${user.role}` }).click();
-    await expect(page).toHaveURL(/\/home$/);
+    await loginAs(page, user.name, user.role);
     await page.waitForLoadState("networkidle");
 
     const routes = [
