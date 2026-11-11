@@ -265,8 +265,8 @@ function isTaxFieldWriteFailure(error: unknown): error is ZohoError {
   const details = error.details ?? {};
   const fieldReferences = [error.field, details.api_name, details.json_path, details.field]
     .filter((value): value is string => typeof value === "string");
-  return fieldReferences.some((value) => /(?:^|[^A-Za-z0-9_])Tax(?:$|[^A-Za-z0-9_])/i.test(value))
-    || /\bTax\b/i.test(error.message);
+  return fieldReferences.some((value) => /(?:^|[^A-Za-z0-9_])(?:Line_Tax|Tax)(?:$|[^A-Za-z0-9_])/i.test(value))
+    || /\b(?:Line_Tax|Tax)\b/i.test(error.message);
 }
 
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
