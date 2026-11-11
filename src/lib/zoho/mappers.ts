@@ -299,6 +299,7 @@ export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutiv
     ownerId: zohoOwnerId,
     remarks: z.Description ?? "",
     createdOn: day(z.Created_Time),
+    ...(z.Created_Time ? { createdAt: z.Created_Time } : {}),
     touchedBy: [z.Created_By?.name, z.Modified_By?.name].filter((n): n is string => !!n),
   };
 }

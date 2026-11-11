@@ -24,6 +24,15 @@ export type LeadUpdate = { date: string; user: string; note: string };
 export type CallOutcome = "Connected" | "No Answer" | "Busy" | "Wrong Number" | "Call Back Later";
 export type CallActivity = { id: string; leadId: string; ownerId: string; date: string; outcome?: CallOutcome };
 export type LeadCallSummary = { attempts: number; lastOutcome?: CallOutcome };
+
+export function isUncalledLeadOlderThan(lead: Lead, callStats: LeadCallSummary | undefined, now: number): boolean {
+  if (lead.status !== "Fresh Lead" || callStats?.attempts || callStats?.lastOutcome) return false;
+  const createdAt = lead.createdAt
+    ? Date.parse(lead.createdAt)
+    : Date.parse(`${lead.createdOn}T00:00:00+05:30`);
+  return Number.isFinite(createdAt) && now - createdAt >= 30 * 60 * 1000;
+}
+
 export const DEFAULT_NOT_RESPONSIVE_ATTEMPTS = 3;
 export const LOST_REASONS = [
   "Price too high", "Chose competitor", "Project postponed", "Budget unavailable",
@@ -31,7 +40,7 @@ export const LOST_REASONS = [
 ] as const;
 export type LostReason = typeof LOST_REASONS[number];
 export type LeadTimelineItem = {
-  date: string; user: string; kind: "Call" | "Note" | "Task" | "Event"; title: string; detail: string;
+  date: string; user: string; kind: "Call" | "Note" | "Task" | "Event" | "Quote" | "Visit"; title: string; detail: string;
 };
 
 export type Lead = {
@@ -50,6 +59,7 @@ export type Lead = {
   ownerId?: string;
   remarks: string;
   createdOn: string;
+  createdAt?: string;
   /** Street address (used on site-visit cards). */
   address: string;
   /** Names of users who created / last modified the record (drives the "My Leads" tab). */

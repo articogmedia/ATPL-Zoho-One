@@ -31,7 +31,7 @@ function listFields(lead: Awaited<ReturnType<ReturnType<typeof crm>["listLeads"]
     source: lead.source, status: lead.status, assignedTo: lead.assignedTo,
     lostReason: lead.lostReason,
     assignedToId: lead.assignedToId, ownerId: lead.ownerId, remarks: lead.remarks,
-    createdOn: lead.createdOn, address: lead.address, touchedBy: lead.touchedBy,
+    createdOn: lead.createdOn, createdAt: lead.createdAt, address: lead.address, touchedBy: lead.touchedBy,
     followUp: lead.followUp, followUpTime: lead.followUpTime,
   };
 }

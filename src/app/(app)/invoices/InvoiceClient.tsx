@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { ReceiptText } from "lucide-react";
 import { convertQuoteToInvoiceAction, sendInvoiceEmailAction } from "@/app/actions/crm";
+import { EmptyState, PageHeader, StatusBadge } from "@/components/ui-bits";
 import { formatINR, type Invoice } from "@/lib/domain";
 
 type ConvertibleQuote = {
@@ -33,22 +35,19 @@ export function InvoiceClient({ invoices, convertibleQuotes }: { invoices: Invoi
   });
 
   return <section className="space-y-6">
-    <header>
-      <h1 className="text-2xl font-bold">Invoices</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Convert accepted or Won quotations, then view, download, or email the invoice.</p>
-    </header>
+    <PageHeader title="Invoices" subtitle="Convert accepted or Won quotations, then view, download, or email the invoice." />
     {message && <p role="status" className="rounded-lg border bg-card p-3 text-sm">{message}</p>}
 
     <div className="space-y-3">
       <h2 className="text-lg font-semibold">Saved invoices ({invoices.length})</h2>
-      {invoices.length === 0 && <p className="rounded-xl border bg-card p-5 text-sm text-muted-foreground">No invoices have been created yet.</p>}
+      {invoices.length === 0 && <EmptyState icon={<ReceiptText className="h-5 w-5" />} message="No invoices have been created yet." />}
       {invoices.map((invoice) => (
         <details key={invoice.id} className="rounded-xl border bg-card p-4">
           <summary className="cursor-pointer list-none">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="font-semibold">{invoice.invoiceNo} · {invoice.customer}</p>
-                <p className="mt-1 text-sm text-muted-foreground">{invoice.date} · {invoice.status}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{invoice.date} · <StatusBadge status={invoice.status} /></p>
               </div>
               <p className="font-semibold">{formatINR(invoice.total)}</p>
             </div>
@@ -89,7 +88,7 @@ export function InvoiceClient({ invoices, convertibleQuotes }: { invoices: Invoi
         <div key={quote.id} className="flex flex-col gap-3 rounded-xl border bg-card p-4 md:flex-row md:items-center md:justify-between">
           <div>
             <p className="font-semibold">{quote.offerNo} · {quote.customer}</p>
-            <p className="mt-1 text-sm text-muted-foreground">{quote.status || "Won lead"} · {formatINR(quote.total)}</p>
+            <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground"><StatusBadge status={quote.status || "Won lead"} />{formatINR(quote.total)}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <input

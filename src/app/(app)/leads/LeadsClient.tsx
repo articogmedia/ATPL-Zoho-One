@@ -3,18 +3,18 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
-import { CalendarPlus, FileText, History, LoaderCircle, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { CalendarPlus, FileText, History, LoaderCircle, MoreHorizontal, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
-import { StatusBadge, fieldClass } from "@/components/ui-bits";
+import { BottomSheet, ConfirmDialog, EmptyState as SharedEmptyState, PageHeader, ResponsivePanel, ResponsiveTabList, StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
-import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getAssignmentWarningsAction, getLeadSourcesAction, getLeadTimelineAction, listFixableAssignedLeadsAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, setLeadOutcomeAction, updateLeadAction, type DuplicateLeadResult } from "@/app/actions/crm";
+import { addLeadAction, bulkReassignLeadsAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getAssignmentWarningsAction, getLeadSourcesAction, getLeadTimelineAction, listFixableAssignedLeadsAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, setLeadOutcomeAction, updateLeadAction, type DuplicateLeadResult } from "@/app/actions/crm";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, LOST_REASONS, adjustLeadTabCounts, applyLeadOverrides as mergeLeadOverrides, canAssignLeads, leadAssigneeOptions, leadsForTab, normalizePhone, reassignLeadOptimistically, todayIST,
+  LEAD_SOURCES, LEAD_STATUSES, LOST_REASONS, adjustLeadTabCounts, applyLeadOverrides as mergeLeadOverrides, canAssignLeads, isUncalledLeadOlderThan, leadAssigneeOptions, leadsForTab, normalizePhone, reassignLeadOptimistically, todayIST,
   type Lead, type LeadCallSummary, type LeadFilters, type LeadSource, type LeadStatus, type LeadTab, type LeadTimelineItem, type LostReason, type User,
 } from "@/lib/domain";
 
@@ -110,11 +110,16 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
   const tabListRef = useRef<HTMLDivElement>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [now, setNow] = useState<number | null>(null);
   const [searchFallbackHint, setSearchFallbackHint] = useState(false);
   const searchRequestKey = useRef("");
   const [source, setSource] = useState<LeadSource | "All">("All");
   const [filters, setFilters] = useState<LeadFilters>({ stage: "All", owner: "All" });
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [bulkAssigneeId, setBulkAssigneeId] = useState("");
+  const [bulkAssignPending, setBulkAssignPending] = useState(false);
+  const [mobileActionsLead, setMobileActionsLead] = useState<Lead | null>(null);
   const [adding, setAdding] = useState(false);
   const [addLeadDraft, setAddLeadDraft] = useState<AddLeadInput | null>(null);
   const [addLeadDuplicate, setAddLeadDuplicate] = useState<DuplicateLeadResult | null>(null);
@@ -221,6 +226,11 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     const timer = window.setTimeout(() => setDebouncedSearch(search), 400);
     return () => window.clearTimeout(timer);
   }, [search]);
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     tabListRef.current?.querySelector<HTMLButtonElement>(`[data-tab="${tab}"]`)?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
@@ -229,6 +239,9 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     () => leadsForTab(user, mergedLeadRows, tab, search, source, filters),
     [user, mergedLeadRows, tab, search, source, filters],
   );
+  useEffect(() => {
+    setSelectedLeadIds((current) => current.filter((id) => visible.some((lead) => lead.id === id)));
+  }, [visible]);
   const updateLeadOptimistically = useCallback((before: Lead | null, after: Lead | null) => {
     const id = before?.id ?? after?.id;
     if (!id) return;
@@ -461,7 +474,58 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     : user.role === "Calling Team" ? item.id === "fresh" || item.id === "callback"
     : true);
   const fixableCount = fixableLeadRows.length;
-  const activeFilterCount = [source !== "All", filters.owner !== "All", filters.stage !== "All", !!filters.from, !!filters.to].filter(Boolean).length;
+  const activeFilterCount = [!!filters.from, !!filters.to].filter(Boolean).length;
+  const selectedVisibleLeads = visible.filter((lead) => selectedLeadIds.includes(lead.id));
+  const allVisibleSelected = visible.length > 0 && visible.every((lead) => selectedLeadIds.includes(lead.id));
+  const selectVisibleLeads = (checked: boolean) => {
+    const visibleIds = new Set(visible.map((lead) => lead.id));
+    setSelectedLeadIds((current) => checked
+      ? [...new Set([...current, ...visibleIds])]
+      : current.filter((id) => !visibleIds.has(id)));
+  };
+  const assignSelectedLeads = async () => {
+    if (bulkAssignPending || !selectedVisibleLeads.length) return;
+    if (!teamMembers.some((member) => member.id === bulkAssigneeId)) {
+      toast.error("Choose an active sales executive.");
+      return;
+    }
+    setBulkAssignPending(true);
+    try {
+      const result = await executeMutation(bulkReassignLeadsAction, {
+        ids: selectedVisibleLeads.map((lead) => lead.id),
+        assignedToId: bulkAssigneeId,
+      });
+      if (!result.ok || !result.data) {
+        toast.error(result.ok ? "Bulk assignment returned no result." : result.error);
+        return;
+      }
+      const failedIds = new Set(result.data.failed.map((item) => item.id));
+      for (const assignment of result.data.assigned) {
+        const before = selectedVisibleLeads.find((lead) => lead.id === assignment.id);
+        if (!before) continue;
+        const after: Lead = {
+          ...before,
+          assignedTo: assignment.owner,
+          assignedToId: assignment.ownerId,
+          ownerId: assignment.ownerId,
+          status: assignment.status as LeadStatus,
+        };
+        updateLeadOptimistically(before, after);
+        if (assignment.warningCheckId) void pollAssignmentWarnings(assignment.warningCheckId);
+      }
+      setSelectedLeadIds([...failedIds]);
+      setBulkAssigneeId("");
+      if (result.data.failed.length) {
+        toast.warning(`${result.data.assigned.length} assigned; ${result.data.failed.length} could not be assigned.`);
+      } else {
+        toast.success(`${result.data.assigned.length} leads assigned.`);
+      }
+    } catch (error) {
+      notifyMutationFailure(error);
+    } finally {
+      setBulkAssignPending(false);
+    }
+  };
   const retryPendingLead = async (id: string) => {
     const pending = pendingLeadAdds.find((item) => item.id === id);
     if (!pending || pending.status === "saving") return;
@@ -491,26 +555,17 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
 
   return (
     <div className="space-y-4 text-sm max-[480px]:space-y-3 max-[480px]:pt-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="w-full">
-          <div className="flex items-center justify-between gap-3">
-            <h1 className="text-xl font-semibold sm:text-2xl sm:font-bold">Manage Leads</h1>
-            <Button className="sm:hidden" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add</Button>
-          </div>
-          <p className="mt-1 truncate text-sm text-muted-foreground"> <span className="sm:hidden">Assign ownership and track follow-ups.</span><span className="hidden sm:inline">Review enquiries, assign ownership, and track follow-ups.</span></p>
-          {(user.role === "Manager" || user.role === "Calling Team") && <p className="mt-1 text-[13px] text-muted-foreground sm:hidden">Today&apos;s follow-ups: {currentTodaysFollowUps}</p>}
-        </div>
-        <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
-          <Button className="hidden h-11 shrink-0 sm:inline-flex" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>
-          {(user.role === "Manager" || user.role === "Calling Team") && <span className="rounded-full bg-secondary px-3 py-2 text-xs font-medium text-secondary-foreground max-[480px]:hidden">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}
-          {user.role === "Manager" && fixableCount > 0 && <span className="max-[480px]:hidden"><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} /></span>}
-        </div>
-      </div>
+      <PageHeader
+        title="Manage Leads"
+        subtitle={<>Review enquiries, assign ownership, and track follow-ups.{(user.role === "Manager" || user.role === "Calling Team") && <span className="ml-2">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}</>}
+        action={<Button className="sm:w-auto" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>}
+      />
+      {user.role === "Manager" && fixableCount > 0 && <div className="flex justify-end"><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} /></div>}
 
       {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} compact /></div>}
 
       <div className="relative -mx-1">
-      <div ref={tabListRef} className="flex gap-2 overflow-x-auto p-1 max-[480px]:scrollbar-none" role="tablist" aria-label="Lead views">
+      <ResponsiveTabList ref={tabListRef} role="tablist" aria-label="Lead views">
         {availableTabs.map((item) => {
           const label = isExec
             ? item.id === "assigned" ? "Assigned"
@@ -531,28 +586,42 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           </button>
           );
         })}
-      </div>
+      </ResponsiveTabList>
       </div>
 
-      <div className="flex flex-row gap-2">
-        <label className="relative min-w-0 flex-1">
-          <span className="sr-only">Search leads</span>
-          <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-          <input className={`${fieldClass} h-11 pl-9 text-sm`} placeholder="Search name, company or phone" value={search} onChange={(event) => setSearch(event.target.value)} />
-        </label>
-        <Button type="button" variant="outline" size="icon" className="relative h-11 w-11 shrink-0 sm:hidden" onClick={() => setFiltersOpen(true)} aria-label={`Filters${activeFilterCount ? `, ${activeFilterCount} active` : ""}`}><SlidersHorizontal />{activeFilterCount > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{activeFilterCount}</span>}</Button>
+      <div className="-mx-4 sticky top-16 z-20 space-y-2 bg-background/95 px-4 py-2 backdrop-blur md:-mx-8 md:px-8 lg:static lg:mx-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
+        <div className="flex min-w-0 gap-2">
+          <label className="relative min-w-0 flex-1">
+            <span className="sr-only">Search leads</span>
+            <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <input className={`${fieldClass} h-11 pl-9 text-sm`} placeholder="Search name, company or phone" value={search} onChange={(event) => setSearch(event.target.value)} />
+          </label>
+          <Button type="button" variant="outline" className="relative h-11 shrink-0 lg:hidden" onClick={() => setFiltersOpen(true)} aria-label={`More filters${activeFilterCount ? `, ${activeFilterCount} active` : ""}`}><SlidersHorizontal /><span>Dates</span>{activeFilterCount > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">{activeFilterCount}</span>}</Button>
+        </div>
+        <div role="group" aria-label="Lead filters" className="flex min-w-0 gap-2 overflow-x-auto pb-1 scrollbar-none lg:flex-wrap lg:overflow-visible">
+          <SelectField aria-label="Filter by source" className="h-11 w-40 shrink-0 rounded-full bg-card px-3 text-xs" value={source} onValueChange={(value) => setSource(value as LeadSource | "All")} options={[{ value: "All", label: "All sources" }, ...LEAD_SOURCES.map((item) => ({ value: item, label: item }))]} />
+          <SelectField aria-label="Filter by status" className="h-11 w-40 shrink-0 rounded-full bg-card px-3 text-xs" value={filters.stage ?? "All"} onValueChange={(value) => setFilters((current) => ({ ...current, stage: value as LeadStatus | "All" }))} options={[{ value: "All", label: "All statuses" }, ...LEAD_STATUSES.map((status) => ({ value: status, label: status }))]} />
+          {user.role === "Manager" && <SelectField aria-label="Filter by executive" className="h-11 w-44 shrink-0 rounded-full bg-card px-3 text-xs" value={filters.owner ?? "All"} onValueChange={(value) => setFilters((current) => ({ ...current, owner: value }))} options={[{ value: "All", label: "All executives" }, ...owners.map((owner) => ({ value: owner, label: owner }))]} />}
+        </div>
       </div>
       {searchFallbackHint && <p role="status" className="text-xs text-muted-foreground">Showing results from loaded leads.</p>}
 
       <LeadFiltersPanel
         open={filtersOpen}
-        owners={owners}
         filters={filters}
-        source={source}
         onChange={setFilters}
-        onSourceChange={setSource}
         onClose={() => setFiltersOpen(false)}
       />
+
+      {user.role === "Manager" && selectedVisibleLeads.length > 0 && <section aria-label="Bulk assign selected leads" className="flex flex-wrap items-end gap-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+        <div className="mr-auto text-sm font-medium">{selectedVisibleLeads.length} lead{selectedVisibleLeads.length === 1 ? "" : "s"} selected</div>
+        <label className="grid gap-1 text-xs font-semibold">Assign to
+          <SelectField aria-label="Bulk assign to" className="h-11 min-w-48 text-sm" value={bulkAssigneeId} onValueChange={setBulkAssigneeId} options={[{ value: "", label: teamMembersUnavailable ? "Team unavailable" : "Choose executive" }, ...teamMembers.map((member) => ({ value: member.id, label: member.name }))]} disabled={!teamMembers.length || teamMembersUnavailable || bulkAssignPending} />
+        </label>
+        {teamMembersUnavailable && <Button type="button" variant="outline" disabled={retryingTeamMembers} onClick={() => { teamLoadAttempted.current = false; void reloadTeamMembers(); }}>{retryingTeamMembers ? "Loading…" : "Retry team list"}</Button>}
+        <Button type="button" disabled={!bulkAssigneeId || bulkAssignPending || !teamMembers.length} onClick={() => void assignSelectedLeads()}>{bulkAssignPending ? "Assigning…" : "Assign selected"}</Button>
+        <Button type="button" variant="ghost" disabled={bulkAssignPending} onClick={() => { setSelectedLeadIds([]); setBulkAssigneeId(""); }}>Clear selection</Button>
+      </section>}
 
       {adding && <AddLead onOptimisticAdd={(input, key) => {
         const selectedAssignee = teamMembers.find((member) => member.id === input.assignedToId);
@@ -565,7 +634,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           assignedTo: selectedAssignee?.name ?? (selfAssigned ? user.name : null),
           assignedToId: selectedAssignee?.id ?? (selfAssigned ? user.id : undefined),
           ownerId: selectedAssignee?.id ?? (selfAssigned ? user.id : undefined),
-          remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [user.name],
+          remarks: input.remarks.trim(), createdOn: todayIST(), createdAt: new Date().toISOString(), address: "", touchedBy: [user.name],
         };
         setPendingLeadAdds((current) => [...current, { id: optimistic.id, key, input, lead: optimistic, status: "saving", retryable: true }]);
         setPendingLeadId(optimistic.id);
@@ -589,13 +658,14 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
       {visible.length === 0 ? (
         loadingRows
           ? <div role="status" className="space-y-2"><div className="h-20 animate-pulse rounded-xl bg-card" /><div className="h-20 animate-pulse rounded-xl bg-card" /></div>
-          : <EmptyState hasLeads={hasAnyLeads} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
+          : <LeadEmptyState hasLeads={hasAnyLeads} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
-          <div id="leads-list" className="hidden overflow-x-auto rounded-xl border border-border bg-card shadow-sm md:block">
-            <table className="w-full min-w-[1000px] text-left">
+          <div id="leads-list" className="hidden overflow-x-auto rounded-xl border border-border bg-card shadow-sm lg:block">
+            <table className="w-full min-w-[1060px] text-left">
               <thead className="bg-secondary text-xs uppercase tracking-wide text-secondary-foreground">
                 <tr>
+                  {user.role === "Manager" && <th className="w-12 px-2 py-3 text-center"><input type="checkbox" aria-label="Select all visible leads" className="h-5 w-5 accent-primary" checked={allVisibleSelected} onChange={(event) => selectVisibleLeads(event.target.checked)} /></th>}
                   <th className="px-4 py-3 font-semibold">Lead</th><th className="px-3 py-3 font-semibold">Phone</th>
                   <th className="px-3 py-3 font-semibold">Source</th><th className="px-3 py-3 font-semibold">Created</th>
                   <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="sticky right-0 z-10 min-w-[200px] whitespace-nowrap bg-secondary px-2 py-3 text-right font-semibold">Action</th>
@@ -604,15 +674,15 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
               <tbody className="divide-y divide-border">
                 {visible.map((lead) => {
                   const pendingAdd = pendingLeadAdds.find((item) => item.id === lead.id);
-                  return <DesktopRow key={lead.id} lead={lead} callStats={callStats[lead.id]} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onAction={startLeadAction} />;
+                  return <DesktopRow key={lead.id} lead={lead} callStats={callStats[lead.id]} now={now} manager={user.role === "Manager"} selected={selectedLeadIds.includes(lead.id)} onSelect={(checked) => setSelectedLeadIds((current) => checked ? [...new Set([...current, lead.id])] : current.filter((id) => id !== lead.id))} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onAction={startLeadAction} />;
                 })}
               </tbody>
             </table>
           </div>
-          <div id="leads-list-mobile" className="space-y-2 max-[480px]:space-y-1.5 md:hidden">
+          <div id="leads-list-mobile" className="space-y-2 max-[480px]:space-y-1.5 lg:hidden">
             {visible.map((lead) => {
               const pendingAdd = pendingLeadAdds.find((item) => item.id === lead.id);
-              return <MobileRow key={lead.id} lead={lead} callStats={callStats[lead.id]} manager={user.role === "Manager"} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onAction={startLeadAction} />;
+              return <MobileRow key={lead.id} lead={lead} callStats={callStats[lead.id]} now={now} highlighted={highlightedLeadId === lead.id} pending={pendingLeadId === lead.id || pendingAdd?.status === "saving"} pendingAddStatus={pendingAdd?.status} pendingAddRetryable={pendingAdd?.retryable} onRetryPending={() => void retryPendingLead(lead.id)} onDiscardPending={() => discardPendingLead(lead.id)} onOpen={selectLead} onOpenActions={setMobileActionsLead} />;
             })}
           </div>
           {hasMoreRows && <div className="flex flex-col items-center gap-2">
@@ -649,6 +719,13 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           nextLead={visible[visible.findIndex((lead) => lead.id === selected.id) + 1]}
         />
       )}
+      {mobileActionsLead && <MobileLeadActionSheet
+        lead={mobileActionsLead}
+        canAssign={canAssignLeads(user.role)}
+        onClose={() => setMobileActionsLead(null)}
+        onDetails={() => { const lead = mobileActionsLead; setMobileActionsLead(null); selectLead(lead); }}
+        onAction={(type) => { const lead = mobileActionsLead; setMobileActionsLead(null); startLeadAction(type, lead); }}
+      />}
       {action?.type === "call" && <CallLeadModal lead={action.lead} currentStatus={action.lead.status} onClose={() => setAction(null)} onPendingChange={(pending) => setPendingLeadId(pending ? action.lead.id : null)} onOptimistic={(status, followUp, remarks) => {
         const before = leadRows.find((lead) => lead.id === action.lead.id) ?? action.lead;
         const after = {
@@ -718,17 +795,29 @@ async function pollAssignmentWarnings(warningCheckId: string) {
   }
 }
 
-function ActionButtons({ lead, manager, pending, onAction }: { lead: Lead; manager: boolean; pending: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
+function MobileLeadActionSheet({ lead, canAssign, onClose, onDetails, onAction }: {
+  lead: Lead; canAssign: boolean; onClose: () => void; onDetails: () => void;
+  onAction: (type: "call" | "edit" | "reassign") => void;
+}) {
   const whatsapp = whatsappUrl(lead.phone);
-  const actionClass = "flex h-14 min-h-11 w-full min-w-0 flex-col items-center justify-center gap-1 rounded-lg px-0 text-[10px] leading-tight focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-4";
-  return <div data-testid="mobile-lead-actions" className={`grid ${manager ? "grid-cols-5" : "grid-cols-3"} gap-1.5`} onClick={(event) => event.stopPropagation()}>
-    <Button type="button" variant="default" className={actionClass} disabled={pending || !lead.phone} aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={() => onAction("call")}><Phone /><span>Call</span></Button>
-    {whatsapp
-      ? <a href={whatsapp} target="_blank" rel="noreferrer" aria-disabled={pending} className={`${actionClass} text-[#087443] hover:bg-[#25D366]/10 ${pending ? "pointer-events-none opacity-50" : ""}`} aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-4 w-4" /><span>WhatsApp</span></a>
-      : <button type="button" disabled className={`${actionClass} cursor-not-allowed text-muted-foreground`} aria-label={`WhatsApp unavailable for ${lead.name}`}><WhatsAppIcon className="h-4 w-4" /><span>WhatsApp</span></button>}
-    <Button type="button" variant="ghost" className={actionClass} disabled={pending} aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /><span>Edit</span></Button>
-    {manager && <Button type="button" variant="ghost" className={actionClass} disabled={pending} aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /><span>Assign</span></Button>}
-    {manager && <Button type="button" variant="ghost" className={`${actionClass} text-destructive hover:bg-destructive/10 hover:text-destructive`} disabled={pending} aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /><span>Delete</span></Button>}
+  useBodyScrollLock(true);
+  return <div className="fixed inset-0 z-[60] flex items-end bg-black/40" role="presentation">
+    <button className="absolute inset-0" aria-label="Close lead actions" onClick={onClose} />
+    <BottomSheet role="dialog" aria-modal="true" aria-labelledby="mobile-lead-actions-title" className="relative max-h-[85dvh] space-y-3 overflow-y-auto">
+      <div className="flex items-start justify-between gap-3">
+        <div><h2 id="mobile-lead-actions-title" className="font-semibold">Lead actions</h2><p className="text-sm text-muted-foreground">{lead.name}</p></div>
+        <Button type="button" variant="ghost" size="icon" aria-label="Close lead actions" onClick={onClose}><X /></Button>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Button type="button" className="h-11" disabled={!lead.phone} onClick={() => onAction("call")}><Phone /> Call</Button>
+        {whatsapp
+          ? <a href={whatsapp} target="_blank" rel="noreferrer" className="inline-flex h-11 items-center justify-center gap-2 rounded-lg border border-border font-medium text-[#087443] hover:bg-secondary" onClick={onClose}><WhatsAppIcon className="h-5 w-5" /> WhatsApp</a>
+          : <Button type="button" variant="outline" className="h-11" disabled><WhatsAppIcon /> WhatsApp unavailable</Button>}
+        <Button type="button" variant="outline" className="h-11" onClick={() => onAction("edit")}><Pencil /> Update status</Button>
+        {canAssign && <Button type="button" variant="outline" className="h-11" onClick={() => onAction("reassign")}><UserRound /> Assign</Button>}
+        <Button type="button" variant="ghost" className="h-11 sm:col-span-2" onClick={onDetails}>View lead details</Button>
+      </div>
+    </BottomSheet>
   </div>;
 }
 
@@ -742,26 +831,42 @@ function DesktopActionButtons({ lead, manager, pending, onAction }: { lead: Lead
   </div>;
 }
 
-const DesktopRow = memo(function DesktopRow({ lead, callStats, manager, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onAction }: { lead: Lead; callStats?: LeadCallSummary; manager: boolean; highlighted: boolean; pending: boolean; pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean; onRetryPending: () => void; onDiscardPending: () => void; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
+const DesktopRow = memo(function DesktopRow({ lead, callStats, now, manager, selected, onSelect, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onAction }: {
+  lead: Lead; callStats?: LeadCallSummary; now: number | null; manager: boolean; selected: boolean; onSelect: (checked: boolean) => void;
+  highlighted: boolean; pending: boolean; pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean;
+  onRetryPending: () => void; onDiscardPending: () => void; onOpen: (lead: Lead) => void;
+  onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void;
+}) {
+  const staleUncalled = now !== null && isUncalledLeadOlderThan(lead, callStats, now);
+  const overdue = !!lead.followUp && lead.followUp < todayIST();
+  const dueToday = lead.followUp === todayIST();
   return (
-    <tr className={`group cursor-pointer transition-colors hover:bg-secondary/50 ${pending ? "opacity-70" : ""} ${highlighted ? "bg-success/10 ring-1 ring-inset ring-success" : ""}`} onClick={() => { if (!pendingAddStatus) onOpen(lead); }}>
+    <tr className={`group cursor-pointer transition-colors hover:bg-secondary/50 ${staleUncalled ? "bg-amber-50/70 dark:bg-amber-950/20" : overdue ? "bg-destructive/5" : ""} ${pending ? "opacity-70" : ""} ${highlighted ? "bg-success/10 ring-1 ring-inset ring-success" : ""}`} onClick={() => { if (!pendingAddStatus) onOpen(lead); }}>
+      {manager && <td className="w-12 px-2 py-3 text-center" onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${lead.name}`} className="h-5 w-5 accent-primary" checked={selected} onChange={(event) => onSelect(event.target.checked)} /></td>}
       <td className="max-w-56 px-4 py-3"><div className="truncate font-semibold">{lead.name}</div>{lead.company && <div className="truncate text-xs text-muted-foreground">{lead.company}</div>}{pendingAddStatus && <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${pendingAddStatus === "failed" ? "bg-destructive/10 text-destructive" : "bg-secondary text-muted-foreground"}`}>{pendingAddStatus === "failed" ? "Not saved" : "Saving…"}</span>}</td>
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.phone || "—"}</td>
       <td className="whitespace-nowrap px-3 py-3">{lead.source}</td>
       <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.createdOn || "—"}</td>
-      <td className="px-3 py-3"><StatusBadge status={lead.status} />{callStats && <div className="mt-1 text-xs text-muted-foreground">Calls: {callStats.attempts} consecutive{callStats.lastOutcome ? ` · Last: ${callStats.lastOutcome}` : ""}</div>}{lead.followUp && lead.followUp <= todayIST() && <div className="mt-1 text-xs font-semibold text-destructive">Overdue</div>}</td>
+      <td className="px-3 py-3"><StatusBadge status={lead.status} />{staleUncalled && <div className="mt-1 text-xs font-semibold text-amber-800 dark:text-amber-200">Uncalled &gt; 30 min</div>}{callStats && <div className="mt-1 text-xs text-muted-foreground">Calls: {callStats.attempts} consecutive{callStats.lastOutcome ? ` · Last: ${callStats.lastOutcome}` : ""}</div>}{overdue && <div className="mt-1 text-xs font-semibold text-destructive">Overdue follow-up</div>}{dueToday && <div className="mt-1 text-xs font-semibold text-amber-800 dark:text-amber-200">Follow-up today</div>}</td>
       <td className="max-w-36 truncate px-3 py-3">{lead.assignedTo ?? "Unassigned"}</td>
       <td className="sticky right-0 z-[1] min-w-[200px] whitespace-nowrap bg-card px-2 py-3 text-right group-hover:bg-secondary/50" onClick={(event) => event.stopPropagation()}>{pendingAddStatus === "failed" ? <div className="flex justify-end gap-2">{pendingAddRetryable && <Button type="button" className="h-9" onClick={onRetryPending}>Retry</Button>}<Button type="button" variant="outline" className="h-9" onClick={onDiscardPending}>Discard</Button></div> : <DesktopActionButtons lead={lead} manager={manager} pending={pending} onAction={(type) => onAction(type, lead)} />}{pending && <span role="status" className="sr-only">Saving lead</span>}</td>
     </tr>
   );
 });
 
-const MobileRow = memo(function MobileRow({ lead, callStats, manager, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onAction }: { lead: Lead; callStats?: LeadCallSummary; manager: boolean; highlighted: boolean; pending: boolean; pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean; onRetryPending: () => void; onDiscardPending: () => void; onOpen: (lead: Lead) => void; onAction: (type: "call" | "edit" | "reassign" | "delete", lead: Lead) => void }) {
+const MobileRow = memo(function MobileRow({ lead, callStats, now, highlighted, pending, pendingAddStatus, pendingAddRetryable, onRetryPending, onDiscardPending, onOpen, onOpenActions }: {
+  lead: Lead; callStats?: LeadCallSummary; now: number | null; highlighted: boolean; pending: boolean;
+  pendingAddStatus?: PendingLeadAdd["status"]; pendingAddRetryable?: boolean; onRetryPending: () => void;
+  onDiscardPending: () => void; onOpen: (lead: Lead) => void; onOpenActions: (lead: Lead) => void;
+}) {
   const mobile = lead.phone.replace(/\D/g, "").slice(-10);
   const company = lead.company.trim();
   const showCompany = company && company.toLocaleLowerCase() !== lead.name.trim().toLocaleLowerCase();
+  const staleUncalled = now !== null && isUncalledLeadOlderThan(lead, callStats, now);
+  const overdue = !!lead.followUp && lead.followUp < todayIST();
+  const dueToday = lead.followUp === todayIST();
   return (
-    <div data-testid="mobile-lead-card" role={pendingAddStatus ? undefined : "button"} tabIndex={pendingAddStatus ? -1 : 0} onClick={() => { if (!pendingAddStatus) onOpen(lead); }} onKeyDown={(event) => { if (!pendingAddStatus && (event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) { event.preventDefault(); onOpen(lead); } }} className={`min-w-0 rounded-xl border border-border bg-card p-3 shadow-sm sm:p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${pending ? "opacity-70" : ""} ${highlighted ? "bg-success/10 ring-1 ring-success" : ""}`}>
+    <div data-testid="mobile-lead-card" role={pendingAddStatus ? undefined : "button"} tabIndex={pendingAddStatus ? -1 : 0} onClick={() => { if (!pendingAddStatus) onOpen(lead); }} onKeyDown={(event) => { if (!pendingAddStatus && (event.key === "Enter" || event.key === " ") && event.target === event.currentTarget) { event.preventDefault(); onOpen(lead); } }} className={`min-w-0 rounded-xl border p-3 shadow-sm sm:p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${staleUncalled ? "border-amber-400 bg-amber-50/70 dark:bg-amber-950/20" : overdue ? "border-destructive/50 bg-destructive/5" : "border-border bg-card"} ${pending ? "opacity-70" : ""} ${highlighted ? "bg-success/10 ring-1 ring-success" : ""}`}>
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold text-foreground">{lead.name}</div>
@@ -774,6 +879,7 @@ const MobileRow = memo(function MobileRow({ lead, callStats, manager, highlighte
         <Phone aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="truncate">{lead.phone}</span>
       </a>}
       <div className="mt-3 flex flex-wrap gap-1.5 text-[11px] leading-5">
+        {staleUncalled && <span className="rounded-full bg-amber-100 px-2 font-semibold text-amber-900 dark:bg-amber-900 dark:text-amber-100">Uncalled &gt; 30 min</span>}
         {callStats && <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground">Calls · {callStats.attempts} consecutive{callStats.lastOutcome ? ` · Last: ${callStats.lastOutcome}` : ""}</span>}
         <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground"><span className="text-muted-foreground">Source</span> · {lead.source}</span>
         <span className="max-w-full truncate rounded-full bg-secondary px-2 text-secondary-foreground"><span className="text-muted-foreground">Created</span> · {lead.createdOn || "—"}</span>
@@ -781,31 +887,32 @@ const MobileRow = memo(function MobileRow({ lead, callStats, manager, highlighte
       </div>
       {(lead.remarks || lead.followUp) && <div className="mt-2 space-y-1 text-xs text-muted-foreground">
         {lead.remarks && <p className="break-words"><span className="font-medium text-foreground">Remarks:</span> {lead.remarks}</p>}
-        {lead.followUp && <p className={lead.followUp <= todayIST() ? "font-medium text-destructive" : ""}>
-          <span className="font-medium">Follow-up:</span> {lead.followUp}{lead.followUpTime ? ` · ${lead.followUpTime}` : ""}{lead.followUp <= todayIST() ? " · Overdue" : ""}
+        {lead.followUp && <p className={overdue ? "font-semibold text-destructive" : dueToday ? "font-medium text-amber-800 dark:text-amber-200" : ""}>
+          <span className="font-medium">Follow-up:</span> {lead.followUp}{lead.followUpTime ? ` · ${lead.followUpTime}` : ""}{overdue ? " · Overdue" : dueToday ? " · Due today" : ""}
         </p>}
       </div>}
       <div className="mt-3 border-t border-border pt-2.5">
-        {pendingAddStatus === "failed" ? <div className="flex gap-2">{pendingAddRetryable && <Button type="button" className="h-11 flex-1" onClick={(event) => { event.stopPropagation(); onRetryPending(); }}>Retry</Button>}<Button type="button" variant="outline" className="h-11 flex-1" onClick={(event) => { event.stopPropagation(); onDiscardPending(); }}>Discard</Button></div> : <ActionButtons lead={lead} manager={manager} pending={pending} onAction={(type) => onAction(type, lead)} />}
+        {pendingAddStatus === "failed" ? <div className="flex gap-2">{pendingAddRetryable && <Button type="button" className="h-11 flex-1" onClick={(event) => { event.stopPropagation(); onRetryPending(); }}>Retry</Button>}<Button type="button" variant="outline" className="h-11 flex-1" onClick={(event) => { event.stopPropagation(); onDiscardPending(); }}>Discard</Button></div> : <Button type="button" variant="outline" className="h-11 w-full" disabled={pending} onClick={(event) => { event.stopPropagation(); onOpenActions(lead); }}><MoreHorizontal /> Actions</Button>}
         {pending && <span role="status" className="sr-only">Updating lead</span>}
       </div>
     </div>
   );
 });
 
-function EmptyState({ hasLeads, filtered, onClear }: { hasLeads: boolean; filtered: boolean; onClear: () => void }) {
+function LeadEmptyState({ hasLeads, filtered, onClear }: { hasLeads: boolean; filtered: boolean; onClear: () => void }) {
   const title = filtered ? "No leads match your filters" : hasLeads ? "No leads in this view" : "No leads yet";
   const detail = filtered ? "Try a different search or source." : hasLeads ? "New enquiries will appear here." : "Add a lead to get started.";
-  return <div className="rounded-xl border border-dashed border-border bg-card px-5 py-12 text-center"><div className="text-base font-semibold">{title}</div><p className="mt-1 text-muted-foreground">{detail}</p>{filtered && <Button variant="outline" className="mt-4" onClick={onClear}>Clear filters</Button>}</div>;
+  return <SharedEmptyState message={<><span className="block font-semibold text-foreground">{title}</span><span className="mt-1 block">{detail}</span></>} action={filtered ? <Button variant="outline" onClick={onClear}>Clear filters</Button> : undefined} className="px-5 py-12" />;
 }
 
 function FixAssignedLeads({ count, compact = false, leads = [] }: { count: number; compact?: boolean; leads?: { id: string; name: string; ownerName: string }[] }) {
   const [pending, start] = useTransition();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const fix = () => {
-    const leadSummary = leads.length <= 3
-      ? leads.map((lead) => `${lead.name} (${lead.ownerName || "Sales Executive"})`).join("\n")
-      : `${leads.slice(0, 3).map((lead) => lead.name).join(", ")}, and ${leads.length - 3} more`;
-    if (!window.confirm(`Confirm correction for:\n${leadSummary}\n\nChange Lead_Status from Fresh Lead to Assigned to Sales only.`)) return;
+    setConfirmOpen(true);
+  };
+  const confirmFix = () => {
+    setConfirmOpen(false);
     start(async () => {
       try {
         const result = await executeMutation(fixAssignedLeadsAction, {});
@@ -816,24 +923,34 @@ function FixAssignedLeads({ count, compact = false, leads = [] }: { count: numbe
       }
     });
   };
-  return <Button title="Moves leads that have a sales executive but are still in Fresh Lead to Assigned to Sales." variant={compact ? "ghost" : "outline"} className={compact ? "min-w-11 px-2 font-medium underline" : "max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>;
+  return <>
+    <Button title="Moves leads that have a sales executive but are still in Fresh Lead to Assigned to Sales." variant={compact ? "ghost" : "outline"} className={compact ? "min-w-11 px-2 font-medium underline" : "max-[480px]:text-xs"} onClick={fix} disabled={pending || count === 0}>{pending ? "Fixing…" : compact ? "Fix" : `Fix assigned leads (${count})`}</Button>
+    {confirmOpen && <ConfirmDialog
+      title="Confirm lead correction"
+      description={<>
+        <p>Change Lead_Status from Fresh Lead to Assigned to Sales only.</p>
+        {leads.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5">{leads.slice(0, 3).map((lead) => <li key={lead.id}>{lead.name} ({lead.ownerName || "Sales Executive"})</li>)}</ul>}
+        {leads.length > 3 && <p className="mt-1">And {leads.length - 3} more leads.</p>}
+      </>}
+      confirmLabel="Apply correction"
+      onCancel={() => setConfirmOpen(false)}
+      onConfirm={confirmFix}
+    />}
+  </>;
 }
 
-function LeadFiltersPanel({ open, owners, filters, source, onChange, onSourceChange, onClose }: {
-  open: boolean; owners: string[]; filters: LeadFilters; source: LeadSource | "All";
-  onChange: (filters: LeadFilters) => void; onSourceChange: (source: LeadSource | "All") => void; onClose: () => void;
+function LeadFiltersPanel({ open, filters, onChange, onClose }: {
+  open: boolean; filters: LeadFilters;
+  onChange: (filters: LeadFilters) => void; onClose: () => void;
 }) {
   useBodyScrollLock(open);
-  const content = <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
-    <label className="text-xs font-semibold">Owner<SelectField className="mt-1" value={filters.owner ?? "All"} onValueChange={(value) => onChange({ ...filters, owner: value })} options={[{ value: "All", label: "All owners" }, ...owners.map((owner) => ({ value: owner, label: owner }))]} /></label>
-    <label className="text-xs font-semibold">Stage<SelectField className="mt-1" value={filters.stage ?? "All"} onValueChange={(value) => onChange({ ...filters, stage: value as LeadStatus | "All" })} options={[{ value: "All", label: "All stages" }, ...LEAD_STATUSES.map((stage) => ({ value: stage, label: stage }))]} /></label>
-    <label className="text-xs font-semibold">Source<SelectField className="mt-1" value={source} onValueChange={(value) => onSourceChange(value as LeadSource | "All")} options={[{ value: "All", label: "All sources" }, ...LEAD_SOURCES.map((item) => ({ value: item, label: item }))]} /></label>
-    <label className="text-xs font-semibold">From<input type="date" className={`${fieldClass} mt-1 text-sm`} value={filters.from ?? ""} onChange={(e) => onChange({ ...filters, from: e.target.value })} /></label>
-    <label className="text-xs font-semibold">To<input type="date" className={`${fieldClass} mt-1 text-sm`} value={filters.to ?? ""} onChange={(e) => onChange({ ...filters, to: e.target.value })} /></label>
+  const dateFilters = <div className="grid gap-3 sm:grid-cols-2">
+    <label className="text-xs font-semibold">Created from<input aria-label="Created from" type="date" className={`${fieldClass} mt-1 text-sm`} value={filters.from ?? ""} onChange={(event) => onChange({ ...filters, from: event.target.value })} /></label>
+    <label className="text-xs font-semibold">Created to<input aria-label="Created to" type="date" className={`${fieldClass} mt-1 text-sm`} value={filters.to ?? ""} onChange={(event) => onChange({ ...filters, to: event.target.value })} /></label>
   </div>;
   return <>
-    <div className="hidden rounded-lg border bg-card p-3 sm:block">{content}</div>
-    {open && <div className="fixed inset-0 z-50 flex items-end bg-black/40 sm:hidden"><button className="absolute inset-0" aria-label="Close filters" onClick={onClose} /><div className="relative flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-t-2xl bg-card"><div className="overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Filter leads</h2><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close filters"><X /></Button></div>{content}<Button className="mt-4 w-full" onClick={onClose}>Apply filters</Button></div></div></div>}
+    <div className="hidden items-end gap-3 lg:flex" role="group" aria-label="Date filters">{dateFilters}</div>
+    {open && <div className="fixed inset-0 z-50 flex items-end bg-black/40 lg:hidden"><button className="absolute inset-0" aria-label="Close filters" onClick={onClose} /><BottomSheet className="relative flex max-h-[90dvh] flex-col overflow-hidden p-0"><div className="overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]"><div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">More filters</h2><Button type="button" variant="ghost" size="icon" onClick={onClose} aria-label="Close filters"><X /></Button></div>{dateFilters}<Button className="mt-4 w-full" onClick={onClose}>Apply filters</Button></div></BottomSheet></div>}
   </>;
 }
 
@@ -974,7 +1091,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
   const [pending, start] = useTransition();
   const [comboboxOpen, setComboboxOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState("");
-  const drawerRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
   const originalLead = useRef(lead);
   const filteredExecutives = executives.filter((name) => name.toLowerCase().includes(assigneeSearch.toLowerCase()));
   useBodyScrollLock(true);
@@ -1083,7 +1200,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
         toast.error(result.error);
       }
     }).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : "Could not load lead history.";
+      const message = error instanceof Error ? error.message : "Could not load lead timeline.";
       setHistory(null);
       setHistoryError(message);
       toast.error(message);
@@ -1093,14 +1210,14 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
   return (
     <div className="fixed inset-0 z-50" role="presentation">
       <button className="absolute inset-0 cursor-default bg-black/40" aria-label="Close lead details" onClick={onClose} />
-      <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title" className="absolute bottom-0 left-0 flex h-[92dvh] w-full flex-col rounded-t-2xl bg-card shadow-2xl focus-visible:outline-none md:bottom-auto md:left-auto md:right-0 md:top-0 md:h-full md:max-w-lg md:rounded-none">
+      <ResponsivePanel ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title">
         <header className="flex items-start justify-between gap-3 border-b px-4 py-4 sm:px-6">
           <div className="min-w-0"><h2 id="lead-drawer-title" className="truncate text-lg font-bold">{lead.name}</h2><p className="truncate text-xs text-muted-foreground">{lead.company || "No company"} · {lead.phone || "No phone"}</p></div>
           <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button>
         </header>
         <div className="flex gap-1 border-b px-4 pt-2 sm:px-6">
           <DrawerTab active={mode === "edit"} onClick={() => setMode("edit")}>Details</DrawerTab>
-          <DrawerTab active={mode === "history"} onClick={loadHistory}><History /> History</DrawerTab>
+          <DrawerTab active={mode === "history"} onClick={loadHistory}><History /> Timeline</DrawerTab>
         </div>
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           {mode === "history" ? (
@@ -1137,7 +1254,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
                 <Button variant="outline" disabled={pending || !nextLead} onClick={() => save(true)}>{pending ? "Saving…" : "Save & next"}</Button>
                 </div>
                 <div className="mt-2 grid gap-2 border-t pt-3 sm:grid-cols-3">
-                  <Button variant="outline" onClick={loadHistory}><History /> History</Button>
+                  <Button variant="outline" onClick={loadHistory}><History /> Timeline</Button>
                   <Button variant="outline" onClick={() => setMode("schedule")}><CalendarPlus /> Schedule visit</Button>
                   <Button asChild variant="secondary"><Link href={`/quotations?lead=${lead.id}`} onClick={onClose}><FileText /> Create quotation</Link></Button>
                 </div>
@@ -1145,7 +1262,7 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
             </div>
           )}
         </div>
-      </aside>
+      </ResponsivePanel>
     </div>
   );
 }
@@ -1155,10 +1272,10 @@ function DrawerTab({ active, onClick, children }: { active: boolean; onClick: ()
 }
 
 function HistoryList({ history, loading, error, onRetry }: { history: LeadTimelineItem[] | null; loading: boolean; error: string | null; onRetry: () => void }) {
-  if (loading) return <p role="status" className="text-muted-foreground">Loading history…</p>;
+  if (loading) return <p role="status" className="text-muted-foreground">Loading timeline…</p>;
   if (error) return <div role="alert" className="space-y-3 rounded-lg bg-destructive/5 p-4"><p>{error}</p><Button type="button" variant="outline" onClick={onRetry}>Retry</Button></div>;
-  if (history === null) return <div role="alert" className="space-y-3 rounded-lg bg-destructive/5 p-4"><p>Could not load lead history.</p><Button type="button" variant="outline" onClick={onRetry}>Retry</Button></div>;
-  if (!history.length) return <p className="rounded-lg bg-secondary p-4 text-muted-foreground">No history yet.</p>;
+  if (history === null) return <div role="alert" className="space-y-3 rounded-lg bg-destructive/5 p-4"><p>Could not load lead timeline.</p><Button type="button" variant="outline" onClick={onRetry}>Retry</Button></div>;
+  if (!history.length) return <p className="rounded-lg bg-secondary p-4 text-muted-foreground">No timeline activity yet.</p>;
   return <ul className="space-y-3 border-l-2 border-border pl-4">{history.map((item, index) => <li key={index}><div className="text-xs text-muted-foreground">{item.date} · {item.user} · {item.kind}</div><div className="mt-1 font-medium">{item.title}</div>{item.detail && <div className="text-sm text-muted-foreground">{item.detail}</div>}</li>)}</ul>;
 }
 

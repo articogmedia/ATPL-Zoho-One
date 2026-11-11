@@ -75,7 +75,7 @@ test("manager can create and manage a lead from the list", async ({ page }) => {
 
   await row.click();
   const leadDrawer = page.getByRole("dialog", { name: leadName });
-  await leadDrawer.getByRole("button", { name: "History", exact: true }).first().click();
+  await leadDrawer.getByRole("button", { name: "Timeline", exact: true }).first().click();
   await expect(leadDrawer.getByText(/Call: Connected/)).toBeVisible();
   await page.getByRole("button", { name: "Close lead details" }).click();
 
@@ -140,10 +140,10 @@ test("Add Lead retries a dropped server-action request without duplicating the l
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).first().click();
   await page.getByLabel("Lead name *").fill(leadName);
   await page.getByLabel("Mobile number *").fill(phone);
-  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
 
   const row = page.getByTestId("mobile-lead-card").filter({ hasText: leadName });
   await expect(row).toBeVisible();
@@ -174,11 +174,11 @@ test("Add Lead shows an optimistic saving row while the server is slow", async (
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).first().click();
   await page.getByLabel("Lead name *").fill(leadName);
   await page.getByLabel("Mobile number *").fill(phone);
   const submittedAt = Date.now();
-  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
 
   const row = page.getByTestId("mobile-lead-card").filter({ hasText: leadName });
   await expect(row).toContainText("Saving…");
@@ -203,10 +203,10 @@ test("Add Lead resumes an interrupted request when the page becomes visible", as
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).first().click();
   await page.getByLabel("Lead name *").fill(leadName);
   await page.getByLabel("Mobile number *").fill(phone);
-  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
   await expect(page.getByTestId("mobile-lead-card").filter({ hasText: leadName })).toContainText("Saving…");
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
@@ -266,7 +266,7 @@ test("reassign immediately removes an owner from My Leads but keeps the lead in 
   await expect(allRow).toContainText("Sai Kiran");
 });
 
-test("mobile lead cards fit narrow viewports and have one WhatsApp action", async ({ page }) => {
+test("mobile lead cards fit narrow viewports and open the action sheet", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
   await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
@@ -274,30 +274,25 @@ test("mobile lead cards fit narrow viewports and have one WhatsApp action", asyn
   await page.goto("/leads");
 
   const cards = page.getByTestId("mobile-lead-card");
-  await expect(cards.first()).toBeVisible();
+  const firstWithPhone = cards.filter({ has: page.locator('a[aria-label^="Call "]') }).first();
+  await expect(firstWithPhone).toBeVisible();
   for (const width of [360, 390, 430]) {
     await page.setViewportSize({ width, height: 844 });
-    await expect(cards.first()).toBeVisible();
+    await expect(firstWithPhone).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    expect(await cards.first().evaluate((card) => card.scrollWidth <= card.clientWidth)).toBe(true);
+    expect(await firstWithPhone.evaluate((card) => card.scrollWidth <= card.clientWidth)).toBe(true);
 
-    const actions = cards.first().getByTestId("mobile-lead-actions");
-    const actionTargets = actions.locator("button, a");
-    await expect(actionTargets).toHaveCount(5);
-    const dimensions = await actionTargets.evaluateAll((elements) =>
-      elements.map((element) => {
-        const { width: targetWidth, height: targetHeight } = element.getBoundingClientRect();
-        return { width: targetWidth, height: targetHeight };
-      }),
-    );
-    expect(dimensions.every(({ width: targetWidth, height: targetHeight }) => targetWidth >= 44 && targetHeight >= 44)).toBe(true);
-    expect(Math.max(...dimensions.map(({ width: targetWidth }) => targetWidth)) - Math.min(...dimensions.map(({ width: targetWidth }) => targetWidth))).toBeLessThanOrEqual(1);
-    expect(await cards.first().getByRole("link", { name: /Message .* on WhatsApp/ }).count()).toBeLessThanOrEqual(1);
+    const actions = firstWithPhone.getByRole("button", { name: "Actions" });
+    const { width: targetWidth, height: targetHeight } = await actions.boundingBox() ?? { width: 0, height: 0 };
+    expect(targetWidth).toBeGreaterThanOrEqual(44);
+    expect(targetHeight).toBeGreaterThanOrEqual(44);
   }
 
-  const firstWithWhatsApp = cards.filter({ has: page.getByRole("link", { name: /Message .* on WhatsApp/ }) }).first();
-  await expect(firstWithWhatsApp.getByRole("link", { name: /Message .* on WhatsApp/ })).toHaveCount(1);
-  await expect(firstWithWhatsApp.getByRole("link", { name: /Call .* at / })).toHaveAttribute("href", /^tel:\+91\d{10}$/);
+  await firstWithPhone.getByRole("button", { name: "Actions" }).click();
+  const actionSheet = page.getByRole("dialog", { name: "Lead actions" });
+  await expect(actionSheet.getByRole("button", { name: "Call", exact: true })).toBeVisible();
+  await expect(actionSheet.getByRole("link", { name: "WhatsApp" })).toBeVisible();
+  await expect(actionSheet.getByRole("button", { name: "Update status" })).toBeVisible();
 });
 
 test("all call outcomes save on mobile and laptop widths", async ({ page }) => {
@@ -316,18 +311,17 @@ test("all call outcomes save on mobile and laptop widths", async ({ page }) => {
   const mobileCards = page.getByTestId("mobile-lead-card");
   const cardWithPhone = mobileCards.filter({ has: page.locator('a[aria-label^="Call "]') }).first();
   await expect(cardWithPhone).toBeVisible();
-  const callButton = cardWithPhone.locator('button[aria-label^="Call "]');
-  const callLabel = await callButton.getAttribute("aria-label");
-  if (!callLabel) throw new Error("The selected lead has no call action.");
-  const leadName = callLabel.replace(/^Call /, "");
+  const leadName = (await cardWithPhone.locator(".font-semibold").first().textContent())?.trim();
+  if (!leadName) throw new Error("The selected lead has no name.");
 
   for (const width of [390, 1280]) {
     await page.setViewportSize({ width, height: 844 });
     for (const outcome of outcomes) {
-      const call = width < 768
-        ? page.getByTestId("mobile-lead-card").filter({ hasText: leadName }).locator('button[aria-label^="Call "]')
+      const call = width < 1024
+        ? page.getByTestId("mobile-lead-card").filter({ hasText: leadName }).getByRole("button", { name: "Actions" })
         : page.locator("#leads-list tbody tr").filter({ hasText: leadName }).getByRole("button", { name: `Call ${leadName}` });
       await call.click();
+      if (width < 1024) await page.getByRole("dialog", { name: "Lead actions" }).getByRole("button", { name: "Call", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Call lead" });
       await dialog.getByRole("button", { name: outcome.label, exact: true }).click();
       if (outcome.followUp) await dialog.getByLabel("Follow-up date").fill(outcome.followUp);
@@ -336,4 +330,25 @@ test("all call outcomes save on mobile and laptop widths", async ({ page }) => {
       await expect(page.getByText("Call outcome saved").last()).toBeVisible();
     }
   }
+});
+
+test("manager can bulk assign a selected lead", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/home$/);
+  await page.goto("/leads");
+  await page.locator('[data-tab="fresh"]').click();
+
+  const firstRow = page.locator("#leads-list tbody tr").first();
+  await expect(firstRow).toBeVisible();
+  const leadName = await firstRow.locator('input[type="checkbox"]').getAttribute("aria-label");
+  if (!leadName) throw new Error("The first lead row cannot be selected.");
+  await firstRow.getByRole("checkbox", { name: leadName }).check();
+  await page.getByLabel("Bulk assign to").click();
+  await page.getByRole("option", { name: "Pavan", exact: true }).click();
+  await page.getByRole("button", { name: "Assign selected" }).click();
+
+  await expect(page.getByText("1 leads assigned.")).toBeVisible();
+  await expect(page.locator("#leads-list tbody tr").filter({ has: page.getByRole("checkbox", { name: leadName }) })).toHaveCount(0);
 });

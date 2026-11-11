@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyVisitOverrides, canAccess, formatINR, isAssignable, leadsForTab, summarizeLeads, visibleFor, workForTab, workTabsFor, ACCESS, type Visit } from "@/lib/domain";
+import { applyVisitOverrides, canAccess, formatINR, isAssignable, isUncalledLeadOlderThan, leadsForTab, summarizeLeads, visibleFor, workForTab, workTabsFor, ACCESS, type Lead, type Visit } from "@/lib/domain";
 import { MOCK_LEADS as SAMPLE_LEADS, MOCK_USERS as USERS, MOCK_QUOTES as SAMPLE_QUOTES, MOCK_VISITS as SAMPLE_VISITS } from "@/lib/crm/mock-data";
 
 const u = (id: string) => USERS.find((x) => x.id === id)!;
@@ -101,6 +101,20 @@ describe("access rules", () => {
 
 import { canAssignLeads, leadBucket } from "@/lib/domain";
 describe("manage leads", () => {
+  it("highlights only uncalled Fresh Leads once they are at least 30 minutes old", () => {
+    const lead = {
+      ...SAMPLE_LEADS[0],
+      status: "Fresh Lead" as const,
+      createdAt: "2026-11-07T10:00:00.000Z",
+    } as Lead;
+    const created = Date.parse(lead.createdAt!);
+
+    expect(isUncalledLeadOlderThan(lead, undefined, created + 29 * 60 * 1000 + 59_999)).toBe(false);
+    expect(isUncalledLeadOlderThan(lead, undefined, created + 30 * 60 * 1000)).toBe(true);
+    expect(isUncalledLeadOlderThan(lead, { attempts: 1 }, created + 60 * 60 * 1000)).toBe(false);
+    expect(isUncalledLeadOlderThan({ ...lead, status: "Contacted" }, undefined, created + 60 * 60 * 1000)).toBe(false);
+  });
+
   it("searches loaded leads locally by area and normalized phone", () => {
     const manager = { id: "manager", name: "Manager", role: "Manager" as const };
     const lead = { ...SAMPLE_LEADS[0], area: "Hitech City", phone: "+91 98765-43210" } as Lead;
@@ -183,7 +197,7 @@ describe("manage leads", () => {
   });
 });
 
-import { perfStats, rangeDates, summarizeLeadCalls, type CallActivity, type Lead, type PerfExecutive, type Quotation, type User } from "@/lib/domain";
+import { perfStats, rangeDates, summarizeLeadCalls, type CallActivity, type PerfExecutive, type Quotation, type User } from "@/lib/domain";
 const EXECS = ["Anil", "Ravi"];
 describe("performance dashboard", () => {
   it("computes calendar boundaries", () => {

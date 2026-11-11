@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { executeMutation, notifyMutationFailure } from "@/lib/use-mutation";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
-import { fieldClass } from "@/components/ui-bits";
+import { BottomSheet, PageHeader, fieldClass } from "@/components/ui-bits";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { getAssignableUsersAction, updateVisitAction } from "@/app/actions/crm";
 import { applyVisitOverrides, normalizePhone, workForTab, workTabsFor, type User, type Visit, type WorkTab } from "@/lib/domain";
@@ -124,17 +124,15 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
 
   return (
     <div className="min-w-0 max-w-full space-y-5">
-      <div>
-        <h1 className="min-w-0 text-xl font-bold sm:text-2xl">My Work &amp; Site Visits</h1>
-      </div>
+      <PageHeader title="My Work & Site Visits" />
       {callWarning && <div role="status" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{callWarning}</div>}
       {visitsWarning && <div role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">Zoho task data warning: {visitsWarning}</div>}
       {performance && summary && <section aria-label="My Performance" className="rounded-xl border bg-card p-3 shadow-sm">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="font-semibold">My Performance</h2>
           <div className="flex gap-1" role="group" aria-label="Performance period">
-            <Button size="sm" variant={range === "week" ? "default" : "outline"} onClick={() => setRange("week")}>This Week</Button>
-            <Button size="sm" variant={range === "month" ? "default" : "outline"} onClick={() => setRange("month")}>This Month</Button>
+            <Button size="sm" className="h-11" variant={range === "week" ? "default" : "outline"} onClick={() => setRange("week")}>This Week</Button>
+            <Button size="sm" className="h-11" variant={range === "month" ? "default" : "outline"} onClick={() => setRange("month")}>This Month</Button>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
@@ -300,7 +298,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange }: {
 
       {mode === "complete" && (
         <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingAction) setMode("none"); }}>
-          <section role="dialog" aria-modal="true" aria-labelledby={`complete-title-${v.id}`} className="w-full max-w-md space-y-3 rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-xl sm:pb-5">
+          <BottomSheet role="dialog" aria-modal="true" aria-labelledby={`complete-title-${v.id}`} className="max-w-md space-y-3 border sm:rounded-xl sm:pb-5">
             <h3 id={`complete-title-${v.id}`} className="font-semibold">Mark this task completed?</h3>
             <p className="text-sm text-muted-foreground">Confirm completion for {v.customer}.</p>
             <textarea aria-label="Completion notes" className={`${fieldClass} min-h-20 py-2`} placeholder="Visit notes (optional)" value={notes} maxLength={1000} onChange={(event) => setNotes(event.target.value)} />
@@ -310,12 +308,12 @@ const Item = memo(function Item({ v, today, onOptimisticChange }: {
                 {savingAction === "complete" && <LoaderCircle className="h-4 w-4 animate-spin" />}Confirm completed
               </Button>
             </div>
-          </section>
+          </BottomSheet>
         </div>
       )}
       {mode === "reschedule" && (
         <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingAction) setMode("none"); }}>
-          <section role="dialog" aria-modal="true" aria-labelledby={`reschedule-title-${v.id}`} className="max-h-[90dvh] w-full max-w-md space-y-4 overflow-y-auto rounded-t-2xl border border-border bg-card p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] shadow-2xl sm:rounded-xl sm:pb-5">
+          <BottomSheet role="dialog" aria-modal="true" aria-labelledby={`reschedule-title-${v.id}`} className="max-h-[90dvh] max-w-md space-y-4 overflow-y-auto border sm:rounded-xl sm:pb-5">
             <div>
               <h3 id={`reschedule-title-${v.id}`} className="font-semibold">Reschedule task</h3>
               <p className="mt-1 text-sm text-muted-foreground">{v.customer}</p>
@@ -347,7 +345,7 @@ const Item = memo(function Item({ v, today, onOptimisticChange }: {
                 {savingAction === "reschedule" && <LoaderCircle className="h-4 w-4 animate-spin" />}Save new date
               </Button>
             </div>
-          </section>
+          </BottomSheet>
         </div>
       )}
 
