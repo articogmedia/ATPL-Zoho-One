@@ -2,9 +2,11 @@ import { crm } from "@/lib/crm";
 import { requireSection } from "@/lib/auth/guard";
 import { canConvertToInvoice } from "@/lib/invoice-rules";
 import { visibleFor } from "@/lib/domain";
+import { withPageTimeout } from "@/lib/page-timeout";
+import { describeLoadProblem } from "@/lib/zoho-setup-hint";
+import { PageHeader } from "@/components/ui-bits";
+import { LoadProblem } from "@/components/LoadProblem";
 import { InvoiceClient } from "./InvoiceClient";
-import { ZohoError } from "@/lib/zoho/client";
-import { newErrorReference } from "@/lib/crm-action-errors";
 
 export const metadata = { title: "Invoices" };
 export const dynamic = "force-dynamic";
@@ -13,37 +15,31 @@ export const preferredRegion = "bom1";
 export default async function InvoicesPage() {
   const user = await requireSection("invoices");
   const repository = crm();
+
   let allInvoices: Awaited<ReturnType<typeof repository.listInvoices>>;
   let allQuotes: Awaited<ReturnType<typeof repository.listQuotes>>;
   let allLeads: Awaited<ReturnType<typeof repository.listLeads>>;
-  let loadError: string | undefined;
   try {
-    [allInvoices, allQuotes, allLeads] = await Promise.all([
+    [allInvoices, allQuotes, allLeads] = await withPageTimeout(Promise.all([
       repository.listInvoices(),
       repository.listQuotes(),
       repository.listLeads(),
-    ]);
+    ]), 20_000);
   } catch (error) {
-    const reference = newErrorReference();
-    const zohoError = error instanceof ZohoError ? error : null;
-    const isInvoicePermissionError = !!zohoError && (
-      ["OAUTH_SCOPE_MISMATCH", "NO_PERMISSION", "INVALID_MODULE", "MODULE_NOT_FOUND"].includes(zohoError.code ?? "") ||
-      /scope|permission|module.{0,20}(not found|unavailable|invalid)/i.test(zohoError.message)
+    const problem = describeLoadProblem(error, "Invoices");
+    console.error("[page] invoices load failed", { message: error instanceof Error ? error.message : String(error), reference: problem.reference });
+    return (
+      <section className="space-y-6">
+        <PageHeader title="Invoices" subtitle="Convert accepted or Won quotations, then view, download, or email the invoice." />
+        <LoadProblem
+          summary={problem.summary}
+          hint={user.role === "Manager" ? problem.hint : "Please retry. If it keeps happening, contact your manager."}
+          reference={problem.reference}
+        />
+      </section>
     );
-    console.error("[page] invoice data load failed", {
-      reference,
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      zohoStatus: zohoError?.status,
-      zohoCode: zohoError?.code,
-      zohoOperation: zohoError?.operation,
-      zohoDetails: zohoError?.details,
-    });
-    loadError = isInvoicePermissionError
-      ? `Invoice data is not available. Ask your Zoho administrator to enable the Invoices module and grant ZohoCRM.modules.invoices.ALL, then generate a new refresh token. Reference: ${reference}`
-      : `Invoice data could not be loaded. Please try again. Reference: ${reference}`;
-    return <InvoiceClient invoices={[]} convertibleQuotes={[]} loadError={loadError} />;
   }
+
   const invoices = visibleFor(user, allInvoices);
   const leads = visibleFor(user, allLeads);
   const leadsById = new Map(leads.map((lead) => [lead.id, lead]));
@@ -59,5 +55,5 @@ export default async function InvoicesPage() {
       total: quote.total,
     }));
 
-  return <InvoiceClient invoices={invoices} convertibleQuotes={convertibleQuotes} loadError={loadError} />;
+  return <InvoiceClient invoices={invoices} convertibleQuotes={convertibleQuotes} />;
 }

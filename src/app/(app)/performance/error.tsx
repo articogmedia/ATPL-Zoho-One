@@ -1,5 +1,7 @@
 "use client";
-import { AppErrorState } from "@/components/AppErrorState";
-export default function Error({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  return <AppErrorState title="Performance could not load" message="Please try again. Sales records are unchanged." error={error} reset={reset} />;
+
+import { RouteError } from "@/components/RouteError";
+
+export default function PerformanceError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  return <RouteError error={error} reset={reset} title="Performance could not load" />;
 }

@@ -1,12 +1,11 @@
 "use client";
 
-import { AppErrorState } from "@/components/AppErrorState";
+import { RouteError } from "@/components/RouteError";
 
-export default function AppError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  return <AppErrorState
-    title="Something went wrong"
-    message="Please try again. Your work in Zoho CRM has not been removed."
-    error={error}
-    reset={reset}
-  />;
+export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background px-4">
+      <RouteError error={error} reset={reset} title="This page didn’t load" />
+    </div>
+  );
 }
