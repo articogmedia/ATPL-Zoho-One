@@ -48,12 +48,12 @@ export function PageHeader({ title, subtitle, action, mobileFloating = true, cla
         {subtitle && <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>}
       </div>
       {action && <div className={cn(
-        "flex justify-end sm:static sm:inset-auto sm:z-auto sm:ml-auto sm:flex-none",
+        "flex w-auto max-w-[calc(100vw-2rem)] justify-end sm:static sm:inset-auto sm:z-auto sm:ml-auto sm:max-w-none sm:flex-none",
         mobileFloating
-          ? "fixed inset-x-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30"
+          ? "fixed right-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-30"
           : "w-full sm:w-auto",
       )}>
-        <div className="w-full sm:w-auto">{action}</div>
+        <div className={cn("sm:w-auto", mobileFloating ? "w-auto" : "w-full")}>{action}</div>
       </div>}
     </header>
   );
@@ -100,6 +100,13 @@ export type ResponsiveColumn<T> = {
   className?: string;
   align?: "left" | "right" | "center";
 };
+
+export const ResponsiveTabList = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(function ResponsiveTabList(
+  { className, ...props },
+  ref,
+) {
+  return <div ref={ref} className={cn("flex min-w-0 flex-wrap gap-2 p-1", className)} {...props} />;
+});
 
 export function ResponsiveTable<T>({ rows, columns, getKey, renderCard, label, className }: {
   rows: readonly T[];

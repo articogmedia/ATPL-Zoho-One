@@ -93,10 +93,10 @@ export default async function PerformancePage({ searchParams }: { searchParams: 
         ))}
       </div>
       <form method="get" className="flex flex-wrap items-end gap-2 rounded-xl border border-border bg-card p-4">
-        <label className="grid gap-1 text-xs font-medium text-muted-foreground">From<input aria-label="Custom range from" className="h-10 rounded-md border border-input bg-background px-2 text-sm text-foreground" type="date" name="from" defaultValue={customRange?.from ?? ""} /></label>
-        <label className="grid gap-1 text-xs font-medium text-muted-foreground">To<input aria-label="Custom range to" className="h-10 rounded-md border border-input bg-background px-2 text-sm text-foreground" type="date" name="to" defaultValue={customRange?.to ?? ""} /></label>
-        <button className="h-10 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground" type="submit">Apply date range</button>
-        {customRange && <Link className="inline-flex h-10 items-center px-2 text-sm underline" href="/performance">Clear dates</Link>}
+        <label className="grid gap-1 text-xs font-medium text-muted-foreground">From<input aria-label="Custom range from" className="h-11 rounded-md border border-input bg-background px-2 text-sm text-foreground" type="date" name="from" defaultValue={customRange?.from ?? ""} /></label>
+        <label className="grid gap-1 text-xs font-medium text-muted-foreground">To<input aria-label="Custom range to" className="h-11 rounded-md border border-input bg-background px-2 text-sm text-foreground" type="date" name="to" defaultValue={customRange?.to ?? ""} /></label>
+        <button className="h-11 rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground" type="submit">Apply date range</button>
+        {customRange && <Link className="inline-flex h-11 items-center px-2 text-sm underline" href="/performance">Clear dates</Link>}
       </form>
       {invalidCustomRange && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">Enter a valid start and end date; the start date must not be after the end date.</p>}
 

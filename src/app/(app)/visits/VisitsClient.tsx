@@ -131,8 +131,8 @@ export function VisitsClient({ user, visits, executives, executivesUnavailable: 
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="font-semibold">My Performance</h2>
           <div className="flex gap-1" role="group" aria-label="Performance period">
-            <Button size="sm" variant={range === "week" ? "default" : "outline"} onClick={() => setRange("week")}>This Week</Button>
-            <Button size="sm" variant={range === "month" ? "default" : "outline"} onClick={() => setRange("month")}>This Month</Button>
+            <Button size="sm" className="h-11" variant={range === "week" ? "default" : "outline"} onClick={() => setRange("week")}>This Week</Button>
+            <Button size="sm" className="h-11" variant={range === "month" ? "default" : "outline"} onClick={() => setRange("month")}>This Month</Button>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

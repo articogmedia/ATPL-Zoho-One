@@ -10,7 +10,7 @@ import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
-import { BottomSheet, ConfirmDialog, EmptyState as SharedEmptyState, PageHeader, ResponsivePanel, StatusBadge, fieldClass } from "@/components/ui-bits";
+import { BottomSheet, ConfirmDialog, EmptyState as SharedEmptyState, PageHeader, ResponsivePanel, ResponsiveTabList, StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { addLeadAction, deleteLeadAction, fixAssignedLeadsAction, getAssignableUsersAction, getAssignmentWarningsAction, getLeadSourcesAction, getLeadTimelineAction, listFixableAssignedLeadsAction, reassignLeadAction, saveLeadUpdateAction, scheduleVisitAction, setLeadOutcomeAction, updateLeadAction, type DuplicateLeadResult } from "@/app/actions/crm";
 import {
@@ -494,14 +494,14 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
       <PageHeader
         title="Manage Leads"
         subtitle={<>Review enquiries, assign ownership, and track follow-ups.{(user.role === "Manager" || user.role === "Calling Team") && <span className="ml-2">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}</>}
-        action={<Button className="w-full sm:w-auto" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>}
+        action={<Button className="sm:w-auto" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>}
       />
       {user.role === "Manager" && fixableCount > 0 && <div className="flex justify-end"><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} /></div>}
 
       {user.role === "Manager" && fixableCount > 0 && <div className="hidden min-w-0 items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-800 max-[480px]:flex"><span className="min-w-0 truncate">{fixableCount} assigned lead{fixableCount === 1 ? "" : "s"} still in Fresh</span><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} compact /></div>}
 
       <div className="relative -mx-1">
-      <div ref={tabListRef} className="flex gap-2 overflow-x-auto p-1 max-[480px]:scrollbar-none" role="tablist" aria-label="Lead views">
+      <ResponsiveTabList ref={tabListRef} role="tablist" aria-label="Lead views">
         {availableTabs.map((item) => {
           const label = isExec
             ? item.id === "assigned" ? "Assigned"
@@ -522,7 +522,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           </button>
           );
         })}
-      </div>
+      </ResponsiveTabList>
       </div>
 
       <div className="flex flex-row gap-2">

@@ -11,9 +11,46 @@ export default defineConfig({
     headless: true,
   },
   projects: [
-    { name: "desktop-chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "Pixel 7", use: { ...devices["Pixel 7"] } },
-    { name: "iPhone 14", use: { ...devices["iPhone 14"] } },
+    {
+      name: "desktop-chromium",
+      testIgnore: "**/responsive-layout.spec.ts",
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "Pixel 7",
+      testIgnore: "**/responsive-layout.spec.ts",
+      use: { ...devices["Pixel 7"] },
+    },
+    {
+      name: "iPhone 14",
+      testIgnore: "**/responsive-layout.spec.ts",
+      use: { ...devices["iPhone 14"] },
+    },
+    {
+      name: "iPhone-390x844",
+      testMatch: "**/responsive-layout.spec.ts",
+      use: { ...devices["iPhone 14"], viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, serviceWorkers: "block" },
+    },
+    {
+      name: "Android-360x800",
+      testMatch: "**/responsive-layout.spec.ts",
+      use: { ...devices["Pixel 7"], viewport: { width: 360, height: 800 }, isMobile: true, hasTouch: true, serviceWorkers: "block" },
+    },
+    {
+      name: "Tablet-768x1024",
+      testMatch: "**/responsive-layout.spec.ts",
+      use: { ...devices["iPad Mini"], viewport: { width: 768, height: 1024 }, isMobile: true, hasTouch: true, serviceWorkers: "block" },
+    },
+    {
+      name: "Laptop-1366x768",
+      testMatch: "**/responsive-layout.spec.ts",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1366, height: 768 }, isMobile: false, hasTouch: false, serviceWorkers: "block" },
+    },
+    {
+      name: "Desktop-1920x1080",
+      testMatch: "**/responsive-layout.spec.ts",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1920, height: 1080 }, isMobile: false, hasTouch: false, serviceWorkers: "block" },
+    },
   ],
   webServer: {
     command: "npm run dev -- --hostname 127.0.0.1",

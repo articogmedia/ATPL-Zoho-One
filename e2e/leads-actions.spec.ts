@@ -140,10 +140,10 @@ test("Add Lead retries a dropped server-action request without duplicating the l
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).first().click();
   await page.getByLabel("Lead name *").fill(leadName);
   await page.getByLabel("Mobile number *").fill(phone);
-  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
 
   const row = page.getByTestId("mobile-lead-card").filter({ hasText: leadName });
   await expect(row).toBeVisible();
@@ -174,11 +174,11 @@ test("Add Lead shows an optimistic saving row while the server is slow", async (
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).first().click();
   await page.getByLabel("Lead name *").fill(leadName);
   await page.getByLabel("Mobile number *").fill(phone);
   const submittedAt = Date.now();
-  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
 
   const row = page.getByTestId("mobile-lead-card").filter({ hasText: leadName });
   await expect(row).toContainText("Saving…");
@@ -203,10 +203,10 @@ test("Add Lead resumes an interrupted request when the page becomes visible", as
     await route.continue();
   });
 
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).first().click();
   await page.getByLabel("Lead name *").fill(leadName);
   await page.getByLabel("Mobile number *").fill(phone);
-  await page.getByRole("button", { name: "Add Lead", exact: true }).click();
+  await page.getByRole("button", { name: "Add Lead", exact: true }).last().click();
   await expect(page.getByTestId("mobile-lead-card").filter({ hasText: leadName })).toContainText("Saving…");
   await page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
