@@ -1029,22 +1029,32 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
         <div className="hidden min-w-0 overflow-x-auto xl:block">
-          <table className="w-full min-w-[880px] table-fixed text-sm">
+          <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
-              <tr><th className="w-12 p-2">S.No</th><th className="p-2">Product</th><th className="w-16 p-2">Unit</th><th className="w-24 p-2">Qty</th><th className="w-28 p-2 text-right">Rate</th><th className="w-28 p-2 text-right">Discount</th><th className="w-24 p-2">GST %</th><th className="w-32 p-2 text-right">Amount</th><th className="w-12" /></tr>
+              <tr>
+                <th className="w-14 rounded-tl-lg px-3 py-3">S.No</th>
+                <th className="w-[30%] px-3 py-3">Product</th>
+                <th className="w-20 px-3 py-3">Unit</th>
+                <th className="w-28 px-3 py-3">Qty</th>
+                <th className="w-32 px-3 py-3 text-right">Rate</th>
+                <th className="w-32 px-3 py-3 text-right">Discount</th>
+                <th className="w-28 px-3 py-3">GST %</th>
+                <th className="w-36 px-3 py-3 text-right">Amount</th>
+                <th className="w-14 rounded-tr-lg" />
+              </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
-                <tr key={i} className="border-b">
-                  <td className="p-2">{i + 1}</td>
-                  <td className="p-2"><ProductPicker products={products} value={r.productId} onChange={(productId, product) => upd(i, { productId, taxRate: product?.gstRate ?? byId.get(productId)?.gstRate ?? GST_RATE })} onCreated={(product) => setProducts((current) => uniqueProducts([...current, product]))} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} /></td>
-                  <td className="p-2">{p?.unit}</td>
-                  <td className="p-2"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
-                  <td className="p-2 text-right">{formatINR(p?.price ?? 0)}</td>
-                  <td className="p-2"><input aria-label="Discount" type="number" min={0} className={fieldClass} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
-                  <td className="p-2"><TaxRateField label={`GST rate for item ${i + 1}`} value={r.taxRate ?? p?.gstRate ?? GST_RATE} onChange={(taxRate) => { if (taxRate !== undefined) upd(i, { taxRate }); }} /></td>
-                  <td className="p-2 text-right font-semibold">{formatINR((p?.price ?? 0) * r.qty - r.discount)}</td>
-                  <td className="p-2"><Button variant="ghost" size="icon" aria-label="Remove row" onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></td>
+                <tr key={i} className="border-b border-border/70 align-middle hover:bg-muted/30">
+                  <td className="px-3 py-3">{i + 1}</td>
+                  <td className="px-3 py-3"><ProductPicker products={products} value={r.productId} onChange={(productId, product) => upd(i, { productId, taxRate: product?.gstRate ?? byId.get(productId)?.gstRate ?? GST_RATE })} onCreated={(product) => setProducts((current) => uniqueProducts([...current, product]))} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} /></td>
+                  <td className="px-3 py-3">{p?.unit}</td>
+                  <td className="px-3 py-3"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
+                  <td className="px-3 py-3 text-right whitespace-nowrap">{formatINR(p?.price ?? 0)}</td>
+                  <td className="px-3 py-3"><input aria-label="Discount" type="number" min={0} className={fieldClass} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
+                  <td className="px-3 py-3"><TaxRateField compact label={`GST rate for item ${i + 1}`} value={r.taxRate ?? p?.gstRate ?? GST_RATE} onChange={(taxRate) => { if (taxRate !== undefined) upd(i, { taxRate }); }} /></td>
+                  <td className="px-3 py-3 text-right font-semibold whitespace-nowrap">{formatINR((p?.price ?? 0) * r.qty - r.discount)}</td>
+                  <td className="px-3 py-3"><Button variant="ghost" size="icon" aria-label="Remove row" onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></td>
                 </tr>); })}
             </tbody>
           </table>
@@ -1325,12 +1335,13 @@ function ProductPicker({ products, value, onChange, onCreated, label, isManager,
 
 function Totals({ t }: { t: QuoteGstBreakdown }) {
   return (
-    <dl className="ml-auto max-w-sm space-y-1 rounded-lg bg-secondary p-4 text-secondary-foreground">
+    <dl className="ml-auto w-full max-w-md space-y-2 rounded-xl border border-border bg-card p-4 text-foreground shadow-sm sm:p-5">
+      <div className="mb-3 border-b border-border pb-3"><dt className="text-sm font-semibold text-foreground">Quotation summary</dt><dd className="mt-1 text-xs text-muted-foreground">Tax and pricing breakdown</dd></div>
       <div className="flex justify-between"><dt>Subtotal</dt><dd>{formatINR(t.subtotal)}</dd></div>
       {t.discount > 0 && <div className="flex justify-between"><dt>Discount</dt><dd>-{formatINR(t.discount)}</dd></div>}
       {(t.gstByRate ?? []).map((group) => <div key={group.rate} className="flex justify-between"><dt>GST @ {formatTaxRate(group.rate)}%</dt><dd>{formatINR(group.amount)}</dd></div>)}
       {(t.extraCharges ?? []).map((charge, index) => <div key={`${charge.label}-${index}`} className="flex justify-between"><dt>{charge.label}{charge.taxRate !== undefined ? ` (+ GST ${formatTaxRate(charge.taxRate)}%)` : ""}</dt><dd>{formatINR(charge.amount)}</dd></div>)}
-      <div className="flex justify-between text-lg font-bold"><dt>Grand Total</dt><dd>{formatINR(t.total)}</dd></div>
+      <div className="mt-3 flex items-center justify-between gap-4 rounded-lg bg-primary/8 px-3 py-3 text-base font-bold text-foreground"><dt>Grand Total</dt><dd className="text-lg tabular-nums">{formatINR(t.total)}</dd></div>
     </dl>
   );
 }
@@ -1338,18 +1349,19 @@ function Totals({ t }: { t: QuoteGstBreakdown }) {
 const GST_RATE_OPTIONS = [0, 5, 12, 18, 28] as const;
 const formatTaxRate = (rate: number) => String(Number((rate * 100).toFixed(2)));
 
-function TaxRateField({ label, value, onChange, allowNoTax = false }: {
+function TaxRateField({ label, value, onChange, allowNoTax = false, compact = false }: {
   label: string;
   value: number | undefined;
   onChange: (rate: number | undefined) => void;
   allowNoTax?: boolean;
+  compact?: boolean;
 }) {
   const isPreset = value === undefined ? allowNoTax : GST_RATE_OPTIONS.some((rate) => rate / 100 === value);
-  return <label className="min-w-0 space-y-1">
-    <span className="block text-xs font-medium text-muted-foreground">{label}</span>
+  return <label className="block min-w-0 space-y-1">
+    <span className={compact ? "sr-only" : "block text-xs font-medium text-muted-foreground"}>{label}</span>
     <select
       aria-label={label}
-      className={`${fieldClass} min-h-11`}
+      className={`${fieldClass} min-h-11 w-full min-w-[5rem] text-sm`}
       value={value === undefined && allowNoTax ? "none" : isPreset ? String((value ?? GST_RATE) * 100) : "custom"}
       onChange={(event) => {
         if (event.target.value === "none") onChange(undefined);
