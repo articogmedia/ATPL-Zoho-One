@@ -73,7 +73,7 @@ export const mockRepository: CrmRepository = {
       assignedToId: selfAssigned ? actor.id : assignee?.id,
       ownerId: selfAssigned ? actor.id : assignee?.id,
       source: selfAssigned ? "Direct Call" : input.source,
-      createdOn: today(), address: "", touchedBy: [actor.name],
+      createdOn: today(), createdAt: new Date().toISOString(), address: "", touchedBy: [actor.name],
     };
     state.leads.unshift(lead);
     note(lead.id, actor.name, `Lead created from ${input.source}`);
@@ -145,9 +145,33 @@ export const mockRepository: CrmRepository = {
     note(id, "Portal", `${title}: ${content}`);
   },
   async getLeadTimeline(id): Promise<LeadTimelineItem[]> {
-    return (state.history[id] ?? []).map((item) => ({
-      date: item.date, user: item.user, kind: "Note" as const, title: "Note", detail: item.note,
-    }));
+    const timeline: LeadTimelineItem[] = [
+      ...(state.history[id] ?? []).map((item) => ({
+        date: item.date, user: item.user, kind: "Note" as const, title: "Note", detail: item.note,
+      })),
+      ...state.calls.filter((call) => call.leadId === id).map((call) => ({
+        date: call.date.slice(0, 10),
+        user: MOCK_USERS.find((member) => member.id === call.ownerId)?.name ?? "",
+        kind: "Call" as const,
+        title: call.outcome ?? "Call",
+        detail: "",
+      })),
+      ...state.quotes.filter((quote) => quote.leadId === id).map((quote) => ({
+        date: quote.date,
+        user: quote.executive,
+        kind: "Quote" as const,
+        title: `Quotation ${quote.offerNo}`,
+        detail: `${quote.status ?? "Draft"} · Rs. ${quote.total.toFixed(2)}`,
+      })),
+      ...state.visits.filter((visit) => visit.leadId === id && visit.isVisit).map((visit) => ({
+        date: visit.date,
+        user: visit.executive,
+        kind: "Visit" as const,
+        title: `${visit.type} · ${visit.status}`,
+        detail: [visit.address, visit.nextAction].filter(Boolean).join(" · "),
+      })),
+    ];
+    return timeline.sort((left, right) => right.date.localeCompare(left.date));
   },
   async logCall(input: LogCallInput, actor) {
     const lead = state.leads.find((item) => item.id === input.leadId);

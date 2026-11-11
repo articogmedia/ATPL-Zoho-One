@@ -1,6 +1,25 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+test.beforeEach(async ({ page }) => {
+  const pdf = "%PDF-1.4\nmock stored quotation";
+  await page.route("**/api/quotations/share", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ url: "https://blob.example/quotation.pdf" }),
+  }));
+  await page.route("https://blob.example/quotation.pdf", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/pdf",
+    body: pdf,
+  }));
+  await page.route("https://public.blob.vercel-storage.com/**", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/pdf",
+    body: pdf,
+  }));
+});
+
 for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 }]) {
   test(`product picker and preview work at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
     const mobileViewport = viewport.width < 768;

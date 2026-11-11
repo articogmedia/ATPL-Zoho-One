@@ -321,6 +321,38 @@ export async function reassignLeadAction(input: unknown) {
   }, undefined, { input, action: "reassign-lead", section: "leads" });
 }
 
+const bulkReassignLeadsSchema = z.object({
+  ids: z.array(id).min(1).max(50).refine((ids) => new Set(ids).size === ids.length, "Choose each lead only once."),
+  assignedToId: id,
+});
+
+export async function bulkReassignLeadsAction(input: unknown) {
+  return run(async () => {
+    const user = await requireActionUser("leads");
+    if (user.role !== "Manager") throw new ForbiddenError("Only managers can bulk assign leads.");
+    const { ids, assignedToId } = bulkReassignLeadsSchema.parse(input);
+    const repository = crm();
+    const assignee = (await repository.listAssignableUsers()).find((member) => String(member.id) === assignedToId);
+    if (!assignee) throw new ForbiddenError("Choose an active sales executive.");
+
+    const assigned: { id: string; owner: string; ownerId: string; status: string; taskCreated: boolean; warningCheckId: string }[] = [];
+    const failed: { id: string; error: string }[] = [];
+    for (const leadId of ids) {
+      try {
+        const result = await repository.assignLead(leadId, assignedToId, user);
+        assigned.push({ id: leadId, ...result });
+      } catch (error) {
+        failed.push({
+          id: leadId,
+          error: reportActionFailure("bulk lead assignment", error, "Could not assign this lead."),
+        });
+      }
+    }
+    if (assigned.length) scheduleCrmEffects("bulk lead reassign", ["leads", "visits"], LEAD_MUTATION_PATHS);
+    return { assigned, failed };
+  }, undefined, { input, action: "bulk-reassign-leads", section: "leads" });
+}
+
 export async function getAssignmentWarningsAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("leads");

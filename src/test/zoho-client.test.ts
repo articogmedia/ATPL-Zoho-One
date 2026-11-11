@@ -431,12 +431,52 @@ describe("Zoho lead actions", () => {
       requireActionUser: vi.fn(async () => user),
     }));
     vi.doMock("@/lib/crm", () => ({ crm: vi.fn() }));
-    const { reassignLeadAction, deleteLeadAction } = await import("@/app/actions/crm");
+    const { bulkReassignLeadsAction, reassignLeadAction, deleteLeadAction } = await import("@/app/actions/crm");
     await expect(reassignLeadAction({ id: "lead-1", assignedToId: "manager-1" })).resolves.toMatchObject({
       ok: false, error: "Only managers can reassign leads.",
     });
+    await expect(bulkReassignLeadsAction({ ids: ["lead-1"], assignedToId: "exec-1" })).resolves.toMatchObject({
+      ok: false, error: "Only managers can bulk assign leads.",
+    });
     await expect(deleteLeadAction({ id: "lead-1" })).resolves.toMatchObject({
       ok: false, error: "Only managers can delete leads.",
+    });
+  });
+
+  it("bulk assigns leads and reports individual assignment failures", async () => {
+    const manager = { id: "manager-1", name: "Manager", role: "Manager" as const };
+    const assignLead = vi.fn(async (leadId: string) => {
+      if (leadId === "lead-2") throw new Error("Assignment unavailable");
+      return {
+        owner: "Pavan", ownerId: "exec-1", status: "Assigned to Sales",
+        taskCreated: false, warningCheckId: "",
+      };
+    });
+    vi.doMock("@/lib/auth/guard", () => ({
+      ForbiddenError: class extends Error {},
+      requireActionUser: vi.fn(async () => manager),
+    }));
+    vi.doMock("@/lib/crm", () => ({
+      crm: vi.fn(() => ({
+        listAssignableUsers: vi.fn(async () => [{ id: "exec-1", name: "Pavan", role: "Sales Executive" }]),
+        assignLead,
+      })),
+    }));
+    const { bulkReassignLeadsAction } = await import("@/app/actions/crm");
+    const reportError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const result = await bulkReassignLeadsAction({ ids: ["lead-1", "lead-2"], assignedToId: "exec-1" });
+    reportError.mockRestore();
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        assigned: [{ id: "lead-1", owner: "Pavan", ownerId: "exec-1", status: "Assigned to Sales" }],
+        failed: [{ id: "lead-2", error: expect.stringContaining("Could not assign this lead.") }],
+      },
+    });
+    expect(assignLead).toHaveBeenCalledTimes(2);
+    await expect(bulkReassignLeadsAction({ ids: ["lead-1", "lead-1"], assignedToId: "exec-1" })).resolves.toMatchObject({
+      ok: false, error: "Choose each lead only once.",
     });
   });
 });

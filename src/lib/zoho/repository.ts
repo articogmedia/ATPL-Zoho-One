@@ -1009,7 +1009,7 @@ export const zohoRepository: CrmRepository = {
       id, name: input.name.trim(), company: input.company.trim() || input.name.trim(), phone: mobile,
       area: input.area.trim(), source: input.source, status: owner ? ASSIGNED_STAGE : "Fresh Lead",
       assignedTo: owner?.name ?? null, assignedToId: owner?.id, ownerId: owner?.id,
-      remarks: input.remarks.trim(), createdOn: todayIST(), address: "", touchedBy: [actor.name],
+      remarks: input.remarks.trim(), createdOn: todayIST(), createdAt: new Date().toISOString(), address: "", touchedBy: [actor.name],
     };
     scheduleSideEffects("lead creation", secondaryWrites, () => markStale("leads", "users", "visits"));
     return createdLead;
@@ -1281,17 +1281,36 @@ export const zohoRepository: CrmRepository = {
     const relatedQuery = (fields: string[]) => ({
       query: { fields: fields.join(","), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" },
     });
-    const [notes, calls, tasks, events] = await Promise.all([
+    const [notes, calls, tasks, events, quotes, visits] = await Promise.all([
       zoho<{ data?: ZNote[] }>("GET", `/Leads/${id}/Notes`, relatedQuery(NOTE_FIELDS)),
       zoho<{ data?: ZCall[] }>("GET", `/Leads/${id}/Calls`, relatedQuery(CALL_FIELDS)),
       zoho<{ data?: ZTask[] }>("GET", `/Leads/${id}/Tasks`, relatedQuery(TASK_FIELDS)),
       zoho<{ data?: ZEvent[] }>("GET", `/Leads/${id}/Events`, relatedQuery(EVENT_FIELDS)),
+      this.listQuotes(),
+      this.listVisits(),
     ]);
+    const leadVisits = visits.filter((visit) => visit.isVisit && visit.leadId === id);
+    const visitIds = new Set(leadVisits.map((visit) => visit.id));
+    const visitKeys = new Set(leadVisits.map((visit) => `${visit.leadId}:${visit.date}`));
     const timeline: LeadTimelineItem[] = [
       ...(notes?.data ?? []).map((n) => ({ date: n.Created_Time?.slice(0, 10) ?? "", user: n.Owner?.name ?? n.Created_By?.name ?? "", kind: "Note" as const, title: n.Note_Title ?? "Note", detail: n.Note_Content ?? "" })),
       ...(calls?.data ?? []).map((c) => ({ date: c.Call_Start_Time?.slice(0, 10) ?? "", user: c.Owner?.name ?? "", kind: "Call" as const, title: String(c[FIELD.call.result] ?? c.Subject ?? "Call"), detail: String(c.Subject ?? "") })),
-      ...(tasks?.data ?? []).map((t) => ({ date: t.Due_Date ?? "", user: t.Owner?.name ?? "", kind: "Task" as const, title: String(t.Subject ?? "Task"), detail: t.Description ?? "" })),
+      ...(tasks?.data ?? []).filter((task) => {
+        const relatedLeadId = (task.What_Id ?? task.Who_Id)?.id ?? "";
+        const isVisitTask = task[FIELD.task.isSiteVisit] === true;
+        return !visitIds.has(String(task.id)) &&
+          !(isVisitTask && visitKeys.has(`${relatedLeadId}:${task.Due_Date ?? ""}`));
+      }).map((t) => ({ date: t.Due_Date ?? "", user: t.Owner?.name ?? "", kind: "Task" as const, title: String(t.Subject ?? "Task"), detail: t.Description ?? "" })),
       ...(events?.data ?? []).map((event) => ({ date: (event.Start_DateTime ?? event.Created_Time)?.slice(0, 10) ?? "", user: event.Owner?.name ?? "", kind: "Event" as const, title: event.Event_Title ?? "Event", detail: event.Description ?? "" })),
+      ...quotes.filter((quote) => quote.leadId === id).map((quote) => ({
+        date: quote.date, user: quote.executive, kind: "Quote" as const,
+        title: `Quotation ${quote.offerNo}`, detail: `${quote.status ?? "Draft"} · Rs. ${quote.total.toFixed(2)}`,
+      })),
+      ...visits.filter((visit) => visit.leadId === id && visit.isVisit).map((visit) => ({
+        date: visit.date, user: visit.executive, kind: "Visit" as const,
+        title: `${visit.type} · ${visit.status}`,
+        detail: [visit.address, visit.nextAction].filter(Boolean).join(" · "),
+      })),
     ];
     return timeline.sort((a, b) => b.date.localeCompare(a.date));
   },

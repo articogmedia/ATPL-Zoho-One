@@ -141,7 +141,7 @@ export const ResponsivePanel = forwardRef<HTMLElement, HTMLAttributes<HTMLElemen
   { className, ...props },
   ref,
 ) {
-  return <aside ref={ref} className={cn("absolute bottom-0 left-0 flex h-[92dvh] w-full flex-col rounded-t-2xl bg-card shadow-2xl focus-visible:outline-none md:bottom-auto md:left-auto md:right-0 md:top-0 md:h-full md:max-w-lg md:rounded-none", className)} {...props} />;
+  return <aside ref={ref} className={cn("absolute bottom-0 left-0 flex h-[92dvh] w-full flex-col rounded-t-2xl bg-card shadow-2xl focus-visible:outline-none lg:bottom-auto lg:left-auto lg:right-0 lg:top-0 lg:h-full lg:max-w-lg lg:rounded-none", className)} {...props} />;
 });
 
 export function BottomSheet({ className, ...props }: HTMLAttributes<HTMLElement>) {
