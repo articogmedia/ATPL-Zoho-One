@@ -60,11 +60,16 @@ export default defineConfig({
     env: {
       AUTH_MODE: "demo",
       ALLOW_DEMO_LOGIN: "true",
+      ALLOW_DEMO_LOGIN_IN_PRODUCTION: "true",
       DATA_SOURCE: "mock",
+      ZOHO_SANDBOX: "true",
       SESSION_SECRET: "playwright-quotation-test-session-secret-32chars",
       ATPL_CALLING_USERNAME: "calling",
       ATPL_CALLING_PASSWORD: "playwright-calling-password",
       ATPL_CALLING_NAME: "Calling Team",
+      ATPL_RESHMA_PASSWORD: "playwright-reshma-password",
+      ATPL_PAVAN_PASSWORD: "playwright-pavan-password",
+      ATPL_SAIKIRAN_PASSWORD: "playwright-saikiran-password",
     },
   },
 });

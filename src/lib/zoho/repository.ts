@@ -1972,7 +1972,19 @@ export const zohoRepository: CrmRepository = {
         FIELD.invoice.invoiceNo, FIELD.invoice.customerGstin,
         FIELD.invoice.sourceQuoteId, FIELD.invoice.snapshot,
       ], env().ZOHO_MAX_LEADS);
-      return rows.map(mapZohoInvoice);
+      // One bad/foreign invoice record (no ATPL snapshot) must not break the whole page.
+      const invoices: ReturnType<typeof mapZohoInvoice>[] = [];
+      for (const row of rows) {
+        try {
+          invoices.push(mapZohoInvoice(row));
+        } catch (error) {
+          console.warn("[zoho] skipped invoice without a valid ATPL snapshot", {
+            id: String(row.id),
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return invoices;
     }, { keepStale: true });
   },
 

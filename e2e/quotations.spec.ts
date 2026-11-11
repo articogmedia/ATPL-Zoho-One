@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { loginAs } from "./login";
 import { readFile } from "node:fs/promises";
 
 test.beforeEach(async ({ page }) => {
@@ -25,8 +26,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     const mobileViewport = viewport.width < 768;
     await page.setViewportSize(viewport);
     await page.goto("/login");
-    await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-    await page.waitForURL(/\/home$/);
+    await loginAs(page, "Reshma", "Manager");
     await page.goto("/quotations");
     await expect(page.getByRole("heading", { name: "Create Quotation" })).toBeVisible();
     const savedQuotesButton = page.getByRole("button", { name: /Saved quotations/ });
@@ -150,8 +150,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
 test("virtualized product picker scrolls to and selects the last product on desktop and mobile", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
   await page.locator("#quote-step-customer ul button").first().click();
 
@@ -183,8 +182,7 @@ test("manager can add and select a product from the quotation picker", async ({ 
   const productCode = `PW${suffix}`.slice(0, 60);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
   await page.locator("#quote-step-customer ul button").first().click();
   await page.getByRole("button", { name: "Item 1 product" }).click();
@@ -208,8 +206,7 @@ test("manager can add and select a product from the quotation picker", async ({ 
 test("quotation preview totals mixed item GST rates and extra-charge GST", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
   await page.locator("#quote-step-customer ul button").first().click();
 
@@ -242,8 +239,7 @@ test("saved quotation keeps customer details and can download and share its PDF"
   await page.setViewportSize({ width: 1366, height: 768 });
   const mobileViewport = page.viewportSize()?.width === 390;
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
   await page.getByRole("button", { name: /Saved quotations/ }).click();
   const savedDialog = page.getByRole("dialog", { name: "Saved quotations" });
@@ -304,8 +300,7 @@ test("saved quotation keeps customer details and can download and share its PDF"
 test("editing a saved quotation revises the same quote and regenerates its PDF", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
   const savedButton = page.getByRole("button", { name: /Saved quotations/ });
   const countBefore = Number((await savedButton.textContent())?.match(/\((\d+)\)/)?.[1]);
@@ -370,8 +365,7 @@ test("editing a saved quotation revises the same quote and regenerates its PDF",
 test("quotation preview and saved quotation open an editable, prefilled email composer", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
   await page.locator("#quote-step-customer ul button").filter({ hasText: "Srinivas Rao" }).click();
   await page.getByRole("button", { name: "Item 1 product" }).click();
@@ -402,8 +396,7 @@ test("quotation preview and saved quotation open an editable, prefilled email co
 
 test("the newest five saved quotes work at 360px and 1280px without duplicate offer numbers", async ({ page }) => {
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   const whatsappUrls: string[] = [];
   await page.context().route("https://wa.me/**", async (route) => {
     whatsappUrls.push(route.request().url());
@@ -490,8 +483,7 @@ test("new quotation customer can be cancelled or created and selected", async ({
   const customerName = `E2E Quotation Customer ${mobile.slice(-4)}`;
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
 
   await page.getByRole("button", { name: "New customer" }).click();
@@ -529,8 +521,7 @@ test("quotation wizard and preview fit target widths", async ({ page }, testInfo
   test.skip(testInfo.project.name !== "desktop-chromium", "Runs one screenshot matrix regardless of device project.");
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto("/login");
-  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
-  await page.waitForURL(/\/home$/);
+  await loginAs(page, "Reshma", "Manager");
   await page.goto("/quotations");
 
   const widths = [360, 390, 430, 768, 1280];
