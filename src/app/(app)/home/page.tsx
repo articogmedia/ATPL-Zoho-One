@@ -13,6 +13,8 @@ import { ManagerPasswordReset } from "@/components/ManagerPasswordReset";
 import { STATIC_USERS } from "@/lib/auth/users";
 import { PageHeader, Skeleton } from "@/components/ui-bits";
 import { managerMonthSummary, todaySummary } from "@/lib/home-dashboard";
+import { HomeCountFailure } from "./HomeCountFailure";
+import { newErrorReference } from "@/lib/crm-action-errors";
 
 export const metadata = { title: "Home" };
 export const dynamic = "force-dynamic";
@@ -32,11 +34,14 @@ async function HomeCount({ section, user }: { section: Section; user: User }) {
     if (section === "visits") return <Count>{visibleFor(user, await withPageTimeout(repo.listVisits())).filter((visit) => !visit.done).length}</Count>;
     return null;
   } catch (error) {
+    const reference = newErrorReference();
     console.error("[home] count unavailable", {
+      reference,
       section,
       message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
-    return <PageLoadError message={`The ${section} count is temporarily unavailable.`} />;
+    return <HomeCountFailure />;
   }
 }
 

@@ -285,6 +285,20 @@ test("saved quotation keeps customer details and can download and share its PDF"
     await expect(offer.getByText("Sent", { exact: true })).toBeVisible();
   }
   expect(whatsappUrls).toHaveLength(1);
+
+  await page.getByRole("button", { name: "Email" }).click();
+  const emailDialog = page.getByRole("dialog", { name: "Email quotation" });
+  await expect(emailDialog).toBeVisible();
+  const manualPdfDownload = page.waitForEvent("download");
+  const directPdfResponse = page.waitForResponse((response) =>
+    response.url().includes("/api/quotations/pdf") && response.request().method() === "POST",
+  );
+  await emailDialog.getByRole("button", { name: "Send email" }).click();
+  const [pdfResponse, emailDownload] = await Promise.all([directPdfResponse, manualPdfDownload]);
+  expect(pdfResponse.ok()).toBe(true);
+  expect(emailDownload.suggestedFilename()).toMatch(/^offer-.*\.pdf$/);
+  await expect(page.getByText(/PDF storage is unavailable\. The PDF was downloaded/)).toBeVisible();
+  await expect(emailDialog).not.toBeVisible();
 });
 
 test("editing a saved quotation revises the same quote and regenerates its PDF", async ({ page }) => {

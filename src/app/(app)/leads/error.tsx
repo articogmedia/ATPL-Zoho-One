@@ -1,6 +1,6 @@
 "use client";
-import { Button } from "@/components/ui/button";
+import { AppErrorState } from "@/components/AppErrorState";
+
 export default function Error({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
-  const digest = error.digest;
-  return <div className="rounded-xl border bg-card p-6 text-center"><h2 className="font-semibold">Leads could not load</h2><p className="mt-2 text-sm text-muted-foreground">Please try again. Your Zoho leads are unchanged.</p>{digest ? <p className="mt-2 text-xs text-muted-foreground">Reference: {digest}</p> : null}<Button className="mt-4" onClick={reset}>Try again</Button></div>;
+  return <AppErrorState title="Leads could not load" message="Please try again. Your Zoho leads are unchanged." error={error} reset={reset} />;
 }

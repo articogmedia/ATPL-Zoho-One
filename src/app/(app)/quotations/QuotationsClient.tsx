@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
-import { EmptyState, PageHeader, StatusBadge, fieldClass } from "@/components/ui-bits";
+import { EmptyState, PageHeader, ResponsiveTable, StatusBadge, fieldClass } from "@/components/ui-bits";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
 import { addLeadAction, createProductAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, getQuotationPdfUrlAction, markQuotationSentAction, refreshProductsAction, sendQuotationEmailAction, setLeadOutcomeAction, updateQuoteAction } from "@/app/actions/crm";
@@ -226,6 +226,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   const [savedOpen, setSavedOpen] = useState(false);
   const savedQuotesLoaded = useRef(false);
   const [savedSearch, setSavedSearch] = useState("");
+  const [savedStatusFilter, setSavedStatusFilter] = useState("All");
+  const [savedDateFrom, setSavedDateFrom] = useState("");
+  const [savedDateTo, setSavedDateTo] = useState("");
   const [loadingQuoteId, setLoadingQuoteId] = useState<string | null>(null);
   const [readOnlyQuote, setReadOnlyQuote] = useState<Quotation | null>(null);
   const [emailSavedQuoteId, setEmailSavedQuoteId] = useState<string | null>(null);
@@ -625,12 +628,14 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   const emailSavedQuote = async (quoteId: string) => {
     if (loadingQuoteId) return;
     setLoadingQuoteId(quoteId);
+    let quote: Quotation | null = null;
     try {
       const result = await getQuoteDetailAction(quoteId);
       if (!result.ok || !result.data) {
         toast.error(result.ok ? "Could not load quotation details." : result.error);
         return;
       }
+      quote = result.data;
       let url = pdfUrls[quoteId];
       if (!url) {
         const pdfResult = await getQuotationPdfUrlAction(quoteId);
@@ -643,7 +648,15 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       setEmailSavedQuoteId(quoteId);
       setSavedOpen(false);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not prepare the quotation email.");
+      const message = error instanceof Error ? error.message : "Could not prepare the quotation email.";
+      if (quote && message.includes("BLOB_READ_WRITE_TOKEN")) {
+        setReadOnlyQuote(quote);
+        setReadOnlyPdfUrl("");
+        setEmailSavedQuoteId(quoteId);
+        setSavedOpen(false);
+      } else {
+        toast.error(message);
+      }
     } finally {
       setLoadingQuoteId(null);
     }
@@ -754,7 +767,12 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
 
   const savedMatches = [...savedQuotes]
     .sort((a, b) => b.date.localeCompare(a.date))
-    .filter((quote) => `${quote.offerNo} ${quote.customer}`.toLowerCase().includes(savedSearch.trim().toLowerCase()));
+    .filter((quote) =>
+      `${quote.offerNo} ${quote.customer}`.toLowerCase().includes(savedSearch.trim().toLowerCase()) &&
+      (savedStatusFilter === "All" || (quote.status ?? "Draft") === savedStatusFilter) &&
+      (!savedDateFrom || quote.date >= savedDateFrom) &&
+      (!savedDateTo || quote.date <= savedDateTo),
+    );
 
   const savedDialog = savedOpen && <div className="fixed inset-0 z-50 bg-black/40" onMouseDown={(event) => {
     if (event.target === event.currentTarget) setSavedOpen(false);
@@ -771,7 +789,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         <h2 id="saved-quotes-title" className="text-lg font-semibold">Saved quotations</h2>
         <Button type="button" variant="ghost" size="icon" aria-label="Close saved quotations" onClick={() => setSavedOpen(false)}><X /></Button>
       </header>
-      <div className="shrink-0 p-4">
+      <div className="shrink-0 space-y-3 border-b border-border p-4">
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-muted-foreground" />
           <input
@@ -784,14 +802,37 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
             aria-label="Search saved quotations"
           />
         </div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <SelectField aria-label="Filter quotations by status" className="min-w-0" value={savedStatusFilter} onValueChange={setSavedStatusFilter} options={[
+            { value: "All", label: "All statuses" },
+            ...[...new Set(savedQuotes.map((quote) => quote.status ?? "Draft"))].map((status) => ({ value: status, label: status })),
+          ]} />
+          <input aria-label="Quotations from date" type="date" className={fieldClass} value={savedDateFrom} onChange={(event) => setSavedDateFrom(event.target.value)} />
+          <input aria-label="Quotations to date" type="date" className={fieldClass} value={savedDateTo} onChange={(event) => setSavedDateTo(event.target.value)} />
+        </div>
       </div>
       {loadingQuoteId && <p role="status" aria-live="polite" className="shrink-0 px-4 pb-3 text-sm text-muted-foreground">Opening saved quotation PDF…</p>}
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4 pt-0">
         {loadingMoreQuotes && !savedQuotes.length ? <p className="text-sm text-muted-foreground">Loading quotations…</p>
           : !savedQuotes.length ? <EmptyState message="No quotations yet." className="py-5" />
           : !savedMatches.length ? <p className="text-sm text-muted-foreground">No matches</p>
-          : savedMatches.map((quote) => (
-            <article key={quote.id} className="rounded-lg border border-border bg-card p-3">
+          : <ResponsiveTable
+            label="Saved quotations"
+            rows={savedMatches}
+            getKey={(quote) => quote.id}
+            columns={[
+              { key: "customer", header: "Customer", render: (quote) => <span className="font-semibold">{quote.customer}</span> },
+              { key: "offer", header: "Offer", render: (quote) => <> {quote.offerNo}{quote.revision ? `/R${quote.revision}` : ""}</> },
+              { key: "date", header: "Date", render: (quote) => quote.date },
+              { key: "total", header: "Total", align: "right", render: (quote) => formatINR(quote.total) },
+              { key: "status", header: "Status", render: (quote) => <StatusBadge status={quote.status ?? "Draft"} /> },
+              { key: "actions", header: "Actions", align: "right", render: (quote) => <div className="flex justify-end gap-1 whitespace-nowrap">
+                <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null || (!isManager && ["sent", "won"].includes((quote.status ?? "").trim().toLowerCase()))} title={!isManager && ["sent", "won"].includes((quote.status ?? "").trim().toLowerCase()) ? "Only managers can edit Sent or Won quotations." : undefined} onClick={() => void editSavedQuote(quote.id)}>Edit</Button>
+                <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null} onClick={() => void emailSavedQuote(quote.id)}>{loadingQuoteId === quote.id ? "Loading…" : <><Mail className="h-4 w-4" />Email</>}</Button>
+                <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null} onClick={() => void viewSavedQuote(quote.id)}>{loadingQuoteId === quote.id ? "Loading…" : "View"}</Button>
+              </div> },
+            ]}
+            renderCard={(quote) => <article className="rounded-lg border border-border bg-card p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate font-semibold">{quote.customer}</div>
@@ -802,25 +843,16 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
                   <StatusBadge status={quote.status ?? "Draft"} />
                 </div>
               </div>
-              <div className="mt-3 flex justify-end gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-10"
-                  disabled={loadingQuoteId !== null || (!isManager && ["sent", "won"].includes((quote.status ?? "").trim().toLowerCase()))}
-                  title={!isManager && ["sent", "won"].includes((quote.status ?? "").trim().toLowerCase()) ? "Only managers can edit Sent or Won quotations." : undefined}
-                  onClick={() => void editSavedQuote(quote.id)}
-                >Edit</Button>
-                <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null} onClick={() => void emailSavedQuote(quote.id)}>
-                  {loadingQuoteId === quote.id ? "Loading…" : <><Mail className="h-4 w-4" />Email</>}
-                </Button>
-                <Button type="button" size="sm" variant="outline" className="h-10" disabled={loadingQuoteId !== null} onClick={() => void viewSavedQuote(quote.id)}>
-                  {loadingQuoteId === quote.id ? "Loading…" : "View"}
-                </Button>
-              </div>
-            </article>
-          ))}
+              <details className="relative mt-3">
+                <summary className="flex h-11 cursor-pointer list-none items-center justify-center rounded-lg border border-border text-sm font-medium">Actions</summary>
+                <div className="absolute right-0 z-10 mt-1 flex min-w-36 flex-col gap-1 rounded-lg border border-border bg-card p-2 shadow-lg">
+                  <Button type="button" variant="ghost" className="justify-start" disabled={loadingQuoteId !== null || (!isManager && ["sent", "won"].includes((quote.status ?? "").trim().toLowerCase()))} onClick={() => void editSavedQuote(quote.id)}>Edit</Button>
+                  <Button type="button" variant="ghost" className="justify-start" disabled={loadingQuoteId !== null} onClick={() => void emailSavedQuote(quote.id)}>Email</Button>
+                  <Button type="button" variant="ghost" className="justify-start" disabled={loadingQuoteId !== null} onClick={() => void viewSavedQuote(quote.id)}>View</Button>
+                </div>
+              </details>
+            </article>}
+          />}
         {savedQuotesHasMore && <Button type="button" variant="outline" className="w-full" disabled={loadingMoreQuotes} onClick={loadMoreSavedQuotes}>
           {loadingMoreQuotes && <LoaderCircle className="h-4 w-4 animate-spin" />}Load more quotations
         </Button>}
@@ -910,7 +942,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   const setQty = (i: number, v: string) => upd(i, { qty: Math.min(10000, Math.max(1, Math.floor(Number(v)) || 1)) });
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i));
   return (
-    <div className={`min-w-0 space-y-6 ${lead && productsValid ? "pb-[calc(14rem+env(safe-area-inset-bottom))] sm:pb-6" : "pb-6"}`}>
+    <div className={`min-w-0 space-y-6 ${lead && productsValid ? "pb-[calc(14rem+env(safe-area-inset-bottom))] lg:pb-6" : "pb-6"}`}>
       <PageHeader title="Create Quotation" action={<Button ref={savedButtonRef} variant="outline" className="h-11 w-full sm:w-auto" onClick={openSavedQuotes}>
           <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
         </Button>} mobileFloating={false} />
@@ -993,8 +1025,10 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
           {productsValid && <Button type="button" variant="outline" className="shrink-0" disabled={pending} onClick={previewOffer}>Retry save</Button>}
         </div>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
-        <div className="hidden min-w-0 lg:block">
-          <table className="w-full table-fixed text-sm">
+        <div className="grid gap-4 lg:grid-cols-[minmax(280px,1fr)_minmax(280px,320px)]">
+        <div className="min-w-0 space-y-4">
+        <div className="hidden min-w-0 overflow-x-auto lg:block">
+          <table className="w-full min-w-[1000px] table-fixed text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
               <tr><th className="w-12 p-2">S.No</th><th className="p-2">Product</th><th className="w-20 p-2">Unit</th><th className="w-28 p-2">Qty</th><th className="w-32 p-2 text-right">Rate</th><th className="w-36 p-2 text-right">Discount</th><th className="w-24 p-2">GST %</th><th className="w-36 p-2 text-right">Amount</th><th className="w-12" /></tr>
             </thead>
@@ -1052,17 +1086,21 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
             </div>
           ))}
         </section>
-        <div className="hidden sm:block"><Totals t={t} /></div>
-        <div className={`fixed inset-x-0 bottom-[calc(8rem+env(safe-area-inset-bottom))] z-20 p-3 sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
+        </div>
+        <aside className="hidden lg:block">
+          <div className="sticky top-24"><Totals t={t} /></div>
+        </aside>
+        </div>
+        <div className={`fixed inset-x-0 bottom-[calc(8rem+env(safe-area-inset-bottom))] z-20 p-3 lg:hidden ${lead && productsValid ? "" : "hidden"}`}>
           <div className="mx-auto max-w-md"><Totals t={t} /></div>
         </div>
-        <div className={`fixed inset-x-0 bottom-16 z-20 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-sm sm:hidden ${lead && productsValid ? "" : "hidden"}`}>
+        <div className={`fixed inset-x-0 bottom-16 z-20 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-sm lg:hidden ${lead && productsValid ? "" : "hidden"}`}>
           <div className="mx-auto flex max-w-md gap-2">
             <Button type="button" variant="outline" className="h-12 flex-1" disabled={!!wizard.editingQuoteId} onClick={() => setStep(1)}>Back</Button>
             <Button type="button" size="lg" className="h-12 flex-1" disabled={pending || !productsValid} onClick={previewOffer}>{wizard.editingQuoteId ? "Save revision" : "Preview"}</Button>
           </div>
         </div>
-        <div className="hidden gap-3 sm:flex">
+        <div className="hidden gap-3 lg:flex">
           <Button type="button" variant="outline" className="h-14" disabled={!!wizard.editingQuoteId} onClick={() => setStep(1)}>Back</Button>
           <Button type="button" size="lg" className="h-14 flex-1 text-base" disabled={pending || !productsValid} onClick={previewOffer}><Eye className="h-5 w-5" /> {pdfPreparing ? "Generating PDF…" : pending ? (wizard.editingQuoteId ? "Saving revision…" : "Saving…") : wizard.editingQuoteId ? "Save revision" : "Preview Offer"}</Button>
           {pdfPreparing && <p role="status" aria-live="polite" className="text-sm text-muted-foreground">Saving quotation and generating its PDF…</p>}
@@ -1086,7 +1124,7 @@ function ProductPicker({ products, value, onChange, onCreated, label, isManager,
   onOpen: () => void;
   onRefresh: () => void;
 }) {
-  const PRODUCT_OPTION_HEIGHT = 72;
+  const PRODUCT_OPTION_HEIGHT = 56;
   const PRODUCT_OVERSCAN = 4;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -1193,23 +1231,23 @@ function ProductPicker({ products, value, onChange, onCreated, label, isManager,
           role="dialog"
           aria-modal="true"
           aria-labelledby="product-picker-title"
-          className="flex h-[85dvh] min-h-0 max-h-[48rem] w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl md:max-w-lg md:rounded-2xl"
+          className="flex h-[80dvh] min-h-0 w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl md:max-h-[80dvh] md:max-w-[720px] md:rounded-2xl"
         >
-          <header className="flex min-h-14 shrink-0 flex-wrap items-center justify-between gap-1 border-b border-border px-3 py-2 sm:px-4">
-            <h2 id="product-picker-title" className="font-semibold">{addingProduct ? "Add new product" : "Choose product"}</h2>
+          <header className="flex min-h-14 shrink-0 items-center gap-1 border-b border-border px-2 py-2 sm:gap-2 sm:px-4">
+            <h2 id="product-picker-title" className="min-w-0 flex-1 truncate font-semibold">{addingProduct ? "Add new product" : "Choose product"}</h2>
             {isManager && !addingProduct && <Button type="button" variant="outline" size="sm" className="ml-auto mr-2" onClick={() => { setCreateError(""); setAddingProduct(true); }}>
-              <Plus className="h-4 w-4" /> Add new product
+              <Plus className="h-4 w-4 shrink-0" /><span className="hidden sm:inline">Add new product</span><span className="sm:hidden">Add</span>
             </Button>}
             {isManager && addingProduct && <Button type="button" variant="outline" size="sm" className="ml-auto mr-2" onClick={() => { setCreateError(""); setAddingProduct(false); }}>
-              Back to products
+              <span className="hidden sm:inline">Back to products</span><span className="sm:hidden">Back</span>
             </Button>}
             {isManager && !addingProduct && <Button type="button" variant="outline" size="sm" disabled={refreshing} onClick={onRefresh}>
-              <RefreshCw className={refreshing ? "animate-spin" : ""} />
-              {refreshing ? "Refreshing…" : refreshFailed ? "Retry refresh" : "Refresh products"}
+              <RefreshCw className={`h-4 w-4 shrink-0 ${refreshing ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">{refreshing ? "Refreshing…" : refreshFailed ? "Retry refresh" : "Refresh"}</span>
             </Button>}
-            <Button type="button" variant="ghost" size="icon" className="h-11 w-11" aria-label="Close product picker" onClick={() => setOpen(false)}><X /></Button>
+            <Button type="button" variant="ghost" size="icon" className="h-10 w-10 shrink-0" aria-label="Close product picker" onClick={() => setOpen(false)}><X /></Button>
           </header>
-          {!addingProduct && <div className="shrink-0 p-4 pb-2">
+          {!addingProduct && <div className="sticky top-0 z-10 shrink-0 border-b border-border bg-card p-4 pb-2">
             <label htmlFor={`product-search-${label.replace(/\W/g, "-")}`} className="sr-only">Search products by name, code or description</label>
             <input
               ref={searchRef}
@@ -1265,10 +1303,13 @@ function ProductPicker({ products, value, onChange, onCreated, label, isManager,
                 aria-posinset={index + 1}
                 aria-setsize={matches.length}
                 onClick={() => { onChange(product.id, product); setOpen(false); }}
-                className={`h-[72px] w-full shrink-0 border-b border-border px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${product.id === value ? "bg-secondary text-secondary-foreground" : "hover:bg-secondary/60"}`}
+                className={`grid h-14 w-full shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-border px-3 py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${product.id === value ? "bg-secondary text-secondary-foreground" : "hover:bg-secondary/60"}`}
               >
-                <span className="block truncate text-sm font-medium" title={product.model}>{product.model}</span>
-                <span className="block text-xs text-muted-foreground">{product.unit} · {formatINR(product.price)}</span>
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium" title={product.model}>{product.model}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{product.code || product.description || " "}</span>
+                </span>
+                <span className="text-right text-xs text-muted-foreground"><span className="block">{product.unit}</span><span className="block font-medium text-foreground">{formatINR(product.price)}</span></span>
               </button>
               );
             })}
@@ -1579,10 +1620,18 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
     event.preventDefault();
     if (!savedQuoteId || sendingEmail) return;
     setSendingEmail(true);
+    const downloadForManualEmail = async (message: string) => {
+      if (!message.includes("BLOB_READ_WRITE_TOKEN")) return false;
+      downloadFile(await buildPdfFile());
+      setEmailOpen(false);
+      toast.warning("PDF storage is unavailable. The PDF was downloaded; attach it to your email.");
+      return true;
+    };
     try {
       await prepareShareUrl();
       const result = await sendQuotationEmailAction({ quoteId: savedQuoteId, to: emailRecipient.trim() });
       if (!result.ok) {
+        if (await downloadForManualEmail(result.error)) return;
         toast.error(result.error);
         return;
       }
@@ -1591,7 +1640,14 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
         : undefined);
       setEmailOpen(false);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not send the quotation email.");
+      const message = error instanceof Error ? error.message : "Could not send the quotation email.";
+      try {
+        if (await downloadForManualEmail(message)) return;
+      } catch (downloadError) {
+        toast.error(downloadError instanceof Error ? downloadError.message : "Could not generate the quotation PDF.");
+        return;
+      }
+      toast.error(message);
     } finally {
       setSendingEmail(false);
     }
