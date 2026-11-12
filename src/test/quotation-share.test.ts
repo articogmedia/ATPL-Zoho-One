@@ -129,7 +129,9 @@ describe("quotation PDF storage route", () => {
 
   it("logs the PDF upload failure stage and does not expose storage details", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    mocks.put.mockRejectedValueOnce(new Error("private storage endpoint credentials failed"));
+    mocks.put.mockRejectedValueOnce(new Error("private storage endpoint credentials failed", {
+      cause: new Error("storage connection reset"),
+    }));
     const { POST } = await import("@/app/api/quotations/share/route");
     const response = await POST(new NextRequest("http://localhost/api/quotations/share", {
       method: "POST",
@@ -147,7 +149,15 @@ describe("quotation PDF storage route", () => {
     expect(body.error).not.toContain("private storage endpoint");
     expect(errorLog).toHaveBeenCalledWith(
       "[api] quotation share preparation failed",
-      expect.objectContaining({ stage: "blob_upload", message: "private storage endpoint credentials failed" }),
+      expect.objectContaining({
+        stage: "blob_upload",
+        message: "private storage endpoint credentials failed",
+        stack: expect.stringContaining("private storage endpoint credentials failed"),
+        cause: expect.objectContaining({
+          message: "storage connection reset",
+          stack: expect.stringContaining("storage connection reset"),
+        }),
+      }),
     );
     errorLog.mockRestore();
   });

@@ -113,6 +113,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
     };
   });
   const { step, leadId, rows } = wizard;
+  const [quoteSaveError, setQuoteSaveError] = useState("");
   const extraCharges = wizard.extraCharges ?? [];
   const localCustomers = useMemo(() => [...myLeads, ...loadedMoreLeads].filter((customer, index, list) =>
     list.findIndex((candidate) => candidate.id === customer.id) === index,
@@ -125,25 +126,37 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
     );
   }, [localCustomers, q]);
   const setStep = (nextStep: 1 | 2 | 3) => setWizard((current) => ({ ...current, step: nextStep }));
-  const setLeadId = (nextLeadId: string) => setWizard((current) => ({
-    ...current, leadId: nextLeadId, subject: "", extraCharges: [], savedQuotation: undefined, quotationSent: false,
-  }));
-  const setRows = (nextRows: Row[] | ((currentRows: Row[]) => Row[])) => setWizard((current) => ({
-    ...current,
-    rows: typeof nextRows === "function" ? nextRows(current.rows) : nextRows,
-    subject: "",
-    savedQuotation: undefined,
-    quotationSent: false,
-  }));
-  const setExtraCharges = (next: QuoteExtraCharge[] | ((current: QuoteExtraCharge[]) => QuoteExtraCharge[])) => setWizard((current) => ({
-    ...current,
-    extraCharges: typeof next === "function" ? next(current.extraCharges ?? []) : next,
-    savedQuotation: undefined,
-    quotationSent: false,
-  }));
-  const setOfferNo = (nextOfferNo: string) => setWizard((current) => ({
-    ...current, offerNo: nextOfferNo, savedQuotation: undefined, quotationSent: false,
-  }));
+  const setLeadId = (nextLeadId: string) => {
+    setQuoteSaveError("");
+    setWizard((current) => ({
+      ...current, leadId: nextLeadId, subject: "", extraCharges: [], savedQuotation: undefined, quotationSent: false,
+    }));
+  };
+  const setRows = (nextRows: Row[] | ((currentRows: Row[]) => Row[])) => {
+    setQuoteSaveError("");
+    setWizard((current) => ({
+      ...current,
+      rows: typeof nextRows === "function" ? nextRows(current.rows) : nextRows,
+      subject: "",
+      savedQuotation: undefined,
+      quotationSent: false,
+    }));
+  };
+  const setExtraCharges = (next: QuoteExtraCharge[] | ((current: QuoteExtraCharge[]) => QuoteExtraCharge[])) => {
+    setQuoteSaveError("");
+    setWizard((current) => ({
+      ...current,
+      extraCharges: typeof next === "function" ? next(current.extraCharges ?? []) : next,
+      savedQuotation: undefined,
+      quotationSent: false,
+    }));
+  };
+  const setOfferNo = (nextOfferNo: string) => {
+    setQuoteSaveError("");
+    setWizard((current) => ({
+      ...current, offerNo: nextOfferNo, savedQuotation: undefined, quotationSent: false,
+    }));
+  };
   const retryLeadSources = async () => {
     if (retryingLeadSources) return;
     setRetryingLeadSources(true);
@@ -218,7 +231,6 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
   const [duplicateCustomer, setDuplicateCustomer] = useState<DuplicateCustomer | null>(null);
   const [pending, start] = useTransition();
   const [customerRetryable, setCustomerRetryable] = useState(false);
-  const [quoteSaveError, setQuoteSaveError] = useState("");
   const [savedQuotes, setSavedQuotes] = useState<Quotation[]>([]);
   const [savedQuotesCount, setSavedQuotesCount] = useState<number | null>(initialSavedQuotesCount ?? null);
   const [savedQuotesPage, setSavedQuotesPage] = useState(1);
@@ -571,8 +583,11 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
     } finally {
       setPdfPreparing(false);
     }
-    if (pdfUrl) setPdfUrls((current) => ({ ...current, [saved.id]: pdfUrl }));
-    toast.success(editingQuote ? `Quotation updated (R${saved.revision ?? 1})` : "Quotation saved as Draft");
+    if (pdfUrl) {
+      setPdfUrls((current) => ({ ...current, [saved.id]: pdfUrl }));
+      setQuoteSaveError("");
+      toast.success(editingQuote ? `Quotation updated (R${saved.revision ?? 1})` : "Quotation saved as Draft");
+    }
   });
 
   const retrySavedQuotationPdf = async () => {
@@ -583,6 +598,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
     try {
       const url = await storeQuotationPdf(saved);
       setPdfUrls((current) => ({ ...current, [saved.id]: url }));
+      setQuoteSaveError("");
       toast.success("Quotation PDF stored.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not generate and store the quotation PDF.";
@@ -609,6 +625,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
 
   const viewSavedQuote = async (quoteId: string) => {
     if (loadingQuoteId) return;
+    setQuoteSaveError("");
     setLoadingQuoteId(quoteId);
     try {
       const pdfResult = await getQuotationPdfUrlAction(quoteId);
@@ -629,6 +646,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       try {
         const url = await storeQuotationPdf(result.data, result.data.pdfSnapshotToken);
         setPdfUrls((current) => ({ ...current, [quoteId]: url }));
+        setQuoteSaveError("");
         setReadOnlyPdfUrl(url);
         setSavedOpen(false);
         return;
@@ -646,6 +664,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
 
   const emailSavedQuote = async (quoteId: string) => {
     if (loadingQuoteId) return;
+    setQuoteSaveError("");
     setLoadingQuoteId(quoteId);
     let quote: Quotation | null = null;
     try {
@@ -683,6 +702,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
 
   const editSavedQuote = async (quoteId: string) => {
     if (loadingQuoteId) return;
+    setQuoteSaveError("");
     setLoadingQuoteId(quoteId);
     try {
       const result = await getQuoteDetailAction(quoteId);

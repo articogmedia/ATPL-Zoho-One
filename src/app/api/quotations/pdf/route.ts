@@ -8,7 +8,7 @@ import { crm } from "@/lib/crm";
 import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
-import { GST_RATE, quotationGstBreakdown, todayIST, visibleFor, type QuoteGstTotals } from "@/lib/domain";
+import { GST_RATE, quotationGstBreakdown, todayIST, visibleFor, type QuoteGstTotals, type Quotation } from "@/lib/domain";
 import { displayProductUnit, formatOfferReference, formatQuotationMoney, quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 import { quotationRequestSchema } from "@/lib/quotation-request";
@@ -37,6 +37,19 @@ function redactPayload(value: unknown): unknown {
   return value;
 }
 
+function describeErrorCause(cause: unknown, depth = 0): unknown {
+  if (cause === undefined || depth >= 3) return undefined;
+  if (cause instanceof Error) {
+    return {
+      name: cause.name,
+      message: cause.message,
+      stack: cause.stack,
+      cause: describeErrorCause(cause.cause, depth + 1),
+    };
+  }
+  return { type: typeof cause, message: typeof cause === "string" ? cause : String(cause) };
+}
+
 export async function POST(request: NextRequest) {
   const started = Date.now();
   const user = await currentUser();
@@ -61,11 +74,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `${message} (Ref: ${reference})`, reference }, { status: 400 });
   }
 
+  let stage = "quotation_retrieval";
   try {
   const repository = crm();
-  const savedQuote = parsed.quoteSnapshotToken
-    ? verifyQuotationPdfSnapshot(parsed.quoteSnapshotToken, user.id, parsed.quoteId ?? "")
-    : parsed.quoteId ? await repository.getQuote(parsed.quoteId) : null;
+  let savedQuote: Quotation | null = null;
+  if (parsed.quoteSnapshotToken) {
+    stage = "quotation_snapshot_verification";
+    savedQuote = verifyQuotationPdfSnapshot(parsed.quoteSnapshotToken, user.id, parsed.quoteId ?? "");
+  } else if (parsed.quoteId) {
+    stage = "zoho_quotation_retrieval";
+    savedQuote = await repository.getQuote(parsed.quoteId);
+  }
   if (parsed.quoteSnapshotToken && !savedQuote) {
     return NextResponse.json({ error: "Quotation snapshot is invalid or expired." }, { status: 403 });
   }
@@ -77,6 +96,7 @@ export async function POST(request: NextRequest) {
     savedQuote?.contactName || savedQuote?.company || savedQuote?.phone ||
     savedQuote?.area || savedQuote?.address || savedQuote?.email,
   );
+  stage = "related_data_retrieval";
   const [linkedLead, products] = await Promise.all([
     linkedLeadId && (!savedQuote || !savedCustomerDetails)
       ? repository.getLead(linkedLeadId).catch((error: unknown) => {
@@ -98,6 +118,7 @@ export async function POST(request: NextRequest) {
   if (linkedLead && visibleFor(user, [linkedLead]).length === 0 && !savedQuote) {
     return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
   }
+  stage = "quotation_line_item_resolution";
   const lead = {
     id: linkedLeadId,
     name: savedQuote?.contactName || linkedLead?.name || savedQuote?.customer || "",
@@ -134,12 +155,13 @@ export async function POST(request: NextRequest) {
   const legacySubtotal = items.reduce((sum, item) => sum + item.qty * item.price, 0);
   const legacyDiscount = items.reduce((sum, item) => sum + (item.discount ?? 0), 0);
   const savedBreakdown = savedQuote?.gstBreakdown;
-  const totals = savedBreakdown ?? (isLegacySavedQuote
+  const totals = savedBreakdown ?? (savedQuote && !savedQuote.gstBreakdown
     ? { subtotal: legacySubtotal, discount: legacyDiscount, gst: 0, total: savedQuote.total }
     : presentation.totals);
   const computedBreakdown = quotationGstBreakdown(items, extraCharges);
   const partATotals = savedBreakdown?.partA ?? computedBreakdown.partA;
   const partBTotals = savedBreakdown?.partB ?? computedBreakdown.partB;
+  stage = "pdf_rendering";
   const pdf = await PDFDocument.create();
   const regular = await pdf.embedFont(pdfFonts.regular);
   const bold = await pdf.embedFont(pdfFonts.bold);
@@ -399,6 +421,7 @@ export async function POST(request: NextRequest) {
   drawFlowText(COMPANY.signatory);
   drawFlowText(COMPANY.phones);
 
+  stage = "pdf_serialization";
   const bytes = await pdf.save();
   return new NextResponse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
     headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="offer-${offerReference.replaceAll("/", "-")}.pdf"`, "Cache-Control": "private, no-store" },
@@ -408,12 +431,18 @@ export async function POST(request: NextRequest) {
     console.error("[api] quotation PDF generation failed", {
       reference,
       quoteId: parsed.quoteId,
+      offerNo: parsed.offerNo,
+      stage,
+      errorName: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      cause: error instanceof Error ? describeErrorCause(error.cause) : undefined,
       status: error instanceof ZohoError ? error.status : undefined,
       code: error instanceof ZohoError ? error.code : undefined,
       field: error instanceof ZohoError ? error.field : undefined,
       details: error instanceof ZohoError ? error.details : undefined,
       operation: error instanceof ZohoError ? error.operation : undefined,
+      deploymentCommit: process.env.VERCEL_GIT_COMMIT_SHA,
     });
     const message = error instanceof ZohoError
       ? friendlyZohoError(error.status, error.code, error.message, error.field, reference, error.operation)

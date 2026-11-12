@@ -29,12 +29,25 @@ function redactPayload(value: unknown): unknown {
   return value;
 }
 
+function describeErrorCause(cause: unknown, depth = 0): unknown {
+  if (cause === undefined || depth >= 3) return undefined;
+  if (cause instanceof Error) {
+    return {
+      name: cause.name,
+      message: cause.message,
+      stack: cause.stack,
+      cause: describeErrorCause(cause.cause, depth + 1),
+    };
+  }
+  return { type: typeof cause, message: typeof cause === "string" ? cause : String(cause) };
+}
+
 async function handlePost(request: NextRequest) {
   const user = await currentUser();
   if (!user) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
 
   let payload: unknown;
-  let stage = "quotation_lookup";
+  let stage = "stored_pdf_lookup";
   try {
     payload = await request.json();
   } catch (error) {
@@ -69,6 +82,7 @@ async function handlePost(request: NextRequest) {
         }
         return NextResponse.json({ url: stored.url });
       }
+      stage = parsed.data.quoteSnapshotToken ? "quotation_snapshot_verification" : "quotation_retrieval";
       savedQuote = parsed.data.quoteSnapshotToken
         ? verifyQuotationPdfSnapshot(parsed.data.quoteSnapshotToken, user.id, parsed.data.quoteId)
         : await crm().getQuote(parsed.data.quoteId);
@@ -77,6 +91,7 @@ async function handlePost(request: NextRequest) {
       }
     }
 
+    stage = "storage_configuration";
     const blobToken = env().BLOB_READ_WRITE_TOKEN;
     if (!blobToken) {
       const reference = newErrorReference();
@@ -107,9 +122,11 @@ async function handlePost(request: NextRequest) {
     if (!pdfResponse.ok) {
       const body = await pdfResponse.text();
       let innerReference: string | undefined;
+      let innerError: string | undefined;
       try {
         const responseBody = JSON.parse(body) as { error?: unknown };
         if (typeof responseBody.error === "string") {
+          innerError = responseBody.error;
           innerReference = /\(Ref:\s*([A-Za-z0-9-]+)\)/.exec(responseBody.error)?.[1];
         }
       } catch {
@@ -117,7 +134,14 @@ async function handlePost(request: NextRequest) {
       }
       const reference = newErrorReference();
       console.error("[api] quotation share PDF generation failed", {
-        reference, stage, status: pdfResponse.status, innerReference,
+        reference,
+        stage,
+        quoteId: parsed.data.quoteId,
+        offerNo: parsed.data.offerNo,
+        status: pdfResponse.status,
+        innerReference,
+        innerError,
+        deploymentCommit: process.env.VERCEL_GIT_COMMIT_SHA,
       });
       return NextResponse.json({
         error: `Could not prepare the quotation PDF. (Ref: ${reference})`,
@@ -156,10 +180,13 @@ async function handlePost(request: NextRequest) {
     console.error("[api] quotation share preparation failed", {
       reference,
       quoteId: parsed.data.quoteId,
+      offerNo: parsed.data.offerNo,
       stage,
       errorName: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
+      cause: error instanceof Error ? describeErrorCause(error.cause) : undefined,
+      deploymentCommit: process.env.VERCEL_GIT_COMMIT_SHA,
     });
     return NextResponse.json({
       error: `Could not prepare a shareable quotation PDF. (Ref: ${reference})`,

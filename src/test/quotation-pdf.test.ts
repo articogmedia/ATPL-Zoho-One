@@ -231,6 +231,43 @@ describe("quotation PDF route", () => {
     drawText.mockRestore();
   });
 
+  it("logs the PDF preparation stage and original cause when product retrieval fails", async () => {
+    currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
+    quoteRepository.getLead.mockResolvedValue({
+      id: "L1", name: "Customer", company: "Customer Co", phone: "9876543210", area: "", address: "",
+      source: "Direct Call", status: "Fresh Lead", assignedTo: null, remarks: "", createdOn: "2026-11-09", touchedBy: [],
+    });
+    quoteRepository.listProducts.mockRejectedValue(new Error("Product catalogue unavailable", {
+      cause: new Error("Zoho connection reset"),
+    }));
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+    const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        leadId: "L1",
+        offerNo: "279/26-27",
+        subject: "Air conditioning quotation",
+        items: [{ productId: "P1", qty: 1 }],
+      }),
+    }));
+
+    expect(response.status).toBe(500);
+    expect(errorLog).toHaveBeenCalledWith(
+      "[api] quotation PDF generation failed",
+      expect.objectContaining({
+        stage: "related_data_retrieval",
+        message: "Product catalogue unavailable",
+        stack: expect.stringContaining("Product catalogue unavailable"),
+        cause: expect.objectContaining({
+          message: "Zoho connection reset",
+          stack: expect.stringContaining("Zoho connection reset"),
+        }),
+      }),
+    );
+    errorLog.mockRestore();
+  });
+
   it("renders GST separately for Part A and Part B", async () => {
     currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
     quoteRepository.getLead.mockResolvedValue({
