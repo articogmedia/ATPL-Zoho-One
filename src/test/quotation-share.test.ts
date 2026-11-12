@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
   saveStoredQuotationPdf: vi.fn(async (_id: string, value: { url: string; ownerId?: string; executive?: string }) => {
     mocks.storedPdf = value;
   }),
-  put: vi.fn(async () => ({ url: "https://blob.example/quotation.pdf" })),
+  put: vi.fn<(_pathname: string, _pdf: Buffer, _options: Record<string, unknown>) => Promise<{ url: string }>>(async () => ({
+    url: "https://blob.example/quotation.pdf",
+  })),
   renderPdf: vi.fn(),
 }));
 
@@ -46,7 +48,7 @@ describe("quotation PDF storage route", () => {
     mocks.getStoredQuotationPdf.mockClear();
     mocks.saveStoredQuotationPdf.mockClear();
     mocks.put.mockClear();
-    mocks.renderPdf.mockReset().mockResolvedValue(new Response("%PDF-fixture", {
+    mocks.renderPdf.mockReset().mockImplementation(async () => new Response("%PDF-fixture", {
       status: 200,
       headers: { "Content-Type": "application/pdf" },
     }));
@@ -81,6 +83,15 @@ describe("quotation PDF storage route", () => {
     });
     expect(pdfRequest.headers.get("cookie")).toBe("atpl-session=valid");
     expect(mocks.put).toHaveBeenCalledOnce();
+    const [pathname, pdf, uploadOptions] = mocks.put.mock.calls[0]!;
+    expect(pathname).toMatch(/^quotations\/.+\.pdf$/);
+    expect(Buffer.isBuffer(pdf)).toBe(true);
+    expect(pdf.subarray(0, 4).toString("ascii")).toBe("%PDF");
+    expect(uploadOptions).toMatchObject({
+      access: "public",
+      contentType: "application/pdf",
+      token: "blob-token",
+    });
     expect(mocks.saveStoredQuotationPdf).toHaveBeenCalledWith("quote-1", {
       url: "https://blob.example/quotation.pdf",
       ownerId: "manager-1",
@@ -138,6 +149,37 @@ describe("quotation PDF storage route", () => {
       "[api] quotation share preparation failed",
       expect.objectContaining({ stage: "blob_upload", message: "private storage endpoint credentials failed" }),
     );
+    errorLog.mockRestore();
+  });
+
+  it("retries PDF storage for the existing quotation without creating another quote", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.saveStoredQuotationPdf.mockRejectedValueOnce(new Error("shared PDF cache is unavailable"));
+    const { POST } = await import("@/app/api/quotations/share/route");
+    const request = () => new NextRequest("http://localhost/api/quotations/share", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "quote-1",
+        offerNo: "301/26-27",
+        subject: "Air conditioning quotation",
+        items: [{ productId: "product-1", qty: 1 }],
+      }),
+    });
+
+    const failed = await POST(request());
+    expect(failed.status).toBe(500);
+    expect(errorLog).toHaveBeenCalledWith(
+      "[api] quotation share preparation failed",
+      expect.objectContaining({ quoteId: "quote-1", stage: "pdf_storage" }),
+    );
+
+    const retried = await POST(request());
+    expect(retried.status).toBe(200);
+    await expect(retried.json()).resolves.toEqual({ url: "https://blob.example/quotation.pdf" });
+    expect(mocks.getQuote).toHaveBeenCalledTimes(2);
+    expect(mocks.renderPdf).toHaveBeenCalledTimes(2);
+    expect(mocks.put).toHaveBeenCalledTimes(2);
+    expect(mocks.saveStoredQuotationPdf).toHaveBeenCalledTimes(2);
     errorLog.mockRestore();
   });
 });

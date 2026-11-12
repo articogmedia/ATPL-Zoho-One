@@ -174,7 +174,7 @@ describe("quotation PDF route", () => {
     drawText.mockRestore();
   });
 
-  it("uses a signed quote snapshot without fetching the quote and revalidates prices server-side", async () => {
+  it("renders a saved quote snapshot without relying on current product data", async () => {
     currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
     const quote = {
       id: "Q-SNAPSHOT",
@@ -191,19 +191,18 @@ describe("quotation PDF route", () => {
       total: 118,
       date: "2026-11-09",
       ownerId: "U1",
-      items: [{ productId: "P1", model: "Saved AC", unit: "Nos", qty: 1, price: 100 }],
+      items: [{ productId: "P1", model: "Saved AC", unit: "Nos", qty: 1, price: 100, discount: 10, taxRate: 0.18 }],
       gstBreakdown: {
-        subtotal: 100, discount: 0, gst: 18, total: 118, rate: 0.18,
-        partA: { subtotal: 100, discount: 0, gst: 18, total: 118 },
+        subtotal: 100, discount: 10, gst: 18.6, total: 128.6, rate: 0.18,
+        partA: { subtotal: 100, discount: 10, gst: 16.2, total: 106.2 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
+        extraCharges: [{ label: "Freight", amount: 20, taxRate: 0.12 }],
       },
     };
     process.env.SESSION_SECRET = "pdf-snapshot-test-secret-that-is-long-enough";
     const { signQuotationPdfSnapshot } = await import("@/lib/quotation-pdf-snapshot");
     const token = signQuotationPdfSnapshot(quote, "U1");
-    quoteRepository.listProducts.mockResolvedValue([
-      { id: "P1", model: "Saved AC", price: 200, unit: "Nos" },
-    ]);
+    quoteRepository.listProducts.mockRejectedValue(new Error("Current product data is unavailable"));
     const drawText = vi.spyOn(PDFPage.prototype, "drawText");
     const { POST } = await import("@/app/api/quotations/pdf/route");
 
@@ -221,10 +220,14 @@ describe("quotation PDF route", () => {
     expect(response.status).toBe(200);
     expect(quoteRepository.getQuote).not.toHaveBeenCalled();
     expect(quoteRepository.getLead).not.toHaveBeenCalled();
-    expect(quoteRepository.listProducts).toHaveBeenCalledOnce();
+    expect(quoteRepository.listProducts).not.toHaveBeenCalled();
     const renderedText = drawText.mock.calls.map(([value]) => String(value)).join("\n");
-    expect(renderedText).toContain("Rs. 200.00");
-    expect(renderedText).toContain("Rs. 236.00");
+    expect(renderedText).toContain("Rs. 100.00");
+    expect(renderedText).toContain("Rs. 128.60");
+    expect(renderedText).toContain("Discount");
+    expect(renderedText).toContain("Extra charge: Freight");
+    expect(renderedText).toContain("GST @ 18%");
+    expect(renderedText).toContain("GST @ 12%");
     drawText.mockRestore();
   });
 

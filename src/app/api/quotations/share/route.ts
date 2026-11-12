@@ -137,21 +137,27 @@ async function handlePost(request: NextRequest) {
       contentType: "application/pdf",
       token: blobToken,
     });
+    const blobUrl = new URL(blob.url);
+    if (blobUrl.protocol !== "https:") {
+      throw new Error("Vercel Blob returned a non-HTTPS quotation URL.");
+    }
     logPerf("api.quotations.share.upload", Date.now() - blobStarted, { bytes: pdf.length });
     if (savedQuote) {
       stage = "pdf_storage";
       await saveStoredQuotationPdf(savedQuote.id, {
-        url: blob.url,
+        url: blobUrl.toString(),
         ownerId: savedQuote.ownerId,
         executive: savedQuote.executive,
       });
     }
-    return NextResponse.json({ url: blob.url });
+    return NextResponse.json({ url: blobUrl.toString() });
   } catch (error) {
     const reference = newErrorReference();
     console.error("[api] quotation share preparation failed", {
       reference,
+      quoteId: parsed.data.quoteId,
       stage,
+      errorName: error instanceof Error ? error.name : typeof error,
       message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
     });

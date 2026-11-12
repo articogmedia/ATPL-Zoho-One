@@ -77,7 +77,6 @@ export async function POST(request: NextRequest) {
     savedQuote?.contactName || savedQuote?.company || savedQuote?.phone ||
     savedQuote?.area || savedQuote?.address || savedQuote?.email,
   );
-  const needsPriceValidation = Boolean(savedQuote?.items?.some((item) => item.productId));
   const [linkedLead, products] = await Promise.all([
     linkedLeadId && (!savedQuote || !savedCustomerDetails)
       ? repository.getLead(linkedLeadId).catch((error: unknown) => {
@@ -91,7 +90,7 @@ export async function POST(request: NextRequest) {
         return null;
       })
       : Promise.resolve(null),
-    savedQuote?.items?.length && !needsPriceValidation ? Promise.resolve([]) : repository.listProducts(),
+    savedQuote?.items?.length ? Promise.resolve([]) : repository.listProducts(),
   ]);
   if (!linkedLead && !savedQuote) {
     return NextResponse.json({ error: "Lead not found or access denied." }, { status: 403 });
@@ -111,19 +110,15 @@ export async function POST(request: NextRequest) {
   const offerNo = savedQuote?.offerNo || parsed.offerNo;
   const subject = savedQuote?.subject || parsed.subject || offerSubject((savedQuote?.items ?? []).map((item) => item.model));
   const items = savedQuote?.items?.length
-    ? savedQuote.items.map((item, index) => {
-        const product = item.productId ? products.find((candidate) => candidate.id === item.productId) : undefined;
-        if (item.productId && !product) throw new Error(`Product not found at row ${index + 1}.`);
-        return {
-          model: item.model,
-          description: item.description ?? "",
-          unit: item.unit,
-          qty: item.qty,
-          price: product?.price ?? item.price,
-          discount: item.discount ?? 0,
-          taxRate: item.taxRate ?? GST_RATE,
-        };
-      })
+    ? savedQuote.items.map((item) => ({
+        model: item.model,
+        description: item.description ?? "",
+        unit: item.unit,
+        qty: item.qty,
+        price: item.price,
+        discount: item.discount ?? 0,
+        taxRate: item.taxRate ?? GST_RATE,
+      }))
     : parsed.items.map((row, index) => {
         const product = products.find((candidate) => candidate.id === row.productId);
         if (!product) throw new Error(`Product not found at row ${index + 1}.`);
@@ -138,9 +133,8 @@ export async function POST(request: NextRequest) {
   const isLegacySavedQuote = !!savedQuote && !savedQuote.gstBreakdown;
   const legacySubtotal = items.reduce((sum, item) => sum + item.qty * item.price, 0);
   const legacyDiscount = items.reduce((sum, item) => sum + (item.discount ?? 0), 0);
-  const savedBreakdown = needsPriceValidation ? undefined : savedQuote?.gstBreakdown;
+  const savedBreakdown = savedQuote?.gstBreakdown;
   const totals = savedBreakdown ?? (isLegacySavedQuote
-    && !needsPriceValidation
     ? { subtotal: legacySubtotal, discount: legacyDiscount, gst: 0, total: savedQuote.total }
     : presentation.totals);
   const computedBreakdown = quotationGstBreakdown(items, extraCharges);
@@ -413,6 +407,7 @@ export async function POST(request: NextRequest) {
     const reference = newErrorReference();
     console.error("[api] quotation PDF generation failed", {
       reference,
+      quoteId: parsed.quoteId,
       message: error instanceof Error ? error.message : String(error),
       status: error instanceof ZohoError ? error.status : undefined,
       code: error instanceof ZohoError ? error.code : undefined,

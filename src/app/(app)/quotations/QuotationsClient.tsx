@@ -575,6 +575,24 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
     toast.success(editingQuote ? `Quotation updated (R${saved.revision ?? 1})` : "Quotation saved as Draft");
   });
 
+  const retrySavedQuotationPdf = async () => {
+    const saved = wizard.savedQuotation;
+    if (!saved || pdfPreparing) return;
+    setPdfPreparing(true);
+    setQuoteSaveError("");
+    try {
+      const url = await storeQuotationPdf(saved);
+      setPdfUrls((current) => ({ ...current, [saved.id]: url }));
+      toast.success("Quotation PDF stored.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not generate and store the quotation PDF.";
+      setQuoteSaveError(`Quotation saved, but its PDF could not be stored: ${message}`);
+      toast.error("Quotation PDF could not be stored.");
+    } finally {
+      setPdfPreparing(false);
+    }
+  };
+
   const markQuotationSent = async () => {
     if (!lead || wizard.quotationSent) return;
     const result = await executeMutation(markQuotationSentAction, {
@@ -935,7 +953,12 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         <History className="h-4 w-4" /> {savedQuotesCount === null ? "Saved quotations" : `Saved quotations (${savedQuotesCount})`}
       </Button>} mobileFloating={false} />
     {pdfPreparing && <p role="status" aria-live="polite" className="rounded-lg border border-border bg-muted p-3 text-sm">Generating and storing the quotation PDF…</p>}
-    {quoteSaveError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{quoteSaveError}</p>}
+    {quoteSaveError && <div role="alert" className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+      <span>{quoteSaveError}</span>
+      <Button type="button" variant="outline" className="shrink-0" disabled={pdfPreparing} onClick={retrySavedQuotationPdf}>
+        <RefreshCw className="h-4 w-4" /> Retry PDF
+      </Button>
+    </div>}
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
     <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} revision={wizard.savedQuotation.revision} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} extraCharges={wizard.savedQuotation.gstBreakdown?.extraCharges ?? extraCharges} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedTotal={wizard.savedQuotation.total} savedStatus={wizard.savedQuotation.status} storedPdfUrl={pdfUrls[wizard.savedQuotation.id]} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} />
     {savedDialog}
@@ -1024,7 +1047,9 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         <h2 className="text-lg font-semibold">Step 2 · Products</h2>
         {quoteSaveError && <div role="alert" className="flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
           <span>{quoteSaveError}</span>
-          {productsValid && <Button type="button" variant="outline" className="shrink-0" disabled={pending} onClick={previewOffer}>Retry save</Button>}
+          {productsValid && <Button type="button" variant="outline" className="shrink-0" disabled={pending || pdfPreparing} onClick={wizard.savedQuotation ? retrySavedQuotationPdf : previewOffer}>
+            {wizard.savedQuotation && <RefreshCw className="h-4 w-4" />} {wizard.savedQuotation ? "Retry PDF" : "Retry save"}
+          </Button>}
         </div>}
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
