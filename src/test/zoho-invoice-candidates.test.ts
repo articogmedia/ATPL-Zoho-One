@@ -36,7 +36,7 @@ vi.mock("@/lib/zoho/client", () => ({
 }));
 
 const quoteFields = () => [
-  "Subject", "Status", "Owner", "Created_Time", "Sub_Total", "Discount", "Tax",
+  "Subject", "Quote_Stage", "Owner", "Created_Time", "Sub_Total", "Discount", "Tax",
   "Adjustment", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till",
   "Description", "Offer_No", ...(includeLeadReference.value ? ["Lead_Ref"] : []),
 ].map((api_name) => ({ api_name }));
@@ -72,8 +72,11 @@ describe("Zoho invoice candidate loading", () => {
       }
       if (path === "/Quotes/search") {
         const criteria = String(options?.query?.criteria ?? "");
-        expect(criteria).toContain("(Status:equals:Accepted)");
-        expect(criteria).toContain("(Status:equals:Won)");
+        expect(criteria).toContain("(Quote_Stage:equals:Accepted)");
+        expect(criteria).toContain("(Quote_Stage:equals:Won)");
+        expect(criteria).not.toContain("Status");
+        expect(String(options?.query?.fields)).toContain("Quote_Stage");
+        expect(String(options?.query?.fields)).not.toContain("Status");
         if (includeLeadReference.value) {
           expect(criteria).toContain("(Lead_Ref.id:in:won-lead)");
           expect(String(options?.query?.fields)).toContain("Lead_Ref");
@@ -85,7 +88,7 @@ describe("Zoho invoice candidate loading", () => {
           data: [
             {
               id: "accepted-quote",
-              Status: "Accepted",
+              Quote_Stage: "Accepted",
               ...(includeLeadReference.value ? { Lead_Ref: { id: "accepted-lead", name: "Accepted" } } : {}),
               Description: JSON.stringify({ leadId: "accepted-lead" }),
               Grand_Total: 118,
@@ -94,7 +97,7 @@ describe("Zoho invoice candidate loading", () => {
             },
             ...(includeLeadReference.value ? [{
               id: "won-lead-quote",
-              Status: "Sent",
+              Quote_Stage: "Sent",
               Lead_Ref: { id: "won-lead", name: "Won" },
               Grand_Total: 236,
               Created_Time: "2026-11-02T10:00:00+05:30",
@@ -123,7 +126,7 @@ describe("Zoho invoice candidate loading", () => {
       expect(fields).not.toContain("Lead_Ref");
       return [{
         id: "won-lead-quote",
-        Status: "Sent",
+        Quote_Stage: "Sent",
         Description: JSON.stringify({ leadId: "won-lead" }),
         Grand_Total: 236,
         Created_Time: "2026-11-02T10:00:00+05:30",

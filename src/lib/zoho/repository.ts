@@ -40,7 +40,7 @@ const TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_I
 const NOTE_FIELDS = ["Note_Title", "Note_Content", "Created_Time", "Owner", "Created_By"];
 const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_Id", "Call_Result", "Description"];
 const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", "Description"];
-const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Sub_Total", "Discount", "Tax", "Adjustment", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", "Description", ...Object.values(FIELD.quote)];
+const QUOTE_FIELDS = [...new Set(["Subject", FIELD.quote.stage, "Owner", "Created_Time", "Sub_Total", "Discount", "Tax", "Adjustment", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", "Description", ...Object.values(FIELD.quote)])];
 
 const SHORT = () => env().CACHE_SHORT_TTL_MS;
 const LONG = 600_000;   // users and field metadata
@@ -854,8 +854,8 @@ async function invoiceCandidates(): Promise<{ quotes: Quotation[]; leads: Lead[]
     .map((record) => mapLead(record, new Set()));
   const wonLeadIds = wonLeads.map((lead) => lead.id).filter(Boolean);
   const quoteCriteria = [
-    "(Status:equals:Accepted)",
-    "(Status:equals:Won)",
+    `(${FIELD.quote.stage}:equals:Accepted)`,
+    `(${FIELD.quote.stage}:equals:Won)`,
     ...(hasLeadReference && wonLeadIds.length ? [`(${FIELD.quote.lead}.id:in:${wonLeadIds.join(",")})`] : []),
   ];
   let quoteRecords = await zohoSearchList<ZQuote>(
@@ -897,7 +897,7 @@ async function invoiceCandidates(): Promise<{ quotes: Quotation[]; leads: Lead[]
   }
 
   const eligibleRecords = quoteRecords.filter((record) => {
-    const status = String(record.Status ?? "").trim().toLowerCase();
+    const status = String(record[FIELD.quote.stage] ?? "").trim().toLowerCase();
     const lead = leadsById.get(quoteLeadId(record));
     return status === "accepted" || status === "won" || lead?.status === "Won";
   });
@@ -1951,11 +1951,11 @@ export const zohoRepository: CrmRepository = {
 
   async markQuoteSent(id) {
     const schema = await quoteSchema();
-    const statusField = schema.fieldsByName.get("Status");
+    const statusField = schema.fieldsByName.get(FIELD.quote.stage);
     const sentValue = statusField?.pick_list_values
       ?.map((item) => item.actual_value ?? item.display_value ?? "")
       .find((value) => value.toLowerCase() === "sent") ?? "Sent";
-    await zohoWrite("PUT", `/Quotes/${encodeURIComponent(id)}`, { Status: sentValue });
+    await zohoWrite("PUT", `/Quotes/${encodeURIComponent(id)}`, { [FIELD.quote.stage]: sentValue });
   },
 
   async createQuote(input, actor, executive) {

@@ -30,7 +30,7 @@ const leadRecord = {
 const quoteFields = {
   fields: [
     { api_name: "Subject", data_type: "text" },
-    { api_name: "Status", pick_list_values: [{ actual_value: "Draft" }, { actual_value: "Sent" }] },
+    { api_name: "Quote_Stage", pick_list_values: [{ actual_value: "Draft" }, { actual_value: "Sent" }] },
     { api_name: "Quoted_Items", data_type: "subform", subform: { fields: [
       { api_name: "Product_Name", data_type: "lookup" },
       { api_name: "Quantity", data_type: "integer" },
@@ -139,13 +139,18 @@ describe("Zoho quotation creation", () => {
   });
 
   it("loads only the first quote page and does not request the complete leads list", async () => {
-    const zoho = vi.fn(async (_method: string, path: string) => {
+    const zoho = vi.fn(async (_method: string, path: string, options?: { query?: Record<string, unknown> }) => {
       if (path === "/settings/fields") return { fields: quoteFields.fields };
       if (path === "/settings/layouts") return { layouts: [] };
-      if (path === "/Quotes") return {
-        data: [{ id: "quote-first", Subject: "Offer 239/26-27 - AC", Lead_Ref: { id: "lead-1", name: "Customer Co" }, Grand_Total: 100 }],
-        info: { more_records: true },
-      };
+      if (path === "/Quotes") {
+        const fields = String(options?.query?.fields);
+        expect(fields).toContain("Quote_Stage");
+        expect(fields).not.toContain("Status");
+        return {
+          data: [{ id: "quote-first", Subject: "Offer 239/26-27 - AC", Quote_Stage: "Accepted", Lead_Ref: { id: "lead-1", name: "Customer Co" }, Grand_Total: 100 }],
+          info: { more_records: true },
+        };
+      }
       return {};
     });
     const list = vi.fn(async (module: string) => module === "Quotes" ? [] : []);
@@ -164,7 +169,7 @@ describe("Zoho quotation creation", () => {
       quotes: [{ id: "quote-first", customer: "Customer Co", offerNo: "239/26-27" }],
     });
     expect(zoho).toHaveBeenCalledWith("GET", "/Quotes", expect.objectContaining({
-      query: expect.objectContaining({ page: 1, per_page: 200 }),
+      query: expect.objectContaining({ page: 1, per_page: 200, fields: expect.stringContaining("Quote_Stage") }),
     }));
     expect(zoho).not.toHaveBeenCalledWith("GET", "/Leads", expect.anything());
     expect(list).not.toHaveBeenCalled();
@@ -262,6 +267,11 @@ describe("Zoho quotation creation", () => {
       discount: 4000,
       taxRate: 0.12,
     }]);
+  });
+
+  it("maps Quote_Stage and treats a missing Quote_Stage as empty", () => {
+    expect(mapQuote({ id: "quote-stage", Quote_Stage: "Accepted" }, new Map()).status).toBe("Accepted");
+    expect(mapQuote({ id: "quote-stage-missing" }, new Map()).status).toBe("");
   });
 
   it("maps revision suffixes separately from the base offer number", () => {
@@ -1193,7 +1203,7 @@ describe("Zoho quotation creation", () => {
       if (path === "/settings/fields") {
         return { fields: [
           ...quoteFields.fields,
-          { api_name: "Status" },
+          { api_name: "Quote_Stage" },
           { api_name: "Due_Date" },
           { api_name: "Owner" },
           { api_name: "What_Id" },
@@ -1282,7 +1292,7 @@ describe("Zoho quotation creation", () => {
     });
   });
 
-  it("marks saved quotations Sent using the configured Status picklist value", async () => {
+  it("marks saved quotations Sent using the configured Quote_Stage picklist value", async () => {
     const write = vi.fn(async () => "quote-1");
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") return quoteFields;
@@ -1299,6 +1309,6 @@ describe("Zoho quotation creation", () => {
     const { zohoRepository } = await import("@/lib/zoho/repository");
 
     await zohoRepository.markQuoteSent("quote-1");
-    expect(write).toHaveBeenCalledWith("PUT", "/Quotes/quote-1", { Status: "Sent" });
+    expect(write).toHaveBeenCalledWith("PUT", "/Quotes/quote-1", { Quote_Stage: "Sent" });
   });
 });

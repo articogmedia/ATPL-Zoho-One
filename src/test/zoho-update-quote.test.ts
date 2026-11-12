@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 const quoteFields = [
   { api_name: "Subject", data_type: "text" },
-  { api_name: "Status", data_type: "picklist", pick_list_values: [{ actual_value: "Draft" }, { actual_value: "Sent" }] },
+  { api_name: "Quote_Stage", data_type: "picklist", pick_list_values: [{ actual_value: "Draft" }, { actual_value: "Sent" }] },
   { api_name: "Offer_No", data_type: "text" },
   { api_name: "Description", data_type: "textarea" },
   { api_name: "Quoted_Items", data_type: "subform", subform: { fields: [
@@ -55,7 +55,7 @@ describe("Zoho quotation revision", () => {
         id: "quote-1",
         Subject: "Offer 236/26-27 - AC package",
         Offer_No: "236/26-27",
-        Status: "Draft",
+        Quote_Stage: "Draft",
         Owner: { id: "manager-1", name: "Manager" },
         Description: JSON.stringify({
           leadId: "lead-1",
