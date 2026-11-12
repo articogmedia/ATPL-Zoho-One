@@ -316,6 +316,64 @@ test("mobile lead cards fit narrow viewports and open the action sheet", async (
   }
 });
 
+test("desktop lead columns fit available width and keep complete owners beside actions", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/login");
+  await page.getByRole("button", { name: /Continue as .*Manager/i }).first().click();
+  await page.waitForURL(/\/home$/);
+  await page.goto("/leads");
+  await page.locator('[data-tab="all"]').click();
+
+  const tableContainer = page.locator("#leads-list");
+  const table = tableContainer.getByRole("table");
+  await expect(table).toBeVisible();
+  await expect(table.locator("thead th")).toHaveText([
+    "", "Lead", "Phone", "Source", "Created", "Status", "Owner", "Actions",
+  ]);
+  const rows = table.locator("tbody tr");
+  await expect(rows.first()).toBeVisible();
+  const assignedRowIndex = await rows.evaluateAll((elements) => elements.findIndex((row) => {
+    const owner = row.querySelectorAll("td")[6]?.textContent?.trim();
+    return !!owner && owner !== "Unassigned";
+  }));
+  expect(assignedRowIndex).toBeGreaterThanOrEqual(0);
+  const row = rows.nth(assignedRowIndex);
+  const ownerCell = row.locator("td").nth(6);
+  const ownerName = (await ownerCell.textContent())?.trim();
+  expect(ownerName).toBeTruthy();
+  expect(ownerName).not.toContain("…");
+
+  for (const width of [1440, 1280, 1024]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(ownerCell).toHaveText(ownerName!);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await tableContainer.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const ownerLayout = await ownerCell.evaluate((element) => ({
+      textOverflow: getComputedStyle(element).textOverflow,
+      overflowX: getComputedStyle(element).overflowX,
+      contentFits: element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight,
+    }));
+    expect(ownerLayout.textOverflow).not.toBe("ellipsis");
+    expect(ownerLayout.overflowX).not.toBe("hidden");
+    expect(ownerLayout.contentFits).toBe(true);
+    const actionCell = row.locator("td").last();
+    const { left, right, position } = await actionCell.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, position: getComputedStyle(element).position };
+    });
+    const containerBounds = await tableContainer.boundingBox();
+    expect(containerBounds).not.toBeNull();
+    expect(position).not.toBe("sticky");
+    expect(right).toBeLessThanOrEqual(containerBounds!.x + containerBounds!.width + 1);
+    expect(right).toBeGreaterThan(left);
+    expect(await actionCell.evaluate((element) => Array.from(element.querySelectorAll("button, a")).every((action) => {
+      const bounds = action.getBoundingClientRect();
+      const cellBounds = element.getBoundingClientRect();
+      return bounds.left >= cellBounds.left - 1 && bounds.right <= cellBounds.right + 1;
+    }))).toBe(true);
+  }
+});
+
 test("all call outcomes save on mobile and laptop widths", async ({ page }) => {
   const outcomes = [
     { label: "Answered" },

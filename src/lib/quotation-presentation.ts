@@ -20,6 +20,13 @@ export type QuotationPresentationItem = {
   taxRate?: number;
 };
 
+export function displayProductUnit(unit: string) {
+  const normalized = unit.trim();
+  if (normalized.toLocaleLowerCase() === "rmt") return "Running Meter";
+  if (normalized.toLocaleLowerCase() === "nos") return "Numbers";
+  return normalized;
+}
+
 const OFFER_BRANDS = ["SAMSUNG", "DAIKIN", "GENERAL", "LG", "HITACHI", "VOLTAS", "PANASONIC", "MITSUBISHI", "CARRIER", "BLUE STAR", "TOSHIBA", "HAIER"];
 
 export function formatOfferReference(offerNo: string, items: readonly Pick<QuotationPresentationItem, "model">[], revision = 0) {

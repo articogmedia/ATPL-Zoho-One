@@ -661,14 +661,34 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
           : <LeadEmptyState hasLeads={hasAnyLeads} filtered={!!debouncedSearch || source !== "All" || filters.owner !== "All" || filters.stage !== "All" || !!filters.from || !!filters.to} onClear={() => { setSearch(""); setSource("All"); setFilters({ owner: "All", stage: "All" }); }} />
       ) : (
         <>
-          <div id="leads-list" className="hidden overflow-x-auto rounded-xl border border-border bg-card shadow-sm lg:block">
-            <table className="w-full min-w-[1060px] text-left">
+          <div id="leads-list" className="hidden rounded-xl border border-border bg-card shadow-sm lg:block">
+            <table className="w-full table-fixed text-left">
+              <colgroup>
+                {user.role === "Manager" ? <>
+                  <col style={{ width: "4%" }} />
+                  <col style={{ width: "13%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "9%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "24%" }} />
+                </> : <>
+                  <col style={{ width: "16%" }} />
+                  <col style={{ width: "13%" }} />
+                  <col style={{ width: "10%" }} />
+                  <col style={{ width: "11%" }} />
+                  <col style={{ width: "16%" }} />
+                  <col style={{ width: "15%" }} />
+                  <col style={{ width: "19%" }} />
+                </>}
+              </colgroup>
               <thead className="bg-secondary text-xs uppercase tracking-wide text-secondary-foreground">
                 <tr>
-                  {user.role === "Manager" && <th className="w-12 px-2 py-3 text-center"><input type="checkbox" aria-label="Select all visible leads" className="h-5 w-5 accent-primary" checked={allVisibleSelected} onChange={(event) => selectVisibleLeads(event.target.checked)} /></th>}
-                  <th className="px-4 py-3 font-semibold">Lead</th><th className="px-3 py-3 font-semibold">Phone</th>
-                  <th className="px-3 py-3 font-semibold">Source</th><th className="px-3 py-3 font-semibold">Created</th>
-                  <th className="px-3 py-3 font-semibold">Status</th><th className="px-3 py-3 font-semibold">Owner</th><th className="sticky right-0 z-10 min-w-[200px] whitespace-nowrap bg-secondary px-2 py-3 text-right font-semibold">Action</th>
+                  {user.role === "Manager" && <th className="px-1 py-3 text-center max-[1199px]:py-2"><input type="checkbox" aria-label="Select all visible leads" className="h-5 w-5 accent-primary" checked={allVisibleSelected} onChange={(event) => selectVisibleLeads(event.target.checked)} /></th>}
+                  <th className="px-2 py-3 font-semibold max-[1199px]:px-1 max-[1199px]:py-2">Lead</th><th className="px-2 py-3 font-semibold max-[1199px]:px-1 max-[1199px]:py-2">Phone</th>
+                  <th className="px-2 py-3 font-semibold max-[1199px]:px-1 max-[1199px]:py-2">Source</th><th className="px-2 py-3 font-semibold max-[1199px]:px-1 max-[1199px]:py-2">Created</th>
+                  <th className="px-2 py-3 font-semibold max-[1199px]:px-1 max-[1199px]:py-2">Status</th><th className="px-2 py-3 font-semibold max-[1199px]:px-1 max-[1199px]:py-2">Owner</th><th className="whitespace-nowrap px-2 py-3 text-right font-semibold max-[1199px]:px-1 max-[1199px]:py-2">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -823,11 +843,11 @@ function MobileLeadActionSheet({ lead, canAssign, onClose, onDetails, onAction }
 
 function DesktopActionButtons({ lead, manager, pending, onAction }: { lead: Lead; manager: boolean; pending: boolean; onAction: (type: "call" | "edit" | "reassign" | "delete") => void }) {
   const whatsapp = whatsappUrl(lead.phone);
-  return <div className="flex justify-end gap-2 whitespace-nowrap">
-    {lead.phone && <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" disabled={pending} aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={() => onAction("call")}><Phone /></Button>}
-    {whatsapp && <a aria-disabled={pending} className={`grid h-9 w-9 place-items-center rounded-lg hover:bg-secondary ${pending ? "pointer-events-none opacity-50" : ""}`} href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
-    <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" disabled={pending} aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
-    {manager && <><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" disabled={pending} aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0" disabled={pending} aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
+  return <div className="flex justify-end gap-1 whitespace-nowrap max-[1199px]:gap-0">
+    {lead.phone && <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 max-[1199px]:h-8 max-[1199px]:w-8" disabled={pending} aria-label={`Call ${lead.name}`} title={`Call ${lead.name}`} onClick={() => onAction("call")}><Phone /></Button>}
+    {whatsapp && <a aria-disabled={pending} className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg hover:bg-secondary max-[1199px]:h-8 max-[1199px]:w-8 ${pending ? "pointer-events-none opacity-50" : ""}`} href={whatsapp} target="_blank" rel="noreferrer" aria-label={`Message ${lead.name} on WhatsApp`} title="WhatsApp" onClick={(event) => event.stopPropagation()}><WhatsAppIcon className="h-5 w-5" /></a>}
+    <Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 max-[1199px]:h-8 max-[1199px]:w-8" disabled={pending} aria-label={`Edit ${lead.name}`} title={`Edit ${lead.name}`} onClick={() => onAction("edit")}><Pencil /></Button>
+    {manager && <><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 max-[1199px]:h-8 max-[1199px]:w-8" disabled={pending} aria-label={`Reassign ${lead.name}`} title={`Assign owner for ${lead.name}`} onClick={() => onAction("reassign")}><UserRound /></Button><Button type="button" size="icon" variant="ghost" className="h-9 w-9 shrink-0 max-[1199px]:h-8 max-[1199px]:w-8" disabled={pending} aria-label={`Delete ${lead.name}`} title={`Delete ${lead.name}`} onClick={() => onAction("delete")}><Trash2 /></Button></>}
   </div>;
 }
 
@@ -842,14 +862,14 @@ const DesktopRow = memo(function DesktopRow({ lead, callStats, now, manager, sel
   const dueToday = lead.followUp === todayIST();
   return (
     <tr className={`group cursor-pointer transition-colors hover:bg-secondary/50 ${staleUncalled ? "bg-amber-50/70 dark:bg-amber-950/20" : overdue ? "bg-destructive/5" : ""} ${pending ? "opacity-70" : ""} ${highlighted ? "bg-success/10 ring-1 ring-inset ring-success" : ""}`} onClick={() => { if (!pendingAddStatus) onOpen(lead); }}>
-      {manager && <td className="w-12 px-2 py-3 text-center" onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${lead.name}`} className="h-5 w-5 accent-primary" checked={selected} onChange={(event) => onSelect(event.target.checked)} /></td>}
-      <td className="max-w-56 px-4 py-3"><div className="truncate font-semibold">{lead.name}</div>{lead.company && <div className="truncate text-xs text-muted-foreground">{lead.company}</div>}{pendingAddStatus && <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${pendingAddStatus === "failed" ? "bg-destructive/10 text-destructive" : "bg-secondary text-muted-foreground"}`}>{pendingAddStatus === "failed" ? "Not saved" : "Saving…"}</span>}</td>
-      <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.phone || "—"}</td>
-      <td className="whitespace-nowrap px-3 py-3">{lead.source}</td>
-      <td className="whitespace-nowrap px-3 py-3 text-muted-foreground">{lead.createdOn || "—"}</td>
-      <td className="px-3 py-3"><StatusBadge status={lead.status} />{staleUncalled && <div className="mt-1 text-xs font-semibold text-amber-800 dark:text-amber-200">Uncalled &gt; 30 min</div>}{callStats && <div className="mt-1 text-xs text-muted-foreground">Calls: {callStats.attempts} consecutive{callStats.lastOutcome ? ` · Last: ${callStats.lastOutcome}` : ""}</div>}{overdue && <div className="mt-1 text-xs font-semibold text-destructive">Overdue follow-up</div>}{dueToday && <div className="mt-1 text-xs font-semibold text-amber-800 dark:text-amber-200">Follow-up today</div>}</td>
-      <td className="max-w-36 truncate px-3 py-3">{lead.assignedTo ?? "Unassigned"}</td>
-      <td className="sticky right-0 z-[1] min-w-[200px] whitespace-nowrap bg-card px-2 py-3 text-right group-hover:bg-secondary/50" onClick={(event) => event.stopPropagation()}>{pendingAddStatus === "failed" ? <div className="flex justify-end gap-2">{pendingAddRetryable && <Button type="button" className="h-9" onClick={onRetryPending}>Retry</Button>}<Button type="button" variant="outline" className="h-9" onClick={onDiscardPending}>Discard</Button></div> : <DesktopActionButtons lead={lead} manager={manager} pending={pending} onAction={(type) => onAction(type, lead)} />}{pending && <span role="status" className="sr-only">Saving lead</span>}</td>
+      {manager && <td className="px-1 py-3 text-center max-[1199px]:py-2" onClick={(event) => event.stopPropagation()}><input type="checkbox" aria-label={`Select ${lead.name}`} className="h-5 w-5 accent-primary" checked={selected} onChange={(event) => onSelect(event.target.checked)} /></td>}
+      <td className="max-w-56 px-2 py-3 max-[1199px]:px-1 max-[1199px]:py-2"><div className="truncate font-semibold">{lead.name}</div>{lead.company && <div className="truncate text-xs text-muted-foreground">{lead.company}</div>}{pendingAddStatus && <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${pendingAddStatus === "failed" ? "bg-destructive/10 text-destructive" : "bg-secondary text-muted-foreground"}`}>{pendingAddStatus === "failed" ? "Not saved" : "Saving…"}</span>}</td>
+      <td className="whitespace-nowrap px-2 py-3 text-muted-foreground max-[1199px]:px-1 max-[1199px]:py-2 max-[1199px]:text-xs">{lead.phone || "—"}</td>
+      <td className="break-words px-2 py-3 max-[1199px]:px-1 max-[1199px]:py-2 max-[1199px]:text-xs">{lead.source}</td>
+      <td className="whitespace-nowrap px-2 py-3 text-muted-foreground max-[1199px]:px-1 max-[1199px]:py-2 max-[1199px]:text-[11px]">{lead.createdOn || "—"}</td>
+      <td className="px-2 py-3 max-[1199px]:px-1 max-[1199px]:py-2 max-[1199px]:text-xs"><StatusBadge status={lead.status} />{staleUncalled && <div className="mt-1 text-xs font-semibold text-amber-800 dark:text-amber-200">Uncalled &gt; 30 min</div>}{callStats && <div className="mt-1 text-xs text-muted-foreground">Calls: {callStats.attempts} consecutive{callStats.lastOutcome ? ` · Last: ${callStats.lastOutcome}` : ""}</div>}{overdue && <div className="mt-1 text-xs font-semibold text-destructive">Overdue follow-up</div>}{dueToday && <div className="mt-1 text-xs font-semibold text-amber-800 dark:text-amber-200">Follow-up today</div>}</td>
+      <td className="break-words px-2 py-3 leading-tight max-[1199px]:px-1 max-[1199px]:py-2 max-[1199px]:text-xs">{lead.assignedTo ?? "Unassigned"}</td>
+      <td className="relative whitespace-nowrap bg-card px-2 py-3 text-right group-hover:bg-secondary/50 max-[1199px]:px-1 max-[1199px]:py-2" onClick={(event) => event.stopPropagation()}>{pendingAddStatus === "failed" ? <div className="flex justify-end gap-2">{pendingAddRetryable && <Button type="button" className="h-9" onClick={onRetryPending}>Retry</Button>}<Button type="button" variant="outline" className="h-9" onClick={onDiscardPending}>Discard</Button></div> : <DesktopActionButtons lead={lead} manager={manager} pending={pending} onAction={(type) => onAction(type, lead)} />}{pending && <span role="status" className="sr-only">Saving lead</span>}</td>
     </tr>
   );
 });

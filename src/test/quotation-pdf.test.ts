@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { PDFDocument, PDFPage, StandardFonts } from "pdf-lib";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
-import { canCreateQuotationPdf, formatOfferReference, formatQuotationMoney, needsPdfTotalsPage, quotationPresentation, splitQuotationItems } from "@/lib/quotation-presentation";
+import { canCreateQuotationPdf, displayProductUnit, formatOfferReference, formatQuotationMoney, needsPdfTotalsPage, quotationPresentation, splitQuotationItems } from "@/lib/quotation-presentation";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 
@@ -99,6 +99,12 @@ describe("quotation PDF route", () => {
       { model: "Samsung Split AC" },
       { model: "Daikin Split AC" },
     ])).toBe("239/26-27/MULTI-BRAND");
+  });
+
+  it("uses readable product unit labels without changing unfamiliar Zoho values", () => {
+    expect(displayProductUnit("Rmt")).toBe("Running Meter");
+    expect(displayProductUnit("nos")).toBe("Numbers");
+    expect(displayProductUnit("Set")).toBe("Set");
   });
 
   it("wraps long descriptions and set codes inside the fixed description column", async () => {
@@ -230,7 +236,7 @@ describe("quotation PDF route", () => {
     });
     quoteRepository.listProducts.mockResolvedValue([
       { id: "A1", model: "Samsung 4 Way 3.0 TR", unit: "Nos", price: 59724 },
-      { id: "B1", model: "B - Installation", unit: "Nos", price: 1220 },
+      { id: "B1", model: "B - Copper piping (per Rmt)", unit: "Rmt", price: 1220 },
     ]);
     const { POST } = await import("@/app/api/quotations/pdf/route");
     const drawText = vi.spyOn(PDFPage.prototype, "drawText");
@@ -257,6 +263,7 @@ describe("quotation PDF route", () => {
     expect(renderedText).toContain("Rs. 70,474.32");
     expect(renderedText).toContain("Subtotal - Part B");
     expect(renderedText).toContain("Rs. 1,220.00");
+    expect(renderedText).toContain("Running Meter");
     expect(renderedText).toContain("Total - Part B");
     expect(renderedText).toContain("Rs. 219.60");
     expect(renderedText).toContain("Grand Total");

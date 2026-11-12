@@ -168,6 +168,59 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
   });
 }
 
+test("quotation product rows fit desktop widths and scroll only on narrow screens", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/login");
+  await loginAs(page, "Reshma", "Manager");
+  await page.goto("/quotations");
+  await page.locator("#quote-step-customer ul button").first().click();
+  await page.getByRole("button", { name: "Item 1 product" }).click();
+  const picker = page.getByRole("dialog", { name: "Choose product" });
+  await picker.getByRole("searchbox", { name: "Search products by name, code or description" }).fill("copper piping");
+  await picker.getByRole("option", { name: /copper piping/i }).first().click();
+
+  const productsStep = page.locator("#quote-step-products");
+  const table = productsStep.getByRole("table", { name: "Quotation products" });
+  const row = table.locator("tbody tr").first();
+  const scroller = table.locator("xpath=..");
+  await expect(row.getByRole("cell").nth(2)).toHaveText("Running Meter");
+  await expect(row.getByRole("cell")).toHaveCount(9);
+
+  for (const width of [1440, 1280, 1024, 430, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    const scrollWidths = await scroller.evaluate((element) => ({
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    }));
+    if (width >= 1024) expect(scrollWidths.scrollWidth).toBeLessThanOrEqual(scrollWidths.clientWidth);
+    else expect(scrollWidths.scrollWidth).toBeGreaterThan(scrollWidths.clientWidth);
+
+    const alignment = await row.evaluate((productRow) => {
+      const headers = productRow.closest("table")?.querySelectorAll("thead th");
+      const cells = productRow.querySelectorAll("td");
+      return Array.from(cells, (cell, index) => {
+        const header = headers?.[index];
+        if (!header) return false;
+        const headerBounds = header.getBoundingClientRect();
+        const cellBounds = cell.getBoundingClientRect();
+        return Math.abs(headerBounds.left - cellBounds.left) <= 1 &&
+          Math.abs(headerBounds.right - cellBounds.right) <= 1;
+      });
+    });
+    expect(alignment.every(Boolean)).toBe(true);
+    expect(await row.evaluate((productRow) => Array.from(productRow.querySelectorAll("input, select, button")).every((control) => {
+      const bounds = control.getBoundingClientRect();
+      const cellBounds = control.closest("td")?.getBoundingClientRect();
+      return !!cellBounds && bounds.left >= cellBounds.left - 1 && bounds.right <= cellBounds.right + 1;
+    }))).toBe(true);
+  }
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Preview Offer" }).click();
+  await expect(page.locator("article.offer-document")).toContainText("Running Meter");
+});
+
 test("virtualized product picker scrolls to and selects the last product on desktop and mobile", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto("/login");

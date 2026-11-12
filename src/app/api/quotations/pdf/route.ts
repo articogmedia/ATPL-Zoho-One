@@ -9,7 +9,7 @@ import { ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
 import { GST_RATE, quotationGstBreakdown, todayIST, visibleFor, type QuoteGstTotals } from "@/lib/domain";
-import { formatOfferReference, formatQuotationMoney, quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
+import { displayProductUnit, formatOfferReference, formatQuotationMoney, quotationPresentation, splitQuotationItems, type QuotationPresentationItem } from "@/lib/quotation-presentation";
 import { wrapQuotationPdfText } from "@/lib/quotation-pdf-layout";
 import { quotationRequestSchema } from "@/lib/quotation-request";
 import { logPerf } from "@/lib/perf-log";
@@ -334,7 +334,7 @@ export async function POST(request: NextRequest) {
       const bodyValues = [
         `${index + 1}`,
         descriptionLines[0] ?? "",
-        item.unit,
+        displayProductUnit(item.unit),
         `${item.qty}`,
         money(item.price),
         `${formatTaxRate(item.taxRate ?? GST_RATE)}%`,

@@ -8,11 +8,12 @@ import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
 import { WhatsAppIcon } from "@/components/icons/whatsapp-icon";
 import { EmptyState, PageHeader, ResponsiveTable, StatusBadge, fieldClass } from "@/components/ui-bits";
+import { cn } from "@/lib/utils";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
 import { addLeadAction, createProductAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, getQuotationPdfUrlAction, markQuotationSentAction, refreshProductsAction, sendQuotationEmailAction, setLeadOutcomeAction, updateQuoteAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
-import { canCreateQuotationPdf, formatOfferReference, formatQuotationMoney, splitQuotationItems } from "@/lib/quotation-presentation";
+import { canCreateQuotationPdf, displayProductUnit, formatOfferReference, formatQuotationMoney, splitQuotationItems } from "@/lib/quotation-presentation";
 import { formatINR, GST_RATE, LOST_REASONS, quotationGstBreakdown, uniqueProducts, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type LostReason, type Product, type Quotation, type QuoteExtraCharge, type QuoteGstBreakdown, type QuoteGstTotals } from "@/lib/domain";
 
 type Row = { productId: string; qty: number; discount: number; taxRate: number };
@@ -1029,32 +1030,43 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
         <div className="min-w-0 max-w-full overflow-x-auto pb-2">
-          <table aria-label="Quotation products" className="w-full min-w-[1120px] table-fixed border-separate border-spacing-0 text-sm">
+          <table aria-label="Quotation products" className="w-full min-w-[760px] table-fixed border-separate border-spacing-0 text-sm lg:min-w-0">
+            <colgroup>
+              <col style={{ width: "5%" }} />
+              <col style={{ width: "22%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "17%" }} />
+              <col style={{ width: "7%" }} />
+            </colgroup>
             <thead className="bg-secondary text-left text-secondary-foreground">
               <tr>
-                <th className="w-14 rounded-tl-lg px-3 py-3 text-center">S.No</th>
-                <th className="w-[280px] px-3 py-3">Product</th>
-                <th className="w-20 px-3 py-3 text-center">Unit</th>
-                <th className="w-28 px-3 py-3 text-center">Qty</th>
-                <th className="w-32 px-3 py-3 text-right">Rate</th>
-                <th className="w-32 px-3 py-3 text-right">Discount</th>
-                <th className="w-28 px-3 py-3 text-center">GST %</th>
-                <th className="w-36 px-3 py-3 text-right">Amount</th>
-                <th className="relative w-14 rounded-tr-lg text-center"><span className="sr-only">Actions</span></th>
+                <th className="rounded-tl-lg px-1 py-2 text-center text-xs">S.No</th>
+                <th className="px-1 py-2 text-xs">Product</th>
+                <th className="px-1 py-2 text-center text-xs">Unit</th>
+                <th className="px-1 py-2 text-center text-xs">Qty</th>
+                <th className="px-1 py-2 text-right text-xs">Rate</th>
+                <th className="px-1 py-2 text-right text-xs">Discount</th>
+                <th className="px-1 py-2 text-center text-xs">GST %</th>
+                <th className="px-1 py-2 text-right text-xs">Amount</th>
+                <th className="rounded-tr-lg px-1 py-2 text-center text-[10px]">Actions</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
                 <tr key={i} className="border-b border-border/70 align-middle hover:bg-muted/30">
-                  <td className="px-3 py-3 text-center">{i + 1}</td>
-                  <td className="px-3 py-3"><ProductPicker products={products} value={r.productId} onChange={(productId, product) => upd(i, { productId, taxRate: product?.gstRate ?? byId.get(productId)?.gstRate ?? GST_RATE })} onCreated={(product) => setProducts((current) => uniqueProducts([...current, product]))} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} /></td>
-                  <td className="px-3 py-3 text-center">{p?.unit}</td>
-                  <td className="px-3 py-3"><input aria-label="Quantity" type="number" min={1} className={`${fieldClass} min-w-[5rem] text-center`} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
-                  <td className="px-3 py-3 text-right whitespace-nowrap">{formatINR(p?.price ?? 0)}</td>
-                  <td className="px-3 py-3"><input aria-label="Discount" type="number" min={0} className={`${fieldClass} min-w-[5rem] text-right`} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
-                  <td className="px-3 py-3"><TaxRateField compact label={`GST rate for item ${i + 1}`} value={r.taxRate ?? p?.gstRate ?? GST_RATE} onChange={(taxRate) => { if (taxRate !== undefined) upd(i, { taxRate }); }} /></td>
-                  <td className="px-3 py-3 text-right font-semibold whitespace-nowrap">{formatINR((p?.price ?? 0) * r.qty - r.discount)}</td>
-                  <td className="px-3 py-3 text-center"><Button type="button" variant="ghost" size="icon" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></td>
+                  <td className="px-1 py-2 text-center text-xs">{i + 1}</td>
+                  <td className="px-1 py-2"><ProductPicker products={products} value={r.productId} onChange={(productId, product) => upd(i, { productId, taxRate: product?.gstRate ?? byId.get(productId)?.gstRate ?? GST_RATE })} onCreated={(product) => setProducts((current) => uniqueProducts([...current, product]))} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} /></td>
+                  <td className="break-words px-1 py-2 text-center text-xs leading-tight">{p ? displayProductUnit(p.unit) : ""}</td>
+                  <td className="px-1 py-2"><input aria-label="Quantity" type="number" min={1} className={cn(fieldClass, "h-9 min-h-9 min-w-0 w-full px-1 text-center text-xs")} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
+                  <td className="whitespace-nowrap px-1 py-2 text-right text-xs">{formatINR(p?.price ?? 0)}</td>
+                  <td className="px-1 py-2"><input aria-label="Discount" type="number" min={0} className={cn(fieldClass, "h-9 min-h-9 min-w-0 w-full px-1 text-right text-xs")} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
+                  <td className="px-1 py-2"><TaxRateField compact label={`GST rate for item ${i + 1}`} value={r.taxRate ?? p?.gstRate ?? GST_RATE} onChange={(taxRate) => { if (taxRate !== undefined) upd(i, { taxRate }); }} /></td>
+                  <td className="whitespace-nowrap px-1 py-2 text-right text-xs font-semibold">{formatINR((p?.price ?? 0) * r.qty - r.discount)}</td>
+                  <td className="px-1 py-2 text-center"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-4 w-4" /></Button></td>
                 </tr>); })}
             </tbody>
           </table>
@@ -1304,7 +1316,7 @@ function ProductPicker({ products, value, onChange, onCreated, label, isManager,
                   <span className="block truncate text-sm font-medium" title={product.model}>{product.model}</span>
                   <span className="block truncate text-xs text-muted-foreground">{product.code || product.description || " "}</span>
                 </span>
-                <span className="text-right text-xs text-muted-foreground"><span className="block">{product.unit}</span><span className="block font-medium text-foreground">{formatINR(product.price)}</span></span>
+                <span className="text-right text-xs text-muted-foreground"><span className="block">{displayProductUnit(product.unit)}</span><span className="block font-medium text-foreground">{formatINR(product.price)}</span></span>
               </button>
               );
             })}
@@ -1345,7 +1357,7 @@ function TaxRateField({ label, value, onChange, allowNoTax = false, compact = fa
     <span className={compact ? "sr-only" : "block text-xs font-medium text-muted-foreground"}>{label}</span>
     <select
       aria-label={label}
-      className={`${fieldClass} min-h-11 w-full min-w-[5rem] text-sm`}
+      className={cn(fieldClass, "w-full", compact ? "h-9 min-h-9 min-w-0 px-1 text-xs" : "min-h-11 min-w-[5rem] text-sm")}
       value={value === undefined && allowNoTax ? "none" : isPreset ? String((value ?? GST_RATE) * 100) : "custom"}
       onChange={(event) => {
         if (event.target.value === "none") onChange(undefined);
@@ -1359,7 +1371,7 @@ function TaxRateField({ label, value, onChange, allowNoTax = false, compact = fa
     </select>
     {!isPreset && <input
       aria-label={`${label} custom percent`}
-      className={`${fieldClass} mt-1 min-h-11`}
+      className={cn(fieldClass, "mt-1", compact ? "h-9 min-h-9 min-w-0 px-1 text-xs" : "min-h-11")}
       type="number"
       min={0}
       max={100}
@@ -1430,7 +1442,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
           <tr key={`${item.model}-${index}`} className="border border-border">
             <td className="border border-border px-1 py-2 text-center">{startIndex + index + 1}</td>
             <td className="border border-border px-1 py-2"><span className="font-semibold">{item.model}</span>{item.description && <div className="mt-1 break-words text-muted-foreground">{item.description}</div>}</td>
-            <td className="border border-border px-1 py-2 text-center">{item.unit}</td>
+            <td className="border border-border px-1 py-2 text-center">{displayProductUnit(item.unit)}</td>
             <td className="border border-border px-1 py-2 text-center">{item.qty}</td>
             {hasDiscount && <td className="border border-border px-1 py-2 text-right">{offerMoney(item.discount ?? 0)}</td>}
             <td className="border border-border px-1 py-2 text-right">{offerMoney(item.price)}</td>
