@@ -792,16 +792,32 @@ async function zohoSearchList<T>(module: "Leads" | "Quotes", fields: string[], c
   const rows: T[] = [];
   let page = 1;
   let moreRecords = true;
-  while (moreRecords && rows.length < maxRecords) {
-    const response = await zoho<{ data?: T[]; info?: { more_records?: boolean } }>(
-      "GET", `/${module}/search`, {
-        query: { fields: fields.join(","), criteria, per_page: 200, page },
-      },
-    );
-    const batch = response?.data ?? [];
-    rows.push(...batch);
-    moreRecords = response?.info?.more_records === true && batch.length > 0;
-    page += 1;
+  const path = `/${module}/search`;
+  try {
+    while (moreRecords && rows.length < maxRecords) {
+      const response = await zoho<{ data?: T[]; info?: { more_records?: boolean } }>(
+        "GET", path, {
+          query: { fields: fields.join(","), criteria, per_page: 200, page },
+        },
+      );
+      const batch = response?.data ?? [];
+      rows.push(...batch);
+      moreRecords = response?.info?.more_records === true && batch.length > 0;
+      page += 1;
+    }
+  } catch (error) {
+    if (error instanceof ZohoError && String(error.code ?? "").toUpperCase() === "INVALID_QUERY") {
+      console.error("[zoho] CRM search query rejected", {
+        module,
+        path,
+        operation: error.operation ?? `GET ${path}`,
+        status: error.status,
+        code: error.code,
+        field: error.field,
+        message: error.message,
+      });
+    }
+    throw error;
   }
   return rows.slice(0, maxRecords);
 }
@@ -815,6 +831,20 @@ function quoteLeadId(record: ZQuote) {
 
 async function invoiceCandidates(): Promise<{ quotes: Quotation[]; leads: Lead[] }> {
   const maxRecords = env().ZOHO_MAX_LEADS;
+  const schema = await quoteSchema();
+  const hasLeadReference = schema.fieldNames.has(FIELD.quote.lead);
+  const snapshotField = customerSnapshotField(schema.fields)?.api_name
+    ?? (schema.fieldNames.has("Description") ? "Description" : undefined);
+  const quoteFields = [...new Set([
+    ...QUOTE_FIELDS.filter((field) => schema.fieldNames.has(field)),
+    ...(snapshotField ? [snapshotField] : []),
+  ])];
+  if (!hasLeadReference) {
+    console.warn("[zoho] Quotes module is missing the lead reference field; Won-quote candidates will use saved snapshot lead IDs.", {
+      module: "Quotes",
+      field: FIELD.quote.lead,
+    });
+  }
   const wonRecords = await cached("leads:invoice-won", SHORT(), () =>
     zohoSearchList<ZLead>("Leads", LEAD_FIELDS, `(Lead_Status:equals:Won)`, maxRecords),
     { keepStale: true },
@@ -826,14 +856,28 @@ async function invoiceCandidates(): Promise<{ quotes: Quotation[]; leads: Lead[]
   const quoteCriteria = [
     "(Status:equals:Accepted)",
     "(Status:equals:Won)",
-    ...(wonLeadIds.length ? [`(${FIELD.quote.lead}.id:in:${wonLeadIds.join(",")})`] : []),
+    ...(hasLeadReference && wonLeadIds.length ? [`(${FIELD.quote.lead}.id:in:${wonLeadIds.join(",")})`] : []),
   ];
-  const quoteRecords = await zohoSearchList<ZQuote>(
+  let quoteRecords = await zohoSearchList<ZQuote>(
     "Quotes",
-    QUOTE_FIELDS,
+    quoteFields,
     `(${quoteCriteria.join("or")})`,
     maxRecords,
   );
+  if (!hasLeadReference && wonLeadIds.length) {
+    const wonLeadIdsSet = new Set(wonLeadIds);
+    const snapshotQuotes = await cached("quotes:invoice-won:snapshot", SHORT(), () =>
+      zohoList<ZQuote>("Quotes", quoteFields, maxRecords),
+      { keepStale: true },
+    );
+    const quoteRecordsById = new Map(quoteRecords.map((record) => [String(record.id ?? ""), record]));
+    for (const record of snapshotQuotes) {
+      if (wonLeadIdsSet.has(quoteLeadId(record))) {
+        quoteRecordsById.set(String(record.id ?? ""), record);
+      }
+    }
+    quoteRecords = [...quoteRecordsById.values()];
+  }
   const neededLeadIds = [...new Set(quoteRecords.map(quoteLeadId).filter(Boolean))];
   const leadsById = new Map(wonLeads.map((lead) => [lead.id, lead]));
   const additionalLeadIds = neededLeadIds.filter((leadId) => !leadsById.has(leadId));
