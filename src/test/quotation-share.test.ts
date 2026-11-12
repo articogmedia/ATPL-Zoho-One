@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   put: vi.fn<(_pathname: string, _pdf: Buffer, _options: Record<string, unknown>) => Promise<{ url: string }>>(async () => ({
     url: "https://blob.example/quotation.pdf",
   })),
-  renderPdf: vi.fn(),
+  generatePdf: vi.fn(),
 }));
 
 vi.mock("@vercel/blob", () => ({ put: mocks.put }));
@@ -38,7 +38,14 @@ vi.mock("@/lib/quotation-pdf-snapshot", () => ({
   signQuotationPdfSnapshot: vi.fn(() => "signed-snapshot"),
   verifyQuotationPdfSnapshot: vi.fn(),
 }));
-vi.mock("@/app/api/quotations/pdf/route", () => ({ POST: mocks.renderPdf }));
+vi.mock("@/lib/quotation-pdf", () => ({
+  generateQuotationPdfBytes: mocks.generatePdf,
+  QuotationPdfGenerationError: class QuotationPdfGenerationError extends Error {
+    constructor(readonly stage: string, readonly status: number, cause: unknown) {
+      super("Quotation PDF generation failed.", { cause });
+    }
+  },
+}));
 vi.mock("@/lib/perf-log", () => ({ logPerf: vi.fn() }));
 
 describe("quotation PDF storage route", () => {
@@ -48,10 +55,10 @@ describe("quotation PDF storage route", () => {
     mocks.getStoredQuotationPdf.mockClear();
     mocks.saveStoredQuotationPdf.mockClear();
     mocks.put.mockClear();
-    mocks.renderPdf.mockReset().mockImplementation(async () => new Response("%PDF-fixture", {
-      status: 200,
-      headers: { "Content-Type": "application/pdf" },
-    }));
+    mocks.generatePdf.mockReset().mockResolvedValue({
+      bytes: Buffer.from("%PDF-fixture"),
+      filename: "offer-301-26-27.pdf",
+    });
   });
 
   it("generates and stores a PDF once, then reuses its saved URL", async () => {
@@ -75,22 +82,21 @@ describe("quotation PDF storage route", () => {
     await expect(first.json()).resolves.toEqual({ url: "https://blob.example/quotation.pdf" });
     await expect(second.json()).resolves.toEqual({ url: "https://blob.example/quotation.pdf" });
     expect(mocks.getQuote).toHaveBeenCalledOnce();
-    expect(mocks.renderPdf).toHaveBeenCalledOnce();
-    const pdfRequest = mocks.renderPdf.mock.calls[0]?.[0] as NextRequest;
-    await expect(pdfRequest.json()).resolves.toMatchObject({
+    expect(mocks.generatePdf).toHaveBeenCalledOnce();
+    expect(mocks.generatePdf).toHaveBeenCalledWith(expect.objectContaining({
       quoteId: "quote-1",
       quoteSnapshotToken: "signed-snapshot",
-    });
-    expect(pdfRequest.headers.get("cookie")).toBe("atpl-session=valid");
+    }), mocks.user);
     expect(mocks.put).toHaveBeenCalledOnce();
     const [pathname, pdf, uploadOptions] = mocks.put.mock.calls[0]!;
-    expect(pathname).toMatch(/^quotations\/.+\.pdf$/);
+    expect(pathname).toBe("quotations/301-26-27-quote-1.pdf");
     expect(Buffer.isBuffer(pdf)).toBe(true);
     expect(pdf.subarray(0, 4).toString("ascii")).toBe("%PDF");
     expect(uploadOptions).toMatchObject({
       access: "public",
       contentType: "application/pdf",
       token: "blob-token",
+      allowOverwrite: true,
     });
     expect(mocks.saveStoredQuotationPdf).toHaveBeenCalledWith("quote-1", {
       url: "https://blob.example/quotation.pdf",
@@ -101,9 +107,7 @@ describe("quotation PDF storage route", () => {
 
   it("returns a safe reference when the PDF renderer fails", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-    mocks.renderPdf.mockResolvedValue(new Response(JSON.stringify({
-      error: "Internal database details must not reach the customer. (Ref: PDF-REF)",
-    }), { status: 500, headers: { "Content-Type": "application/json" } }));
+    mocks.generatePdf.mockRejectedValueOnce(new Error("Internal database details must not reach the customer."));
     const { POST } = await import("@/app/api/quotations/share/route");
     const response = await POST(new NextRequest("http://localhost/api/quotations/share", {
       method: "POST",
@@ -116,12 +120,13 @@ describe("quotation PDF storage route", () => {
     }));
 
     expect(response.status).toBe(500);
-    const body = await response.json() as { error: string; reference: string };
+    const body = await response.json() as { error: string; reference: string; stage: string };
     expect(body.error).toContain(body.reference);
+    expect(body.error).toContain("step: pdf_generation");
     expect(body.error).not.toContain("Internal database details");
     expect(errorLog).toHaveBeenCalledWith(
-      "[api] quotation share PDF generation failed",
-      expect.objectContaining({ stage: "pdf_generation", innerReference: "PDF-REF" }),
+      "[api] quotation share preparation failed",
+      expect.objectContaining({ stage: "pdf_generation", message: "Internal database details must not reach the customer." }),
     );
     expect(mocks.put).not.toHaveBeenCalled();
     errorLog.mockRestore();
@@ -144,8 +149,10 @@ describe("quotation PDF storage route", () => {
     }));
 
     expect(response.status).toBe(500);
-    const body = await response.json() as { error: string; reference: string };
+    const body = await response.json() as { error: string; reference: string; stage: string };
     expect(body.error).toContain(body.reference);
+    expect(body.error).toContain("step: blob_upload");
+    expect(body.stage).toBe("blob_upload");
     expect(body.error).not.toContain("private storage endpoint");
     expect(errorLog).toHaveBeenCalledWith(
       "[api] quotation share preparation failed",
@@ -162,8 +169,9 @@ describe("quotation PDF storage route", () => {
     errorLog.mockRestore();
   });
 
-  it("retries PDF storage for the existing quotation without creating another quote", async () => {
-    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("returns the uploaded URL when Redis lookup and cache writes fail", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.getStoredQuotationPdf.mockRejectedValueOnce(new Error("Redis unavailable"));
     mocks.saveStoredQuotationPdf.mockRejectedValueOnce(new Error("shared PDF cache is unavailable"));
     const { POST } = await import("@/app/api/quotations/share/route");
     const request = () => new NextRequest("http://localhost/api/quotations/share", {
@@ -176,20 +184,13 @@ describe("quotation PDF storage route", () => {
       }),
     });
 
-    const failed = await POST(request());
-    expect(failed.status).toBe(500);
-    expect(errorLog).toHaveBeenCalledWith(
-      "[api] quotation share preparation failed",
-      expect.objectContaining({ quoteId: "quote-1", stage: "pdf_storage" }),
-    );
-
-    const retried = await POST(request());
-    expect(retried.status).toBe(200);
-    await expect(retried.json()).resolves.toEqual({ url: "https://blob.example/quotation.pdf" });
-    expect(mocks.getQuote).toHaveBeenCalledTimes(2);
-    expect(mocks.renderPdf).toHaveBeenCalledTimes(2);
-    expect(mocks.put).toHaveBeenCalledTimes(2);
-    expect(mocks.saveStoredQuotationPdf).toHaveBeenCalledTimes(2);
-    errorLog.mockRestore();
+    const response = await POST(request());
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ url: "https://blob.example/quotation.pdf" });
+    expect(mocks.getQuote).toHaveBeenCalledOnce();
+    expect(mocks.generatePdf).toHaveBeenCalledOnce();
+    expect(mocks.put).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalled();
+    warning.mockRestore();
   });
 });

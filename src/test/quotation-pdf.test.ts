@@ -231,6 +231,42 @@ describe("quotation PDF route", () => {
     drawText.mockRestore();
   });
 
+  it("falls back to the existing Zoho quote when its snapshot token has expired", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/quotation-pdf-snapshot", () => ({
+      verifyQuotationPdfSnapshot: vi.fn(() => null),
+    }));
+    currentUser.mockResolvedValue({ id: "U1", name: "Manager", role: "Manager" });
+    quoteRepository.getQuote.mockResolvedValue({
+      id: "Q-EXPIRED",
+      offerNo: "242/26-27",
+      leadId: "",
+      customer: "Customer",
+      executive: "Manager",
+      ownerId: "U1",
+      total: 118,
+      date: "2026-11-09",
+      items: [{ model: "Saved AC", unit: "Nos", qty: 1, price: 100 }],
+    });
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+
+    const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "Q-EXPIRED",
+        quoteSnapshotToken: "expired-snapshot",
+        offerNo: "242/26-27",
+        subject: "Air conditioning quotation",
+        items: [{ qty: 1 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer()).subarray(0, 4).toString("ascii")).toBe("%PDF");
+    expect(quoteRepository.getQuote).toHaveBeenCalledWith("Q-EXPIRED");
+    vi.doUnmock("@/lib/quotation-pdf-snapshot");
+  });
+
   it("logs the PDF preparation stage and original cause when product retrieval fails", async () => {
     currentUser.mockResolvedValue({ id: "U1", name: "User", role: "Manager" });
     quoteRepository.getLead.mockResolvedValue({
@@ -520,5 +556,44 @@ describe("quotation PDF route", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("application/pdf");
     expect(Buffer.from(await response.arrayBuffer()).subarray(0, 4).toString("ascii")).toBe("%PDF");
+  });
+
+  it("generates a valid PDF when the bundled logo is unavailable", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      readFile: vi.fn().mockRejectedValue(new Error("logo file not found")),
+    }));
+    currentUser.mockResolvedValue({ id: "U1", name: "Manager", role: "Manager" });
+    quoteRepository.getQuote.mockResolvedValue({
+      id: "Q-LOGO",
+      offerNo: "239/26-27",
+      leadId: "",
+      customer: "Customer",
+      executive: "Manager",
+      ownerId: "U1",
+      total: 118,
+      date: "2026-10-29",
+      items: [{ model: "Cassette AC", unit: "Nos", qty: 1, price: 100 }],
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { POST } = await import("@/app/api/quotations/pdf/route");
+    const response = await POST(new NextRequest("http://localhost/api/quotations/pdf", {
+      method: "POST",
+      body: JSON.stringify({
+        quoteId: "Q-LOGO",
+        offerNo: "239/26-27",
+        subject: "AC quotation",
+        items: [{ qty: 1 }],
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer()).subarray(0, 4).toString("ascii")).toBe("%PDF");
+    expect(warning).toHaveBeenCalledWith(
+      "[quotation-pdf] logo unavailable; generating without it",
+      expect.objectContaining({ message: "logo file not found" }),
+    );
+    warning.mockRestore();
+    vi.doUnmock("node:fs/promises");
   });
 });

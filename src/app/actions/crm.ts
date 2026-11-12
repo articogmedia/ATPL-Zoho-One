@@ -12,15 +12,15 @@ import { hosts, ZohoError } from "@/lib/zoho/client";
 import { friendlyZohoError, newErrorReference } from "@/lib/crm-action-errors";
 import { env } from "@/lib/env";
 import { logPerf } from "@/lib/perf-log";
-import { getStoredQuotationPdf, invalidateStoredQuotationPdf } from "@/lib/quotation-pdf-store";
+import { getStoredQuotationPdf, invalidateStoredQuotationPdf, saveStoredQuotationPdf } from "@/lib/quotation-pdf-store";
 import { sendEmail } from "@/lib/email";
 import { takeQuotationEmailRateLimit } from "@/lib/quotation-email-rate-limit";
 import { getStoredInvoicePdf, saveStoredInvoicePdf } from "@/lib/invoice-pdf-store";
 import { canConvertToInvoice, canViewInvoice } from "@/lib/invoice-rules";
-import { COMPANY } from "@/lib/company";
+import { COMPANY, offerSubject } from "@/lib/company";
 import { signQuotationPdfSnapshot } from "@/lib/quotation-pdf-snapshot";
 import {
-  LEAD_SOURCES, LEAD_STATUSES, LOST_REASONS, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, todayIST, visibleFor,
+  GST_RATE, LEAD_SOURCES, LEAD_STATUSES, LOST_REASONS, canAdvanceLeadStatus, canAssignLeads, canUpdateWorkItem, isExecutive, todayIST, visibleFor,
   formatINR, normalizePhone, type CallOutcome, type LeadSource, type LeadStatus, type LeadUpdate, type LostReason, type User, type VisitStatus,
 } from "@/lib/domain";
 
@@ -553,14 +553,84 @@ export async function sendQuotationEmailAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("quotations");
     const { quoteId, to } = quotationEmailSchema.parse(input);
+    const config = env();
+    if (config.EMAIL_PROVIDER === "disabled") {
+      throw new ForbiddenError("Email is not configured.");
+    }
     const repository = crm();
     const quote = await repository.getQuote(quoteId);
     if (!quote || visibleFor(user, [quote]).length === 0) {
       throw new ForbiddenError("Quotation not found or access denied.");
     }
-    const pdf = await getStoredQuotationPdf(quoteId);
+    let pdf: Awaited<ReturnType<typeof getStoredQuotationPdf>> | undefined;
+    try {
+      pdf = await getStoredQuotationPdf(quoteId);
+    } catch (error) {
+      console.warn("[action] stored quotation PDF lookup failed; regenerating for email", {
+        quoteId,
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (!pdf?.url) {
-      throw new ForbiddenError("The quotation PDF is not stored yet. Open or regenerate the saved quotation first.");
+      const blobToken = config.BLOB_READ_WRITE_TOKEN;
+      if (!blobToken) {
+        throw new ForbiddenError("PDF sharing is not configured. Set BLOB_READ_WRITE_TOKEN.");
+      }
+      if (!quote.items?.length) {
+        throw new ForbiddenError("This quotation has no saved product lines to generate a PDF.");
+      }
+      const pdfInput = {
+        quoteId: quote.id,
+        quoteSnapshotToken: signQuotationPdfSnapshot(quote, user.id),
+        offerNo: quote.offerNo,
+        subject: quote.subject || offerSubject(quote.items.map((item) => item.model)),
+        items: quote.items.map((item) => ({
+          ...(item.productId ? { productId: item.productId } : {}),
+          qty: item.qty,
+          discount: item.discount ?? 0,
+          taxRate: item.taxRate ?? GST_RATE,
+        })),
+        extraCharges: quote.gstBreakdown?.extraCharges ?? [],
+      };
+      const [{ put }, { generateQuotationPdfBytes }] = await Promise.all([
+        import("@vercel/blob"),
+        import("@/lib/quotation-pdf"),
+      ]);
+      const { bytes } = await generateQuotationPdfBytes(pdfInput, user);
+      const safeOfferNo = quote.offerNo.replace(/[^A-Za-z0-9._-]/g, "-");
+      const safeQuoteId = quote.id.replace(/[^A-Za-z0-9._-]/g, "-");
+      let blob: Awaited<ReturnType<typeof put>>;
+      try {
+        blob = await put(`quotations/${safeOfferNo}-${safeQuoteId}.pdf`, bytes, {
+          access: "public",
+          contentType: "application/pdf",
+          token: blobToken,
+          allowOverwrite: true,
+        });
+      } catch (error) {
+        console.error("[action] quotation PDF blob upload failed", {
+          quoteId,
+          stage: "blob_upload",
+          errorName: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      if (new URL(blob.url).protocol !== "https:") {
+        throw new Error("Vercel Blob returned a non-HTTPS quotation URL.");
+      }
+      pdf = { url: blob.url, ownerId: quote.ownerId, executive: quote.executive };
+      try {
+        await saveStoredQuotationPdf(quote.id, pdf);
+      } catch (error) {
+        console.warn("[action] quotation PDF URL cache write failed; continuing email", {
+          quoteId,
+          stage: "pdf_storage",
+          errorName: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     if (!await takeQuotationEmailRateLimit(user.id, quoteId)) {
       throw new ForbiddenError("Email limit reached. Try again later.");
@@ -648,7 +718,17 @@ export async function getQuotationPdfUrlAction(rawId: string): Promise<ActionRes
   return run(async () => {
     const user = await requireActionUser("quotations");
     const quoteId = id.parse(rawId);
-    const stored = await getStoredQuotationPdf(quoteId);
+    let stored: Awaited<ReturnType<typeof getStoredQuotationPdf>> | undefined;
+    try {
+      stored = await getStoredQuotationPdf(quoteId);
+    } catch (error) {
+      console.warn("[action] stored quotation PDF lookup failed", {
+        quoteId,
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
     if (!stored) return null;
     if (visibleFor(user, [{ ownerId: stored.ownerId, executive: stored.executive }]).length === 0) {
       throw new ForbiddenError("You can only view your own quotations.");

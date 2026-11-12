@@ -10,7 +10,7 @@ import { crm } from "@/lib/crm";
 import { visibleFor, type Quotation } from "@/lib/domain";
 import { getStoredQuotationPdf, saveStoredQuotationPdf } from "@/lib/quotation-pdf-store";
 import { signQuotationPdfSnapshot, verifyQuotationPdfSnapshot } from "@/lib/quotation-pdf-snapshot";
-import { POST as generateQuotationPdf } from "@/app/api/quotations/pdf/route";
+import { generateQuotationPdfBytes, QuotationPdfGenerationError } from "@/lib/quotation-pdf";
 
 export const runtime = "nodejs";
 export const preferredRegion = "bom1";
@@ -55,7 +55,11 @@ async function handlePost(request: NextRequest) {
     console.error("[api] quotation share request parsing failed", {
       reference, message: error instanceof Error ? error.message : String(error),
     });
-    return NextResponse.json({ error: `Invalid quotation share request. (Ref: ${reference})` }, { status: 400 });
+    return NextResponse.json({
+      error: `Invalid quotation share request. (Ref: ${reference})`,
+      reference,
+      stage: "request_validation",
+    }, { status: 400 });
   }
 
   const parsed = quotationRequestSchema.safeParse(payload);
@@ -69,13 +73,24 @@ async function handlePost(request: NextRequest) {
     return NextResponse.json({
       error: parsed.error.issues[0]?.message ?? "Please check the quotation details.",
       reference,
+      stage: "request_validation",
     }, { status: 400 });
   }
 
   try {
     let savedQuote: Quotation | null = null;
     if (parsed.data.quoteId) {
-      const stored = await getStoredQuotationPdf(parsed.data.quoteId);
+      let stored: Awaited<ReturnType<typeof getStoredQuotationPdf>> | undefined;
+      try {
+        stored = await getStoredQuotationPdf(parsed.data.quoteId);
+      } catch (error) {
+        console.warn("[api] stored quotation PDF lookup failed; regenerating", {
+          quoteId: parsed.data.quoteId,
+          stage,
+          errorName: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
       if (stored) {
         if (visibleFor(user, [{ ownerId: stored.ownerId, executive: stored.executive }]).length === 0) {
           return NextResponse.json({ error: "Quotation not found or access denied." }, { status: 403 });
@@ -85,7 +100,11 @@ async function handlePost(request: NextRequest) {
       stage = parsed.data.quoteSnapshotToken ? "quotation_snapshot_verification" : "quotation_retrieval";
       savedQuote = parsed.data.quoteSnapshotToken
         ? verifyQuotationPdfSnapshot(parsed.data.quoteSnapshotToken, user.id, parsed.data.quoteId)
-        : await crm().getQuote(parsed.data.quoteId);
+        : null;
+      if (!savedQuote) {
+        stage = "quotation_retrieval";
+        savedQuote = await crm().getQuote(parsed.data.quoteId);
+      }
       if (!savedQuote || visibleFor(user, [savedQuote]).length === 0) {
         return NextResponse.json({ error: "Quotation not found or access denied." }, { status: 403 });
       }
@@ -99,68 +118,52 @@ async function handlePost(request: NextRequest) {
         reference, requiredEnvironmentVariable: "BLOB_READ_WRITE_TOKEN",
       });
       return NextResponse.json({
-        error: `PDF sharing is not configured. Set BLOB_READ_WRITE_TOKEN. (Ref: ${reference})`,
+        error: `PDF sharing is not configured. Set BLOB_READ_WRITE_TOKEN. (step: ${stage}; Ref: ${reference})`,
         reference,
+        stage,
       }, { status: 503 });
     }
 
     stage = "pdf_generation";
     const pdfStarted = Date.now();
-    const pdfUrl = new URL("/api/quotations/pdf", request.url);
-    const pdfResponse = await generateQuotationPdf(new NextRequest(pdfUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(request.headers.get("cookie") ? { Cookie: request.headers.get("cookie")! } : {}),
-      },
-      body: JSON.stringify({
-        ...parsed.data,
-        ...(savedQuote ? { quoteSnapshotToken: signQuotationPdfSnapshot(savedQuote, user.id) } : {}),
-      }),
-    }));
-    logPerf("api.quotations.share.pdf", Date.now() - pdfStarted, { status: pdfResponse.status });
-    if (!pdfResponse.ok) {
-      const body = await pdfResponse.text();
-      let innerReference: string | undefined;
-      let innerError: string | undefined;
-      try {
-        const responseBody = JSON.parse(body) as { error?: unknown };
-        if (typeof responseBody.error === "string") {
-          innerError = responseBody.error;
-          innerReference = /\(Ref:\s*([A-Za-z0-9-]+)\)/.exec(responseBody.error)?.[1];
-        }
-      } catch {
-        // The outer error remains safe if PDF generation returned non-JSON.
-      }
-      const reference = newErrorReference();
-      console.error("[api] quotation share PDF generation failed", {
-        reference,
-        stage,
-        quoteId: parsed.data.quoteId,
-        offerNo: parsed.data.offerNo,
-        status: pdfResponse.status,
-        innerReference,
-        innerError,
-        deploymentCommit: process.env.VERCEL_GIT_COMMIT_SHA,
-      });
-      return NextResponse.json({
-        error: `Could not prepare the quotation PDF. (Ref: ${reference})`,
-        reference,
-      }, { status: pdfResponse.status });
+    const pdfInput = {
+      ...parsed.data,
+      ...(savedQuote ? { quoteSnapshotToken: signQuotationPdfSnapshot(savedQuote, user.id) } : {}),
+    };
+    let pdf: Buffer;
+    try {
+      pdf = (await generateQuotationPdfBytes(pdfInput, user)).bytes;
+    } catch (error) {
+      if (error instanceof QuotationPdfGenerationError) stage = error.stage;
+      throw error;
     }
-
+    logPerf("api.quotations.share.pdf", Date.now() - pdfStarted, { bytes: pdf.length });
     stage = "pdf_validation";
-    const pdf = Buffer.from(await pdfResponse.arrayBuffer());
     if (pdf.length === 0 || pdf.subarray(0, 4).toString("ascii") !== "%PDF") {
       throw new Error("The generated quotation file is empty or invalid.");
     }
     stage = "blob_upload";
     const blobStarted = Date.now();
-    const blob = await put(`quotations/${randomUUID()}.pdf`, pdf, {
-      access: "public",
-      contentType: "application/pdf",
-      token: blobToken,
-    });
+    const safeOfferNo = parsed.data.offerNo.replace(/[^A-Za-z0-9._-]/g, "-");
+    const safeQuoteId = (savedQuote?.id ?? parsed.data.quoteId ?? randomUUID()).replace(/[^A-Za-z0-9._-]/g, "-");
+    let blob: Awaited<ReturnType<typeof put>>;
+    try {
+      blob = await put(`quotations/${safeOfferNo}-${safeQuoteId}.pdf`, pdf, {
+        access: "public",
+        contentType: "application/pdf",
+        token: blobToken,
+        allowOverwrite: true,
+      });
+    } catch (error) {
+      console.error("[api] quotation PDF blob upload failed", {
+        quoteId: parsed.data.quoteId,
+        offerNo: parsed.data.offerNo,
+        stage,
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     const blobUrl = new URL(blob.url);
     if (blobUrl.protocol !== "https:") {
       throw new Error("Vercel Blob returned a non-HTTPS quotation URL.");
@@ -168,29 +171,41 @@ async function handlePost(request: NextRequest) {
     logPerf("api.quotations.share.upload", Date.now() - blobStarted, { bytes: pdf.length });
     if (savedQuote) {
       stage = "pdf_storage";
-      await saveStoredQuotationPdf(savedQuote.id, {
-        url: blobUrl.toString(),
-        ownerId: savedQuote.ownerId,
-        executive: savedQuote.executive,
-      });
+      try {
+        await saveStoredQuotationPdf(savedQuote.id, {
+          url: blobUrl.toString(),
+          ownerId: savedQuote.ownerId,
+          executive: savedQuote.executive,
+        });
+      } catch (error) {
+        console.warn("[api] quotation PDF URL cache write failed; returning uploaded URL", {
+          quoteId: savedQuote.id,
+          stage,
+          errorName: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
     return NextResponse.json({ url: blobUrl.toString() });
   } catch (error) {
+    const cause = error instanceof QuotationPdfGenerationError ? error.cause : error;
+    const causeError = cause instanceof Error ? cause : undefined;
     const reference = newErrorReference();
     console.error("[api] quotation share preparation failed", {
       reference,
       quoteId: parsed.data.quoteId,
       offerNo: parsed.data.offerNo,
       stage,
-      errorName: error instanceof Error ? error.name : typeof error,
-      message: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      cause: error instanceof Error ? describeErrorCause(error.cause) : undefined,
+      errorName: causeError?.name ?? typeof cause,
+      message: causeError?.message ?? String(cause),
+      stack: causeError?.stack,
+      cause: describeErrorCause(causeError?.cause),
       deploymentCommit: process.env.VERCEL_GIT_COMMIT_SHA,
     });
     return NextResponse.json({
-      error: `Could not prepare a shareable quotation PDF. (Ref: ${reference})`,
+      error: `Could not prepare PDF (step: ${stage}). Ref: ${reference}`,
       reference,
+      stage,
     }, { status: 500 });
   }
 }

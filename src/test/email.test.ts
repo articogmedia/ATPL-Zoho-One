@@ -62,7 +62,7 @@ describe("sendEmail", () => {
     const { sendEmail } = await import("@/lib/email");
     envMock.env.mockReturnValue({ EMAIL_PROVIDER: "disabled" });
     await expect(sendEmail({ to: "customer@example.com", subject: "Offer", text: "Body" }))
-      .rejects.toThrow("delivery is disabled");
+      .rejects.toThrow("Email is not configured.");
 
     envMock.env.mockReturnValue({
       EMAIL_PROVIDER: "resend",

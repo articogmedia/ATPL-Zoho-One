@@ -46,4 +46,16 @@ describe("stored quotation PDFs", () => {
     expect(mockCache.invalidate).toHaveBeenCalledWith("quotation-pdf:quote-1");
     expect(mockCache.values.has("quotation-pdf:quote-1")).toBe(false);
   });
+
+  it("treats cache read and write failures as non-fatal", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockCache.getCachedValue.mockRejectedValueOnce(new Error("Redis unavailable"));
+    mockCache.setCachedValue.mockRejectedValueOnce(new Error("Redis unavailable"));
+    const { getStoredQuotationPdf, saveStoredQuotationPdf } = await import("@/lib/quotation-pdf-store");
+
+    await expect(getStoredQuotationPdf("quote-1")).resolves.toBeUndefined();
+    await expect(saveStoredQuotationPdf("quote-1", { url: "https://blob.example/quotation.pdf" })).resolves.toBeUndefined();
+    expect(warning).toHaveBeenCalledTimes(2);
+    warning.mockRestore();
+  });
 });

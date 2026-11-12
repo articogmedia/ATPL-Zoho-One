@@ -11,7 +11,7 @@ export type EmailMessage = {
 export async function sendEmail(message: EmailMessage): Promise<void> {
   const config = env();
   if (config.EMAIL_PROVIDER === "disabled") {
-    throw new Error("Email delivery is disabled. Configure EMAIL_PROVIDER and its credentials.");
+    throw new Error("Email is not configured.");
   }
   if (config.EMAIL_PROVIDER === "resend") {
     const response = await fetch("https://api.resend.com/emails", {

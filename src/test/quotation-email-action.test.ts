@@ -7,10 +7,15 @@ const mocks = vi.hoisted(() => ({
   getQuote: vi.fn(),
   addLeadNote: vi.fn(),
   getStoredQuotationPdf: vi.fn(),
+  saveStoredQuotationPdf: vi.fn(),
   takeQuotationEmailRateLimit: vi.fn(),
   sendEmail: vi.fn(),
+  generatePdf: vi.fn(),
+  put: vi.fn(),
+  env: vi.fn(),
 }));
 
+vi.mock("@vercel/blob", () => ({ put: mocks.put }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/server", () => ({ after: vi.fn() }));
 vi.mock("@/lib/auth/guard", () => ({
@@ -29,8 +34,11 @@ vi.mock("@/lib/cache", () => ({
 }));
 vi.mock("@/lib/quotation-pdf-store", () => ({
   getStoredQuotationPdf: mocks.getStoredQuotationPdf,
+  saveStoredQuotationPdf: mocks.saveStoredQuotationPdf,
   invalidateStoredQuotationPdf: vi.fn(),
 }));
+vi.mock("@/lib/quotation-pdf", () => ({ generateQuotationPdfBytes: mocks.generatePdf }));
+vi.mock("@/lib/quotation-pdf-snapshot", () => ({ signQuotationPdfSnapshot: vi.fn(() => "fresh-snapshot") }));
 vi.mock("@/lib/quotation-email-rate-limit", () => ({
   takeQuotationEmailRateLimit: mocks.takeQuotationEmailRateLimit,
 }));
@@ -39,7 +47,7 @@ vi.mock("@/lib/zoho/client", () => ({
   ZohoError: class ZohoError extends Error {},
   hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
 }));
-vi.mock("@/lib/env", () => ({ env: () => ({ ZOHO_SANDBOX: "true" }) }));
+vi.mock("@/lib/env", () => ({ env: mocks.env }));
 vi.mock("@/lib/crm-action-errors", () => ({
   friendlyZohoError: vi.fn(),
   newErrorReference: () => "TEST-REF",
@@ -58,6 +66,7 @@ const quote = {
   ownerId: "manager-1",
   total: 118,
   date: "2026-11-11",
+  items: [{ productId: "product-1", model: "AC", unit: "Nos", qty: 1, price: 100, taxRate: 0.18 }],
 };
 
 describe("sendQuotationEmailAction", () => {
@@ -67,8 +76,19 @@ describe("sendQuotationEmailAction", () => {
     mocks.getQuote.mockReset().mockResolvedValue(quote);
     mocks.addLeadNote.mockReset().mockResolvedValue(undefined);
     mocks.getStoredQuotationPdf.mockReset().mockResolvedValue({ url: "https://blob.example/offer.pdf" });
+    mocks.saveStoredQuotationPdf.mockReset().mockResolvedValue(undefined);
     mocks.takeQuotationEmailRateLimit.mockReset().mockResolvedValue(true);
     mocks.sendEmail.mockReset().mockResolvedValue(undefined);
+    mocks.generatePdf.mockReset().mockResolvedValue({ bytes: Buffer.from("%PDF-fixture"), filename: "offer.pdf" });
+    mocks.put.mockReset().mockResolvedValue({ url: "https://blob.example/generated.pdf" });
+    mocks.env.mockReset().mockReturnValue({
+      EMAIL_PROVIDER: "resend",
+      EMAIL_FROM: "sales@example.com",
+      RESEND_API_KEY: "test-key",
+      APP_URL: "https://sales.example.com",
+      BLOB_READ_WRITE_TOKEN: "blob-token",
+      ZOHO_SANDBOX: "true",
+    });
   });
 
   it("sends the stored PDF link and logs a note on the lead", async () => {
@@ -109,5 +129,36 @@ describe("sendQuotationEmailAction", () => {
     await expect(sendQuotationEmailAction({ quoteId: "quote-1", to: "customer@example.com" }))
       .resolves.toMatchObject({ ok: true, data: { noteLogged: false } });
     expect(mocks.sendEmail).toHaveBeenCalledOnce();
+  });
+
+  it("generates and uploads the saved quote PDF when Redis has no cached URL", async () => {
+    mocks.getStoredQuotationPdf.mockRejectedValueOnce(new Error("Redis unavailable"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { sendQuotationEmailAction } = await import("@/app/actions/crm");
+
+    await expect(sendQuotationEmailAction({ quoteId: "quote-1", to: "customer@example.com" }))
+      .resolves.toMatchObject({ ok: true, data: { noteLogged: true } });
+    expect(mocks.generatePdf).toHaveBeenCalledWith(
+      expect.objectContaining({ quoteId: "quote-1", quoteSnapshotToken: "fresh-snapshot" }),
+      manager,
+    );
+    expect(mocks.put).toHaveBeenCalledWith(
+      "quotations/301-26-27-quote-1.pdf",
+      Buffer.from("%PDF-fixture"),
+      expect.objectContaining({ access: "public", allowOverwrite: true }),
+    );
+    expect(mocks.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining("https://blob.example/generated.pdf"),
+    }));
+    warning.mockRestore();
+  });
+
+  it("returns a clear configuration error when email is disabled", async () => {
+    mocks.env.mockReturnValue({ EMAIL_PROVIDER: "disabled", ZOHO_SANDBOX: "true" });
+    const { sendQuotationEmailAction } = await import("@/app/actions/crm");
+
+    await expect(sendQuotationEmailAction({ quoteId: "quote-1", to: "customer@example.com" }))
+      .resolves.toMatchObject({ ok: false, error: "Email is not configured." });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
   });
 });

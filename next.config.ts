@@ -5,6 +5,10 @@ const config: NextConfig = {
   poweredByHeader: false,
   compress: true,
   images: { minimumCacheTTL: 2592000 },
+  outputFileTracingIncludes: {
+    "/api/quotations/**": ["./public/brand/atpl-mark-180.png"],
+    "/api/invoices/**": ["./public/brand/atpl-mark-180.png"],
+  },
   async headers() {
     return [
       {

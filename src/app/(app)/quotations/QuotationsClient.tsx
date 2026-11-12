@@ -31,7 +31,7 @@ type WizardState = {
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
 type QuotationCustomer = Pick<Lead, "id" | "name" | "company" | "phone" | "email" | "area" | "source" | "status" | "assignedTo">
   & Partial<Pick<Lead, "assignedToId" | "ownerId" | "remarks" | "createdOn" | "address" | "touchedBy" | "followUp" | "followUpTime">>;
-type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; isManager: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; emailConfigured: boolean; isManager: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
 function normalizeWhatsAppPhone(value: string) {
   const digits = value.replace(/\D/g, "");
@@ -57,6 +57,20 @@ function QuotationStepper({ step, hasLead, productsValid, hasSavedQuote, custome
   </nav>;
 }
 
+function quotationPdfErrorMessage(
+  result: { error?: string; reference?: string; stage?: string } | null,
+  fallback: string,
+) {
+  const reference = result?.reference || (result?.error ? /\(Ref:\s*([A-Za-z0-9-]+)\)/.exec(result.error)?.[1] : undefined);
+  if (result?.stage && reference) {
+    if (result.error?.includes("BLOB_READ_WRITE_TOKEN")) {
+      return result.error;
+    }
+    return `Could not prepare PDF (step: ${result.stage}). Ref: ${reference}`;
+  }
+  return result?.error || fallback;
+}
+
 async function storeQuotationPdf(quote: Quotation, snapshotToken?: string): Promise<string> {
   const response = await fetch("/api/quotations/share", {
     method: "POST",
@@ -75,12 +89,14 @@ async function storeQuotationPdf(quote: Quotation, snapshotToken?: string): Prom
       extraCharges: quote.gstBreakdown?.extraCharges ?? [],
     }),
   });
-  const result = await response.json().catch(() => null) as { url?: string; error?: string } | null;
-  if (!response.ok || !result?.url) throw new Error(result?.error || "Could not generate and store the quotation PDF.");
+  const result = await response.json().catch(() => null) as { url?: string; error?: string; reference?: string; stage?: string } | null;
+  if (!response.ok || !result?.url) {
+    throw new Error(quotationPdfErrorMessage(result, "Could not generate and store the quotation PDF."));
+  }
   return result.url;
 }
 
-export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQuotesCount, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products: initialProducts, isManager, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQuotesCount, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products: initialProducts, emailConfigured, isManager, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
   const [leadSources, setLeadSources] = useState(initialLeadSources);
   const [leadSourcesUnavailable, setLeadSourcesUnavailable] = useState(initialLeadSourcesUnavailable);
   const [retryingLeadSources, setRetryingLeadSources] = useState(false);
@@ -596,7 +612,11 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
     setPdfPreparing(true);
     setQuoteSaveError("");
     try {
-      const url = await storeQuotationPdf(saved);
+      const detail = await getQuoteDetailAction(saved.id);
+      if (!detail.ok || !detail.data) {
+        throw new Error(detail.ok ? "Could not reload the saved quotation." : detail.error);
+      }
+      const url = await storeQuotationPdf(detail.data, detail.data.pdfSnapshotToken);
       setPdfUrls((current) => ({ ...current, [saved.id]: url }));
       setQuoteSaveError("");
       toast.success("Quotation PDF stored.");
@@ -674,13 +694,13 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         return;
       }
       quote = result.data;
-      let url = pdfUrls[quoteId];
+      let url = pdfUrls[quoteId] ?? "";
       if (!url) {
         const pdfResult = await getQuotationPdfUrlAction(quoteId);
         if (!pdfResult.ok) throw new Error(pdfResult.error);
-        url = pdfResult.data || await storeQuotationPdf(result.data, result.data.pdfSnapshotToken);
+        url = pdfResult.data ?? "";
       }
-      setPdfUrls((current) => ({ ...current, [quoteId]: url }));
+      if (url) setPdfUrls((current) => ({ ...current, [quoteId]: url }));
       setReadOnlyQuote(result.data);
       setReadOnlyPdfUrl("");
       setEmailSavedQuoteId(quoteId);
@@ -960,6 +980,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         offerDate={readOnlyQuote.date}
         validTill={readOnlyQuote.validTill}
         savedQuoteId={readOnlyQuote.id}
+        emailConfigured={emailConfigured}
         savedSubject={readOnlyQuote.subject}
         emailInitiallyOpen={emailSavedQuoteId === readOnlyQuote.id}
         onEmailDialogOpenConsumed={() => setEmailSavedQuoteId(null)}
@@ -980,7 +1001,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       </Button>
     </div>}
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
-    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} revision={wizard.savedQuotation.revision} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} extraCharges={wizard.savedQuotation.gstBreakdown?.extraCharges ?? extraCharges} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedTotal={wizard.savedQuotation.total} savedStatus={wizard.savedQuotation.status} storedPdfUrl={pdfUrls[wizard.savedQuotation.id]} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} />
+    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} revision={wizard.savedQuotation.revision} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} extraCharges={wizard.savedQuotation.gstBreakdown?.extraCharges ?? extraCharges} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedTotal={wizard.savedQuotation.total} savedStatus={wizard.savedQuotation.status} storedPdfUrl={pdfUrls[wizard.savedQuotation.id]} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} emailConfigured={emailConfigured} />
     {savedDialog}
   </div>;
 
@@ -1436,10 +1457,10 @@ class SharePreparationError extends Error {
   }
 }
 
-function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, savedTotal, savedStatus, storedPdfUrl, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, gstBreakdown, emailInitiallyOpen = false, onEmailDialogOpenConsumed }: {
+function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, savedTotal, savedStatus, storedPdfUrl, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, gstBreakdown, emailInitiallyOpen = false, onEmailDialogOpenConsumed, emailConfigured }: {
  lead: QuotationCustomer; offerNo: string; revision?: number; setOfferNo: (s: string) => void; items: Item[]; extraCharges: QuoteExtraCharge[]; subject: string; setSubject: (subject: string) => void;
   onBack: () => void; onMarkSent: () => Promise<void>;
-  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; savedTotal?: number; savedStatus?: string; storedPdfUrl?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown; emailInitiallyOpen?: boolean; onEmailDialogOpenConsumed?: () => void;
+  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; savedTotal?: number; savedStatus?: string; storedPdfUrl?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown; emailInitiallyOpen?: boolean; onEmailDialogOpenConsumed?: () => void; emailConfigured: boolean;
 }) {
   const isLegacySavedQuote = !!savedQuoteId && !gstBreakdown;
   const computedBreakdown = quotationGstBreakdown(items, extraCharges);
@@ -1540,9 +1561,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
     if (!customer.trim() && !savedQuoteId) throw new Error("Customer name is missing.");
     if (!lead.id.trim() && !savedQuoteId) throw new Error("Customer record is missing.");
     if (!items.length || (!savedQuoteId && items.some((item) => !item.productId))) throw new Error("Add at least one valid product.");
-    const response = shareUrl
-      ? await fetch(shareUrl)
-      : await fetch("/api/quotations/pdf", {
+    const directPdfResponse = () => fetch("/api/quotations/pdf", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1553,16 +1572,36 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
             extraCharges,
           }),
         });
+    let response: Response;
+    if (shareUrl) {
+      try {
+        response = await fetch(shareUrl);
+        if (!response.ok || !response.headers.get("content-type")?.includes("application/pdf")) {
+          response = await directPdfResponse();
+        }
+      } catch {
+        response = await directPdfResponse();
+      }
+    } else {
+      response = await directPdfResponse();
+    }
     if (!response.ok) {
       const body = await response.text();
-      let message: string | undefined;
+      let payload: { error?: string; reference?: string; stage?: string } | null = null;
       try {
         const parsed: unknown = JSON.parse(body);
-        if (parsed && typeof parsed === "object" && "error" in parsed && typeof parsed.error === "string") message = parsed.error;
+        if (parsed && typeof parsed === "object") {
+          const value = parsed as { error?: unknown; reference?: unknown; stage?: unknown };
+          payload = {
+            ...(typeof value.error === "string" ? { error: value.error } : {}),
+            ...(typeof value.reference === "string" ? { reference: value.reference } : {}),
+            ...(typeof value.stage === "string" ? { stage: value.stage } : {}),
+          };
+        }
       } catch {
-        message = undefined;
+        payload = null;
       }
-      throw new Error(message || `Unable to create the PDF (HTTP ${response.status}).`);
+      throw new Error(quotationPdfErrorMessage(payload, `Unable to create the PDF (HTTP ${response.status}).`));
     }
     const blob = new Blob([await response.blob()], { type: "application/pdf" });
     return new File([blob], `offer-${offerNo.replace("/", "-")}.pdf`, { type: "application/pdf" });
@@ -1583,9 +1622,12 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
         extraCharges,
       }),
     });
-    const result = await response.json().catch(() => null) as { url?: string; error?: string } | null;
+    const result = await response.json().catch(() => null) as { url?: string; error?: string; reference?: string; stage?: string } | null;
     if (!response.ok || !result?.url) {
-      throw new SharePreparationError(result?.error || `Could not prepare a shareable PDF (HTTP ${response.status}).`, response.status);
+      throw new SharePreparationError(
+        quotationPdfErrorMessage(result, `Could not prepare a shareable PDF (HTTP ${response.status}).`),
+        response.status,
+      );
     }
     setShareUrl(result.url);
     return result.url;
@@ -1685,7 +1727,6 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
       return true;
     };
     try {
-      await prepareShareUrl();
       const result = await sendQuotationEmailAction({ quoteId: savedQuoteId, to: emailRecipient.trim() });
       if (!result.ok) {
         if (await downloadForManualEmail(result.error)) return;
@@ -1873,6 +1914,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
         <div>
           <h2 id="quotation-email-title" className="font-semibold">Email quotation</h2>
           <p className="mt-1 text-sm text-muted-foreground">Offer {offerReference} · PDF link included</p>
+          {!emailConfigured && <p className="mt-2 text-sm text-destructive">Email is not configured. Contact a manager to enable email delivery.</p>}
         </div>
         <label className="block space-y-1 text-sm font-medium" htmlFor="quotation-email-recipient">
           Recipient email
@@ -1889,7 +1931,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
         </label>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" className="h-11" onClick={() => setEmailOpen(false)}>Cancel</Button>
-          <Button type="submit" className="h-11" disabled={sendingEmail || !emailRecipient.trim()}><Mail className="h-4 w-4" />{sendingEmail ? "Sending…" : "Send email"}</Button>
+          <Button type="submit" className="h-11" disabled={!emailConfigured || sendingEmail || !emailRecipient.trim()}><Mail className="h-4 w-4" />{sendingEmail ? "Sending…" : "Send email"}</Button>
         </div>
       </form>
     </div>}

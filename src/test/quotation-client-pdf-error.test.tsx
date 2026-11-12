@@ -154,6 +154,7 @@ describe("quotation PDF error state", () => {
         leadSources={[]}
         leadSourcesUnavailable={false}
         products={[product]}
+        emailConfigured
         isManager
         suggestedOfferNo="280/26-27"
         presetLeadId="lead-1"
@@ -178,5 +179,56 @@ describe("quotation PDF error state", () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
     expect(mocks.createQuoteAction).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === "/api/quotations/share")).toHaveLength(2);
+  });
+
+  it("retries PDF preparation for the existing saved quote without creating another quotation", async () => {
+    let shareRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/quotations/share") {
+        expect(init?.method).toBe("POST");
+        shareRequests += 1;
+        return shareRequests === 1
+          ? new Response(JSON.stringify({ error: "Could not prepare PDF (step: blob_upload). Ref: PDF-REF", stage: "blob_upload", reference: "PDF-REF" }), { status: 500 })
+          : new Response(JSON.stringify({ url: "https://blob.example/retried.pdf" }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mocks.getQuoteDetailAction.mockResolvedValue({
+      ok: true,
+      data: { ...savedQuote, pdfSnapshotToken: "fresh-snapshot" },
+    });
+    const { QuotationsClient } = await import("@/app/(app)/quotations/QuotationsClient");
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<QuotationsClient
+        leads={[lead]}
+        initialCustomersHasMore={false}
+        initialSavedQuotesCount={48}
+        leadSources={[]}
+        leadSourcesUnavailable={false}
+        products={[product]}
+        emailConfigured
+        isManager
+        suggestedOfferNo="280/26-27"
+        presetLeadId="lead-1"
+      />);
+    });
+
+    await click(host.querySelector('button[aria-label="Item 1 product"]'));
+    await click(host.querySelector('[role="option"]'));
+    await click(button("Preview Offer"));
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("blob_upload");
+    await click(button("Retry PDF"));
+
+    expect(mocks.createQuoteAction).toHaveBeenCalledOnce();
+    expect(mocks.getQuoteDetailAction).toHaveBeenCalledWith(savedQuote.id);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const retryPayload = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
+    expect(retryPayload).toMatchObject({
+      quoteId: savedQuote.id,
+      quoteSnapshotToken: "fresh-snapshot",
+    });
+    expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 });
