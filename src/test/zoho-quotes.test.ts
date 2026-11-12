@@ -31,7 +31,7 @@ const quoteFields = {
   fields: [
     { api_name: "Subject", data_type: "text" },
     { api_name: "Status", pick_list_values: [{ actual_value: "Draft" }, { actual_value: "Sent" }] },
-    { api_name: "Quoted_Items", data_type: "subform", subform_fields: [
+    { api_name: "Quoted_Items", data_type: "subform", subform: { fields: [
       { api_name: "Product_Name", data_type: "lookup" },
       { api_name: "Quantity", data_type: "integer" },
       { api_name: "List_Price", data_type: "currency" },
@@ -40,7 +40,8 @@ const quoteFields = {
       { api_name: "Net_Total", data_type: "currency" },
       { api_name: "Total_After_Discount", data_type: "currency" },
       { api_name: "Description", data_type: "text" },
-    ] },
+      { api_name: "Line_Tax", data_type: "tax" },
+    ] } },
     { api_name: "Offer_No" },
     { api_name: "Lead_Ref", data_type: "lookup", lookup: { module: { api_name: "Leads" } }, system_mandatory: true },
     { api_name: "Description", data_type: "textarea" },
@@ -83,8 +84,8 @@ describe("Zoho quotation creation", () => {
       return {};
     });
     const list = vi.fn(async (module: string) => module === "Products" ? [
-      { id: "part-a", Product_Name: "Samsung 4 Way 3.0 TR", Unit_Price: 112240, Usage_Unit: "Nos", Product_Active: true },
-      { id: "part-b", Product_Name: "B - Installation", Unit_Price: 1000, Usage_Unit: "Nos", Product_Active: true },
+      { id: "part-a", Product_Name: "Samsung 4 Way 3.0 TR", Unit_Price: 112240, Usage_Unit: "Nos", Tax: [{ percentage: 18, name: "GST 18% - configured" }, { percentage: 5, name: "GST 5% - configured" }], Product_Active: true },
+      { id: "part-b", Product_Name: "B - Installation", Unit_Price: 1000, Usage_Unit: "Nos", Tax: [{ percentage: 18, name: "GST 18% - configured" }], Product_Active: true },
     ] : []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZOHO_CRM_API_VERSION: "v6",
@@ -134,7 +135,7 @@ describe("Zoho quotation creation", () => {
     expect(payloads[1]).toMatchObject({ Sub_Total: 1000, Discount: 100, Tax: 162, Adjustment: 0 });
     expect(payloads[2]).toMatchObject({ Sub_Total: 113240, Discount: 2340, Tax: 19962, Adjustment: 0 });
     expect(payloads[3]).toMatchObject({ Sub_Total: 112240, Discount: 0, Tax: 5624, Adjustment: 100 });
-    expect(payloads[3]?.Quoted_Items).toMatchObject([{ Line_Tax: [{ percentage: 5, name: "GST 5%" }] }]);
+    expect(payloads[3]?.Quoted_Items).toMatchObject([{ Line_Tax: [{ percentage: 5, name: "GST 5% - configured" }] }]);
   });
 
   it("loads only the first quote page and does not request the complete leads list", async () => {
@@ -355,7 +356,10 @@ describe("Zoho quotation creation", () => {
       Product_Name: "Taxed product",
       Unit_Price: 100,
       Tax: [{ name: "GST 5%", value: "5.0" }],
-    })).toMatchObject({ gstRate: 0.05 });
+    })).toMatchObject({
+      gstRate: 0.05,
+      zohoTaxes: [{ name: "GST 5%", percentage: 5, rate: 0.05 }],
+    });
   });
 
   it("maps a saved customer snapshot even when its Lead_Ref record is unavailable", () => {
@@ -551,7 +555,7 @@ describe("Zoho quotation creation", () => {
     });
     const list = vi.fn(async (module: string) => {
       if (module === "Products") {
-        return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }];
+        return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Tax: [{ percentage: 18, name: "GST 18% - configured" }], Product_Active: true }];
       }
       return [];
     });
@@ -595,7 +599,7 @@ describe("Zoho quotation creation", () => {
         Total: 244000,
         Total_After_Discount: 240000,
         Net_Total: 240000,
-        Line_Tax: [{ percentage: 18, name: "GST 18%" }],
+        Line_Tax: [{ percentage: 18, name: "GST 18% - configured" }],
       }],
       Sub_Total: 244000,
       Discount: 4000,
@@ -618,7 +622,7 @@ describe("Zoho quotation creation", () => {
     const writtenRecord = write.mock.calls.find((call) => call[1] === "/Quotes")?.[2] as Record<string, unknown>;
     expect(writtenRecord).not.toHaveProperty("Grand_Total");
     const savedLine = (writtenRecord.Quoted_Items as Record<string, unknown>[])[0]!;
-    expect(savedLine.Line_Tax).toEqual([{ percentage: 18, name: "GST 18%" }]);
+    expect(savedLine.Line_Tax).toEqual([{ percentage: 18, name: "GST 18% - configured" }]);
     expect(JSON.parse(String(writtenRecord.Description))).toMatchObject({
       leadId: "lead-1", name: "Customer", phone: "9876543210", company: "Customer Co",
       gstBreakdown: {
@@ -684,7 +688,7 @@ describe("Zoho quotation creation", () => {
       return {};
     });
     const list = vi.fn(async (module: string) => module === "Products"
-      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Description: "Cassette indoor unit", Product_Active: true }]
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Description: "Cassette indoor unit", Tax: [{ percentage: 18, name: "GST 18% - configured" }], Product_Active: true }]
       : []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZOHO_CRM_API_VERSION: "v6",
@@ -847,7 +851,7 @@ describe("Zoho quotation creation", () => {
     const zoho = vi.fn(async (_method: string, path: string) => {
       if (path === "/settings/fields") return {
         fields: quoteFields.fields.map((field) => field.api_name === "Quoted_Items"
-          ? { api_name: "Product_Details", data_type: "subform" }
+          ? { api_name: "Product_Details", data_type: "subform", subform: "subform" in field ? field.subform : undefined }
           : field),
       };
       if (path === "/Leads/lead-1") return { data: [leadRecord] };
@@ -855,7 +859,7 @@ describe("Zoho quotation creation", () => {
       return {};
     });
     const list = vi.fn(async (module: string) => module === "Products"
-      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }]
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Tax: [{ percentage: 18, name: "GST 18% - configured" }], Product_Active: true }]
       : []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZohoError: class extends Error {},
@@ -881,7 +885,7 @@ describe("Zoho quotation creation", () => {
         total: 122000,
         total_after_discount: 122000,
         net_total: 122000,
-        Line_Tax: [{ percentage: 18, name: "GST 18%" }],
+        Line_Tax: [{ percentage: 18, name: "GST 18% - configured" }],
       }],
     }));
   });
@@ -1211,7 +1215,7 @@ describe("Zoho quotation creation", () => {
     const list = vi.fn(async (module: string) => {
       if (module === "Leads") return [leadRecord];
       if (module === "Products") {
-        return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }];
+        return [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Tax: [{ percentage: 18, name: "GST 18% - configured" }], Product_Active: true }];
       }
       return [];
     });
@@ -1252,7 +1256,7 @@ describe("Zoho quotation creation", () => {
         Total: 122000,
         Total_After_Discount: 120000,
         Net_Total: 120000,
-        Line_Tax: [{ percentage: 18, name: "GST 18%" }],
+        Line_Tax: [{ percentage: 18, name: "GST 18% - configured" }],
       }],
     }));
   });

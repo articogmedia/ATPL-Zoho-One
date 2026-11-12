@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Image from "next/image";
-import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, LoaderCircle, Mail, Minus, Plus, Printer, Search, Trash2, UserPlus, X, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Copy, Eye, History, LoaderCircle, Mail, Plus, Printer, Search, Trash2, UserPlus, X, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { SelectField } from "@/components/ui/select-field";
@@ -1028,52 +1028,36 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         {products.length === 0 && <p className="text-sm text-destructive">No products found in Zoho CRM</p>}
         <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
-        <div className="hidden min-w-0 overflow-x-auto xl:block">
-          <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
+        <div className="min-w-0 max-w-full overflow-x-auto pb-2">
+          <table aria-label="Quotation products" className="w-full min-w-[1120px] table-fixed border-separate border-spacing-0 text-sm">
             <thead className="bg-secondary text-left text-secondary-foreground">
               <tr>
-                <th className="w-14 rounded-tl-lg px-3 py-3">S.No</th>
-                <th className="w-[30%] px-3 py-3">Product</th>
-                <th className="w-20 px-3 py-3">Unit</th>
-                <th className="w-28 px-3 py-3">Qty</th>
+                <th className="w-14 rounded-tl-lg px-3 py-3 text-center">S.No</th>
+                <th className="w-[280px] px-3 py-3">Product</th>
+                <th className="w-20 px-3 py-3 text-center">Unit</th>
+                <th className="w-28 px-3 py-3 text-center">Qty</th>
                 <th className="w-32 px-3 py-3 text-right">Rate</th>
                 <th className="w-32 px-3 py-3 text-right">Discount</th>
-                <th className="w-28 px-3 py-3">GST %</th>
+                <th className="w-28 px-3 py-3 text-center">GST %</th>
                 <th className="w-36 px-3 py-3 text-right">Amount</th>
-                <th className="w-14 rounded-tr-lg" />
+                <th className="relative w-14 rounded-tr-lg text-center"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => { const p = byId.get(r.productId); return (
                 <tr key={i} className="border-b border-border/70 align-middle hover:bg-muted/30">
-                  <td className="px-3 py-3">{i + 1}</td>
+                  <td className="px-3 py-3 text-center">{i + 1}</td>
                   <td className="px-3 py-3"><ProductPicker products={products} value={r.productId} onChange={(productId, product) => upd(i, { productId, taxRate: product?.gstRate ?? byId.get(productId)?.gstRate ?? GST_RATE })} onCreated={(product) => setProducts((current) => uniqueProducts([...current, product]))} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} /></td>
-                  <td className="px-3 py-3">{p?.unit}</td>
-                  <td className="px-3 py-3"><input aria-label="Quantity" type="number" min={1} className={fieldClass} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
+                  <td className="px-3 py-3 text-center">{p?.unit}</td>
+                  <td className="px-3 py-3"><input aria-label="Quantity" type="number" min={1} className={`${fieldClass} min-w-[5rem] text-center`} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /></td>
                   <td className="px-3 py-3 text-right whitespace-nowrap">{formatINR(p?.price ?? 0)}</td>
-                  <td className="px-3 py-3"><input aria-label="Discount" type="number" min={0} className={fieldClass} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
+                  <td className="px-3 py-3"><input aria-label="Discount" type="number" min={0} className={`${fieldClass} min-w-[5rem] text-right`} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></td>
                   <td className="px-3 py-3"><TaxRateField compact label={`GST rate for item ${i + 1}`} value={r.taxRate ?? p?.gstRate ?? GST_RATE} onChange={(taxRate) => { if (taxRate !== undefined) upd(i, { taxRate }); }} /></td>
                   <td className="px-3 py-3 text-right font-semibold whitespace-nowrap">{formatINR((p?.price ?? 0) * r.qty - r.discount)}</td>
-                  <td className="px-3 py-3"><Button variant="ghost" size="icon" aria-label="Remove row" onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></td>
+                  <td className="px-3 py-3 text-center"><Button type="button" variant="ghost" size="icon" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></td>
                 </tr>); })}
             </tbody>
           </table>
-        </div>
-        <div className="space-y-3 xl:hidden">
-          {rows.map((r, i) => { const p = byId.get(r.productId); return (
-            <div key={i} className="space-y-3 rounded-xl border border-border bg-card p-3 shadow-sm">
-              <div className="flex min-h-11 items-center justify-between"><span className="font-semibold">Item {i + 1}</span>
-                <Button variant="ghost" size="icon" className="h-11 w-11" aria-label={`Remove item ${i + 1}`} onClick={() => remove(i)}><Trash2 className="h-5 w-5" /></Button></div>
-              <ProductPicker products={products} value={r.productId} onChange={(productId, product) => upd(i, { productId, taxRate: product?.gstRate ?? byId.get(productId)?.gstRate ?? GST_RATE })} onCreated={(product) => setProducts((current) => uniqueProducts([...current, product]))} label={`Item ${i + 1} product`} isManager={isManager} refreshing={refreshingProducts} refreshFailed={productRefreshFailed} onOpen={loadProductsOnPickerOpen} onRefresh={refreshProducts} />
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Quantity ({p?.unit || "Unit"})</span><div className="grid grid-cols-[44px_1fr_44px]"><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-r-none" aria-label={`Decrease quantity for item ${i + 1}`} onClick={() => setQty(i, String(Math.max(1, r.qty - 1)))}><Minus /></Button><input aria-label={`Quantity for item ${i + 1}`} type="number" min={1} inputMode="numeric" className={`${fieldClass} min-h-11 rounded-none text-center text-base`} value={r.qty} onChange={(e) => setQty(i, e.target.value)} /><Button type="button" variant="outline" size="icon" className="h-11 w-11 rounded-l-none" aria-label={`Increase quantity for item ${i + 1}`} onClick={() => setQty(i, String(r.qty + 1))}><Plus /></Button></div></label>
-                <label className="space-y-1"><span className="block text-xs font-medium text-muted-foreground">Discount</span><input aria-label={`Discount for item ${i + 1}`} type="number" min={0} inputMode="numeric" className={`${fieldClass} min-h-11 text-base`} value={r.discount} onChange={(e) => upd(i, { discount: Math.max(0, Number(e.target.value) || 0) })} /></label>
-                <TaxRateField label={`GST rate for item ${i + 1}`} value={r.taxRate ?? p?.gstRate ?? GST_RATE} onChange={(taxRate) => { if (taxRate !== undefined) upd(i, { taxRate }); }} />
-              </div>
-              <div className="text-sm"><span className="text-xs font-medium text-muted-foreground">Rate</span><div className="mt-1 min-h-11 rounded-lg border border-border bg-secondary px-3 py-2.5">{formatINR(p?.price ?? 0)}</div></div>
-              {validateQuoteLine(r.qty, r.discount, p?.price ?? 0) && <p className="text-xs font-medium text-destructive">{validateQuoteLine(r.qty, r.discount, p?.price ?? 0)}</p>}
-              <div className="text-right font-semibold"><span>Amount: </span>{r.discount > 0 && <span className="mr-2 text-sm text-muted-foreground">-{formatINR(r.discount)}</span>}<span>{formatINR(Math.max(0, (p?.price ?? 0) * r.qty - r.discount))}</span></div>
-            </div>); })}
         </div>
         <Button variant="outline" size="lg" className="w-full border-dashed sm:w-auto" disabled={rows.length >= 50 || !products.length}
           onClick={() => setRows([...rows, { productId: "", qty: 1, discount: 0, taxRate: GST_RATE }])}><Plus className="h-5 w-5" /> Add item</Button>
@@ -1357,7 +1341,7 @@ function TaxRateField({ label, value, onChange, allowNoTax = false, compact = fa
   compact?: boolean;
 }) {
   const isPreset = value === undefined ? allowNoTax : GST_RATE_OPTIONS.some((rate) => rate / 100 === value);
-  return <label className="block min-w-0 space-y-1">
+  return <label className="relative block min-w-0 space-y-1">
     <span className={compact ? "sr-only" : "block text-xs font-medium text-muted-foreground"}>{label}</span>
     <select
       aria-label={label}
@@ -1482,6 +1466,9 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
   useEffect(() => {
     if (storedPdfUrl) setShareUrl(storedPdfUrl);
   }, [storedPdfUrl]);
+  useEffect(() => {
+    setOutcomeStatus(savedStatus ?? "Draft");
+  }, [savedStatus]);
   useEffect(() => {
     setEmailRecipient(lead.email ?? "");
   }, [lead.email]);

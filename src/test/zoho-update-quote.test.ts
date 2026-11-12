@@ -13,7 +13,7 @@ const quoteFields = [
   { api_name: "Status", data_type: "picklist", pick_list_values: [{ actual_value: "Draft" }, { actual_value: "Sent" }] },
   { api_name: "Offer_No", data_type: "text" },
   { api_name: "Description", data_type: "textarea" },
-  { api_name: "Quoted_Items", data_type: "subform", subform_fields: [
+  { api_name: "Quoted_Items", data_type: "subform", subform: { fields: [
     { api_name: "Product_Name", data_type: "lookup" },
     { api_name: "Quantity", data_type: "integer" },
     { api_name: "List_Price", data_type: "currency" },
@@ -22,7 +22,8 @@ const quoteFields = [
     { api_name: "Net_Total", data_type: "currency" },
     { api_name: "Total_After_Discount", data_type: "currency" },
     { api_name: "Description", data_type: "text" },
-  ] },
+    { api_name: "Line_Tax", data_type: "tax" },
+  ] } },
 ];
 
 vi.mock("react", () => ({ cache: (fn: (...args: never[]) => unknown) => fn }));
@@ -91,7 +92,7 @@ describe("Zoho quotation revision", () => {
       Product_Code: "AC-1",
       Unit_Price: 1000,
       Usage_Unit: "Nos",
-      Tax: [{ percentage: 18, name: "GST 18%" }],
+      Tax: [{ percentage: 18, name: "GST 18%" }, { percentage: 5, name: "GST 5% - configured" }],
       Product_Active: true,
     }] : []);
     mocks.zohoWrite.mockReset().mockResolvedValue("quote-1");
@@ -124,7 +125,7 @@ describe("Zoho quotation revision", () => {
       Adjustment: 50,
       Quoted_Items: [expect.objectContaining({
         Product_Name: { id: "product-1" },
-        Line_Tax: [{ percentage: 5, name: "GST 5%" }],
+        Line_Tax: [{ percentage: 5, name: "GST 5% - configured" }],
       })],
     }));
     const payload = mocks.zohoWrite.mock.calls[0]?.[2] as Record<string, unknown>;
@@ -193,7 +194,7 @@ describe("Zoho quotation revision", () => {
       Unit_Price: 1000,
       Usage_Unit: "Nos",
       Description: "Cassette indoor unit",
-      Tax: [{ percentage: 18, name: "GST 18%" }],
+      Tax: [{ percentage: 18, name: "GST 18%" }, { percentage: 5, name: "GST 5% - configured" }],
       Product_Active: true,
     }] : []);
     vi.doMock("@/lib/zoho/client", () => ({
@@ -227,7 +228,7 @@ describe("Zoho quotation revision", () => {
       Adjustment: 50,
       Quoted_Items: [expect.objectContaining({
         Product_Name: { id: "product-1" }, Quantity: 2, List_Price: 1000, Discount: 100,
-        Description: "Cassette indoor unit", Line_Tax: [{ percentage: 5, name: "GST 5%" }],
+        Description: "Cassette indoor unit", Line_Tax: [{ percentage: 5, name: "GST 5% - configured" }],
       })],
     });
     expect(records[1]).toMatchObject({

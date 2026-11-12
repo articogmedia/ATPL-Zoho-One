@@ -59,6 +59,7 @@ type QuoteFieldMetadata = {
   is_mandatory?: boolean;
   read_only?: boolean;
   pick_list_values?: { actual_value?: string; display_value?: string }[];
+  subform?: { fields?: QuoteLineItemFieldMetadata[] };
   subform_fields?: QuoteLineItemFieldMetadata[];
   fields?: QuoteLineItemFieldMetadata[];
   is_dependent?: boolean;
@@ -75,6 +76,10 @@ type QuoteLineItemFieldMetadata = {
   system_mandatory?: boolean;
   is_mandatory?: boolean;
 };
+
+function quoteLineItemFields(field?: QuoteFieldMetadata): QuoteLineItemFieldMetadata[] {
+  return field?.subform_fields ?? field?.fields ?? field?.subform?.fields ?? [];
+}
 
 type QuoteLayoutField = {
   api_name?: string;
@@ -205,9 +210,11 @@ function quoteLineItemsPayload(
   lineItemsField: QuoteLineItemsField,
   lines: { p: Product; qty: number; discount: number; amount: number; taxRate: number }[],
   fieldMetadata?: QuoteFieldMetadata,
+  configuredTaxes: Product["zohoTaxes"] = [],
 ): Record<string, unknown>[] {
-  const subfields = fieldMetadata?.subform_fields ?? fieldMetadata?.fields ?? [];
+  const subfields = quoteLineItemFields(fieldMetadata);
   const availableNames = new Set(subfields.map((field) => field.api_name).filter((name): name is string => !!name));
+  const supportsLineTax = availableNames.has("Line_Tax");
   if (subfields.length) {
     console.info("[zoho] Quotes line-item field metadata", {
       lineItemsField,
@@ -219,8 +226,26 @@ function quoteLineItemsPayload(
     });
   }
 
+  const configuredTaxForRate = (product: Product, rate: number) =>
+    product.zohoTaxes?.find((configured) => Math.abs(configured.rate - rate) < 0.000001)
+      ?? configuredTaxes.find((configured) => Math.abs(configured.rate - rate) < 0.000001);
+  const missingTaxMappings = lines.filter(({ p, taxRate }) =>
+    taxRate > 0 && (!supportsLineTax || !configuredTaxForRate(p, taxRate)),
+  );
+  if (missingTaxMappings.length) {
+    console.warn("[zoho] no configured Quotes line-tax mapping for some GST rates; computed quote-level GST totals are retained", {
+      lineItemsField,
+      supportsLineTax,
+      unmatchedRates: [...new Set(missingTaxMappings.map((line) => line.taxRate))],
+      productIds: [...new Set(missingTaxMappings.map((line) => line.p.id))],
+    });
+  }
+
   return lines.map(({ p, qty, discount, amount, taxRate }) => {
-    const lineTax = [{ percentage: taxRate * 100, name: `GST ${taxRate * 100}%` }];
+    const tax = configuredTaxForRate(p, taxRate);
+    const lineTax = supportsLineTax && tax
+      ? [{ percentage: tax.percentage, name: tax.name }]
+      : undefined;
     if (lineItemsField === "Product_Details") {
       return {
         product: { id: p.id },
@@ -230,7 +255,7 @@ function quoteLineItemsPayload(
         total: p.price * qty,
         total_after_discount: amount,
         net_total: amount,
-        Line_Tax: lineTax,
+        ...(lineTax ? { Line_Tax: lineTax } : {}),
         ...(p.description ? { Description: p.description } : {}),
       };
     }
@@ -249,7 +274,7 @@ function quoteLineItemsPayload(
     };
     const newItem: Record<string, unknown> = {};
     for (const [name, value] of Object.entries(candidates)) {
-      if ((name === "Line_Tax" || !subfields.length || availableNames.has(name)) && value !== undefined && value !== "") newItem[name] = value;
+      if ((!subfields.length || availableNames.has(name)) && value !== undefined && value !== "") newItem[name] = value;
     }
     if (subfields.length && !availableNames.has("List_Price") && availableNames.has("Unit_Price")) {
       delete newItem.List_Price;
@@ -896,16 +921,19 @@ export const zohoRepository: CrmRepository = {
           fields: LEAD_FIELDS.join(","),
           page: safePage,
           per_page: safePageSize,
-          sort_by: "Created_Time",
-          sort_order: "desc",
-          ...(ownerCriteria ? { criteria: ownerCriteria } : {}),
+          ...(ownerCriteria
+            ? { criteria: ownerCriteria }
+            : { sort_by: "Created_Time", sort_order: "desc" }),
         },
       });
       const [assignable, allUsers] = await Promise.all([assignableIds(), users()]);
       const salesExecutives = new Set(allUsers
         .filter((user) => user.role === "Sales Executive")
         .map((user) => String(user.id).trim()));
-      const mapped = (response?.data ?? []).map((record) => mapLead(record, assignable, salesExecutives));
+      const records = [...(response?.data ?? [])].sort((a, b) =>
+        String(b.Created_Time ?? "").localeCompare(String(a.Created_Time ?? "")),
+      );
+      const mapped = records.map((record) => mapLead(record, assignable, salesExecutives));
       const total = response?.info?.count ?? ((safePage - 1) * safePageSize + mapped.length);
       return { leads: mapped, total, hasMore: response?.info?.more_records === true };
     }, { keepStale: true });
@@ -1588,12 +1616,26 @@ export const zohoRepository: CrmRepository = {
 
   async createProduct(input: NewProduct) {
     const taxPercent = Number((input.gstRate * 100).toFixed(2));
+    const taxMappings = input.gstRate > 0
+      ? new Map((await this.listProducts())
+        .flatMap((product) => product.zohoTaxes ?? [])
+        .filter((tax) => Math.abs(tax.rate - input.gstRate) < 0.000001)
+        .map((tax) => [`${tax.name.trim().toLocaleLowerCase()}|${tax.percentage}`, tax]))
+      : new Map();
+    const configuredTax = taxMappings.size === 1 ? [...taxMappings.values()][0] : undefined;
+    if (input.gstRate > 0 && !configuredTax) {
+      throw new ZohoError(
+        `No unambiguous Zoho tax mapping is available for ${taxPercent}% GST. Configure a matching tax in Zoho CRM and refresh the product catalogue.`,
+        400,
+        "MISSING_PRODUCT_TAX_MAPPING",
+      );
+    }
     const id = await zohoWrite("POST", "/Products", {
       Product_Name: input.name,
       Product_Code: input.code,
       Usage_Unit: input.unit,
       Unit_Price: input.price,
-      Tax: [{ percentage: taxPercent, name: `GST ${taxPercent}%` }],
+      ...(configuredTax ? { Tax: [{ percentage: configuredTax.percentage, name: configuredTax.name }] } : {}),
     });
     return {
       id,
@@ -1602,6 +1644,7 @@ export const zohoRepository: CrmRepository = {
       unit: input.unit,
       price: input.price,
       gstRate: input.gstRate,
+      ...(configuredTax ? { zohoTaxes: [configuredTax] } : {}),
     };
   },
 
@@ -1758,7 +1801,7 @@ export const zohoRepository: CrmRepository = {
     const quoteRecord: Record<string, unknown> = {
       Subject: `Offer - ${input.subject?.trim() || customer}`,
       Owner: { id: owner.id },
-      [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata),
+      [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata, products.flatMap((product) => product.zohoTaxes ?? [])),
       Sub_Total: totals.zoho.subtotal,
       Discount: totals.zoho.discount,
       Tax: totals.zoho.tax,
@@ -1875,7 +1918,7 @@ export const zohoRepository: CrmRepository = {
           mandatoryLayout: schema.mandatoryLayout,
           layoutRequiredFields: schema.layoutRequiredFields,
           lineItemsField,
-          lineItemSubfields: (lineItemsMetadata?.subform_fields ?? lineItemsMetadata?.fields ?? [])
+          lineItemSubfields: quoteLineItemFields(lineItemsMetadata)
             .map((field) => field.api_name).filter(Boolean),
           payloadKeys: Object.keys(quoteRecord),
         });
@@ -1961,7 +2004,7 @@ export const zohoRepository: CrmRepository = {
       || offerSubject(savedItems.map((item) => item.model));
     const record: Record<string, unknown> = {
       Subject: `Offer ${current.offerNo}/R${revision} - ${title}`,
-      [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata),
+      [lineItemsField]: quoteLineItemsPayload(lineItemsField, lines, lineItemsMetadata, products.flatMap((product) => product.zohoTaxes ?? [])),
       Sub_Total: gstBreakdown.zoho.subtotal,
       Discount: gstBreakdown.zoho.discount,
       Tax: gstBreakdown.zoho.tax,

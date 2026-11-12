@@ -60,11 +60,31 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await expect(cassette).toBeVisible();
     await cassette.click();
     const productsStep = page.locator("#quote-step-products");
-    if (viewport.width < 1024) {
-      await expect(productsStep.getByText("Rate", { exact: true }).locator("..").getByText("Rs. 1,22,000")).toBeVisible();
-    } else {
-      await expect(productsStep.locator("tbody tr").first().getByRole("cell").nth(4)).toHaveText("Rs. 1,22,000");
+    const productTable = productsStep.getByRole("table", { name: "Quotation products" });
+    const itemRows = productTable.locator("tbody tr");
+    await expect(productTable.getByRole("columnheader")).toHaveText([
+      "S.No", "Product", "Unit", "Qty", "Rate", "Discount", "GST %", "Amount", "Actions",
+    ]);
+    await expect(itemRows).toHaveCount(1);
+    await expect(itemRows.first().getByRole("cell").nth(4)).toHaveText("Rs. 1,22,000");
+
+    await productsStep.getByRole("button", { name: "Add item", exact: true }).click();
+    await expect(itemRows).toHaveCount(2);
+    await itemRows.nth(1).getByRole("button", { name: "Item 2 product" }).click();
+    const secondProductDialog = page.getByRole("dialog", { name: "Choose product" });
+    await secondProductDialog.getByRole("searchbox", { name: "Search products by name, code or description" }).fill("cassette");
+    await secondProductDialog.getByRole("option", { name: /cassette/i }).first().click();
+    await expect(itemRows.nth(1).getByRole("cell").nth(4)).toHaveText("Rs. 1,22,000");
+    if (mobileViewport) {
+      const hasHorizontalOverflow = await productTable.evaluate((table) => {
+        const scroller = table.parentElement;
+        return !!scroller && scroller.scrollWidth > scroller.clientWidth;
+      });
+      expect(hasHorizontalOverflow).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
     }
+    await itemRows.nth(1).getByRole("button", { name: "Remove item 2" }).click();
+    await expect(itemRows).toHaveCount(1);
 
     await productsStep.getByRole("spinbutton").first().fill("2");
     await expect(productsStep.getByRole("definition").last()).toHaveText("Rs. 2,87,920");
@@ -97,15 +117,16 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 1366, height: 768 
     await expect(page.getByText("Draft", { exact: true })).toBeVisible();
     const offer = page.locator("article.offer-document");
     await expect(offer.getByText(/^\d+\/\d{2}-\d{2}$/)).toBeVisible();
-    await expect(offer.getByText("Bill To")).toBeVisible();
-    await expect(offer.getByText("Ship To")).toBeVisible();
+    const clientDetails = offer.getByText("Client", { exact: true }).locator("..");
+    await expect(clientDetails).toBeVisible();
+    await expect(clientDetails).not.toContainText("Customer details not saved with this quote");
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
     await expect(offerHeading).toBeInViewport();
     await expect(savedQuotesButton).toHaveText(`Saved quotations (${savedCountBefore + 1})`);
 
     const pdfResponsePromise = page.waitForResponse((response) => response.url() === "https://blob.example/quotation.pdf");
     const pdfDownloadPromise = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Download PDF" }).click();
+    await page.getByRole("button", { name: /Download (?:quotation )?PDF/ }).click();
     const pdfResponse = await pdfResponsePromise;
     expect(pdfResponse.ok()).toBe(true);
     expect(pdfResponse.headers()["content-type"]).toContain("application/pdf");
@@ -248,8 +269,8 @@ test("saved quotation keeps customer details and can download and share its PDF"
   await quoteCard.getByRole("button", { name: "View" }).click();
 
   const offer = page.locator("article.offer-document");
-  await expect(offer.getByText("Bill To").locator("..")).toContainText("Sri Lakshmi Textiles");
-  await expect(page.getByRole("button", { name: "Download PDF" })).toBeEnabled();
+  await expect(offer.getByText("Client", { exact: true }).locator("..")).toContainText("Sri Lakshmi Textiles");
+  await expect(page.getByRole("button", { name: /Download (?:quotation )?PDF/ })).toBeEnabled();
   await expect(page.getByRole("button", { name: "WhatsApp" })).toBeEnabled();
 
   const whatsappUrls: string[] = [];
@@ -440,18 +461,18 @@ test("the newest five saved quotes work at 360px and 1280px without duplicate of
         continue;
       }
 
-      await expect(offer.getByText("Bill To")).toBeVisible();
-      const billTo = offer.getByText("Bill To").locator("..");
-      await expect(billTo).not.toContainText("Customer details not saved with this quote");
-      expect((await billTo.innerText()).replace(/\D/g, "")).toMatch(/\d{10}/);
-      await expect(page.getByRole("button", { name: "Download PDF" })).toBeEnabled();
+      await expect(offer.getByText("Client", { exact: true })).toBeVisible();
+      const clientDetails = offer.getByText("Client", { exact: true }).locator("..");
+      await expect(clientDetails).not.toContainText("Customer details not saved with this quote");
+      expect((await clientDetails.innerText()).replace(/\D/g, "")).toMatch(/\d{10}/);
+      await expect(page.getByRole("button", { name: /Download (?:quotation )?PDF/ })).toBeEnabled();
       await expect(page.getByRole("button", { name: "WhatsApp" })).toBeEnabled();
 
       const pdfResponsePromise = page.waitForResponse((response) =>
         response.url().includes("/api/quotations/pdf") && response.request().method() === "POST",
       );
       const downloadPromise = page.waitForEvent("download");
-      await page.getByRole("button", { name: "Download PDF" }).click();
+      await page.getByRole("button", { name: /Download (?:quotation )?PDF/ }).click();
       const [pdfResponse, download] = await Promise.all([pdfResponsePromise, downloadPromise]);
       expect(pdfResponse.ok()).toBe(true);
       expect(download.suggestedFilename()).toMatch(/^offer-.*\.pdf$/);
@@ -554,9 +575,9 @@ test("quotation wizard and preview fit target widths", async ({ page }, testInfo
 
   for (const width of widths.filter((value) => value <= 430)) {
     await page.setViewportSize({ width, height: 844 });
-    for (const name of ["Download PDF", "WhatsApp"]) {
+    for (const name of ["Download quotation PDF", "Share quotation on WhatsApp"]) {
       const box = await page.getByRole("button", { name, exact: true }).boundingBox();
-      expect(box?.height).toBe(48);
+      expect(box?.height).toBe(44);
     }
     await expect(page.getByRole("button", { name: "Back", exact: true })).toBeVisible();
   }

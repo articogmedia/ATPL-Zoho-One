@@ -258,7 +258,8 @@ export function workForTab(user: User, visits: Visit[], tab: WorkTab, today: str
   ).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
 }
 
-export type Product = { id: string; model: string; code?: string; description?: string; price: number; unit: string; gstRate?: number };
+export type ZohoProductTax = { name: string; percentage: number; rate: number };
+export type Product = { id: string; model: string; code?: string; description?: string; price: number; unit: string; gstRate?: number; zohoTaxes?: ZohoProductTax[] };
 
 export function uniqueProducts(products: readonly Product[]): Product[] {
   const seen = new Set<string>();

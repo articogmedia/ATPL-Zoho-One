@@ -1,4 +1,4 @@
-import type { Lead, LeadSource, LeadStatus, LeadUpdate, LostReason, Product, Quotation, QuoteGstBreakdown, QuoteGstTotals, Role, User, Visit, VisitStatus } from "@/lib/domain";
+import type { Lead, LeadSource, LeadStatus, LeadUpdate, LostReason, Product, Quotation, QuoteGstBreakdown, QuoteGstTotals, Role, User, Visit, VisitStatus, ZohoProductTax } from "@/lib/domain";
 import { LOST_REASONS } from "@/lib/domain";
 import { FIELD, READ_LEAD_STATUS, ROLE_BY_ZOHO_NAME, ROLE_KEYWORDS } from "./fields";
 
@@ -306,6 +306,7 @@ export function mapLead(z: ZLead, assignable: ReadonlySet<string>, salesExecutiv
 
 export function mapProduct(z: ZProduct): Product {
   const gstRate = zohoTaxRate(z.Tax);
+  const zohoTaxes = mapZohoProductTaxes(z.Tax);
   return {
     id: z.id,
     model: z.Product_Name,
@@ -314,7 +315,26 @@ export function mapProduct(z: ZProduct): Product {
     price: z.Unit_Price ?? 0,
     unit: z.Usage_Unit || "Nos",
     ...(gstRate !== undefined ? { gstRate } : {}),
+    ...(zohoTaxes.length ? { zohoTaxes } : {}),
   };
+}
+
+function mapZohoProductTaxes(value: unknown): ZohoProductTax[] {
+  const entries = Array.isArray(value) ? value : [value];
+  return entries.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const tax = entry as Record<string, unknown>;
+    const name = typeof tax.name === "string" ? tax.name.trim() : "";
+    const rawPercentage = tax.percentage ?? tax.rate ?? tax.value;
+    const percentage = typeof rawPercentage === "number"
+      ? rawPercentage
+      : typeof rawPercentage === "string" && rawPercentage.trim()
+        ? Number(rawPercentage)
+        : Number.NaN;
+    const rate = zohoTaxRate(percentage);
+    if (!name || !Number.isFinite(percentage) || percentage < 0 || percentage > 100 || rate === undefined) return [];
+    return [{ name, percentage, rate }];
+  });
 }
 
 function zohoTaxRate(value: unknown): number | undefined {
