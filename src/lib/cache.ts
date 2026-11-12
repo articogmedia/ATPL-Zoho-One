@@ -31,11 +31,11 @@ const mutationResults = (g.__atplMutationResults ??= new Map());
 const IDEMPOTENCY_TTL_SECONDS = 600;
 
 const tagFor = (key: string) => {
-  const tag = ["leads", "users", "products", "quotes", "visits"].find((candidate) => key.startsWith(candidate));
+  const tag = ["leads", "users", "products", "quotes", "invoices", "visits"].find((candidate) => key.startsWith(candidate));
   return tag ?? key;
 };
 const resourceFor = (key: string) => {
-  const tag = ["leads", "users", "products", "quotes", "visits"].find((candidate) => key.startsWith(candidate));
+  const tag = ["leads", "users", "products", "quotes", "invoices", "visits"].find((candidate) => key.startsWith(candidate));
   return tag ?? key.split(":", 1)[0] ?? "other";
 };
 

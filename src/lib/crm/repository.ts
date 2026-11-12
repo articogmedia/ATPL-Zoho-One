@@ -45,6 +45,7 @@ export interface CrmRepository {
   listQuotes(): Promise<Quotation[]>;
   listQuotesPage(page: number): Promise<{ quotes: Quotation[]; hasMore: boolean; count?: number }>;
   countQuotes?(ownerId?: string): Promise<number>;
+  listInvoiceCandidates(): Promise<{ quotes: Quotation[]; leads: Lead[] }>;
   suggestOfferNo(): Promise<string>;
   getQuote(id: string): Promise<Quotation | null>;
   markQuoteSent(id: string): Promise<void>;

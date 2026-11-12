@@ -13,14 +13,26 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-11-06T12:00:00Z"));
   afterTasks.length = 0;
+  process.env.SESSION_SECRET = "cache-test-session-secret-with-more-than-32-characters";
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  delete process.env.CACHE_SHORT_TTL_MS;
   vi.resetModules();
   const { resetMemoryCache } = await import("@/lib/cache");
   resetMemoryCache();
 });
 
 describe("shared cache stale-while-revalidate", () => {
+  it("uses a configurable short-cache TTL with a 30-second default", async () => {
+    const defaultEnv = await import("@/lib/env");
+    expect(defaultEnv.env().CACHE_SHORT_TTL_MS).toBe(30_000);
+
+    process.env.CACHE_SHORT_TTL_MS = "12500";
+    vi.resetModules();
+    const configuredEnv = await import("@/lib/env");
+    expect(configuredEnv.env().CACHE_SHORT_TTL_MS).toBe(12_500);
+  });
+
   it("returns stale data immediately and refreshes it after the response", async () => {
     let value = "first";
     let loads = 0;

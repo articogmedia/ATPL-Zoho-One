@@ -2,8 +2,8 @@ import "server-only";
 import { cache } from "react";
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
-import { canAdvanceLeadStatus, DEFAULT_NOT_RESPONSIVE_ATTEMPTS, GST_RATE, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quotationGstBreakdown, summarizeLeadCalls, summarizeLeads, todayIST, uniqueProducts, type CallActivity, type CallOutcome, type Lead, type LeadSource, type LeadTimelineItem, type Product, type QuoteGstBreakdown, type User, type Visit } from "@/lib/domain";
-import { cached, getCachedValue, invalidate, markStale, setCachedValue } from "@/lib/cache";
+import { canAdvanceLeadStatus, DEFAULT_NOT_RESPONSIVE_ATTEMPTS, GST_RATE, isAssignable, LEAD_SOURCES, nextOfferNo, normalizePhone, quotationGstBreakdown, summarizeLeadCalls, summarizeLeads, todayIST, uniqueProducts, type CallActivity, type CallOutcome, type Lead, type LeadSource, type LeadTimelineItem, type Product, type Quotation, type QuoteGstBreakdown, type User, type Visit } from "@/lib/domain";
+import { cached, getCachedValue, invalidate, markStale, setCachedValue, withIdempotency } from "@/lib/cache";
 import { env } from "@/lib/env";
 import { offerSubject } from "@/lib/company";
 import type { CrmRepository, LogCallInput, NewProduct } from "@/lib/crm/repository";
@@ -42,7 +42,7 @@ const CALL_FIELDS = ["Subject", "Call_Start_Time", "Call_Type", "Owner", "What_I
 const EVENT_FIELDS = ["Event_Title", "Start_DateTime", "Created_Time", "Owner", "Description"];
 const QUOTE_FIELDS = ["Subject", "Status", "Owner", "Created_Time", "Sub_Total", "Discount", "Tax", "Adjustment", "Grand_Total", "Account_Name", "Contact_Name", "Valid_Till", "Description", ...Object.values(FIELD.quote)];
 
-const SHORT = 60_000;   // transactional lists
+const SHORT = () => env().CACHE_SHORT_TTL_MS;
 const LONG = 600_000;   // users and field metadata
 const PRODUCTS_TTL = 120_000;
 const STANDARD_TASK_FIELDS = ["Subject", "Status", "Due_Date", "Owner", "Who_Id", "What_Id", "Description"];
@@ -632,7 +632,7 @@ const queueOwnerId = async () => {
 };
 
 const leads = cache(async function leads(): Promise<Lead[]> {
-  return cached("leads", SHORT, async () => {
+  return cached("leads", SHORT(), async () => {
     const [raw, assignable, tasks, allUsers] = await Promise.all([
       zohoList<ZLead>("Leads", LEAD_FIELDS, env().ZOHO_MAX_LEADS),
       assignableIds(),
@@ -660,7 +660,7 @@ const leads = cache(async function leads(): Promise<Lead[]> {
       const followUp = followUps.get(lead.id);
       return followUp ? { ...lead, followUp: followUp.date, followUpTime: followUp.time } : lead;
     }).sort((a, b) => b.createdOn.localeCompare(a.createdOn));
-    await setCachedValue("leads:aggregate", SHORT, Object.fromEntries(allUsers.map((user) => [
+    await setCachedValue("leads:aggregate", SHORT(), Object.fromEntries(allUsers.map((user) => [
       user.id,
       summarizeLeads(user, mappedLeads),
     ])));
@@ -773,7 +773,7 @@ function scheduleSideEffects(
 
 async function quotePage(page: number) {
   const schema = await quoteSchema();
-  return cached(`quotes:page:${page}`, SHORT, async () => {
+  return cached(`quotes:page:${page}`, SHORT(), async () => {
     const response = await zoho<{ data?: ZQuote[]; info?: { more_records?: boolean; count?: number } }>("GET", "/Quotes", {
       query: {
         fields: QUOTE_FIELDS.join(","),
@@ -786,6 +786,83 @@ async function quotePage(page: number) {
     const quotes = (response?.data ?? []).map((record) => mapQuote(record, new Map(), undefined, schema.fieldNames));
     return { quotes, hasMore: response?.info?.more_records === true, count: response?.info?.count };
   }, { keepStale: true });
+}
+
+async function zohoSearchList<T>(module: "Leads" | "Quotes", fields: string[], criteria: string, maxRecords: number): Promise<T[]> {
+  const rows: T[] = [];
+  let page = 1;
+  let moreRecords = true;
+  while (moreRecords && rows.length < maxRecords) {
+    const response = await zoho<{ data?: T[]; info?: { more_records?: boolean } }>(
+      "GET", `/${module}/search`, {
+        query: { fields: fields.join(","), criteria, per_page: 200, page },
+      },
+    );
+    const batch = response?.data ?? [];
+    rows.push(...batch);
+    moreRecords = response?.info?.more_records === true && batch.length > 0;
+    page += 1;
+  }
+  return rows.slice(0, maxRecords);
+}
+
+function quoteLeadId(record: ZQuote) {
+  const raw = record[FIELD.quote.lead];
+  if (raw && typeof raw === "object" && "id" in raw) return String(raw.id ?? "").trim();
+  if (typeof raw === "string" && raw.trim()) return raw.trim();
+  return parseQuoteCustomerSnapshot(record).leadId?.trim() ?? "";
+}
+
+async function invoiceCandidates(): Promise<{ quotes: Quotation[]; leads: Lead[] }> {
+  const maxRecords = env().ZOHO_MAX_LEADS;
+  const wonRecords = await cached("leads:invoice-won", SHORT(), () =>
+    zohoSearchList<ZLead>("Leads", LEAD_FIELDS, `(Lead_Status:equals:Won)`, maxRecords),
+    { keepStale: true },
+  );
+  const wonLeads = wonRecords
+    .filter((record) => String(record.Lead_Status ?? "").trim().toLowerCase() === "won")
+    .map((record) => mapLead(record, new Set()));
+  const wonLeadIds = wonLeads.map((lead) => lead.id).filter(Boolean);
+  const quoteCriteria = [
+    "(Status:equals:Accepted)",
+    "(Status:equals:Won)",
+    ...(wonLeadIds.length ? [`(${FIELD.quote.lead}.id:in:${wonLeadIds.join(",")})`] : []),
+  ];
+  const quoteRecords = await zohoSearchList<ZQuote>(
+    "Quotes",
+    QUOTE_FIELDS,
+    `(${quoteCriteria.join("or")})`,
+    maxRecords,
+  );
+  const neededLeadIds = [...new Set(quoteRecords.map(quoteLeadId).filter(Boolean))];
+  const leadsById = new Map(wonLeads.map((lead) => [lead.id, lead]));
+  const additionalLeadIds = neededLeadIds.filter((leadId) => !leadsById.has(leadId));
+  const additionalLeadRecords = await Promise.all(additionalLeadIds.map(async (leadId) => {
+    try {
+      const response = await zoho<{ data?: ZLead[] }>("GET", `/Leads/${encodeURIComponent(leadId)}`, {
+        query: { fields: LEAD_DETAIL_FIELDS.join(",") },
+      });
+      return response?.data?.[0];
+    } catch (error) {
+      if (error instanceof ZohoError && error.status === 404) return undefined;
+      throw error;
+    }
+  }));
+  for (const record of additionalLeadRecords) {
+    if (record?.id) leadsById.set(String(record.id), mapLead(record, new Set()));
+  }
+
+  const eligibleRecords = quoteRecords.filter((record) => {
+    const status = String(record.Status ?? "").trim().toLowerCase();
+    const lead = leadsById.get(quoteLeadId(record));
+    return status === "accepted" || status === "won" || lead?.status === "Won";
+  });
+  const needed = new Set(eligibleRecords.map(quoteLeadId).filter(Boolean));
+  return {
+    quotes: eligibleRecords.map((record) => mapQuote(record, leadsById))
+      .sort((left, right) => right.date.localeCompare(left.date)),
+    leads: [...leadsById.values()].filter((lead) => needed.has(lead.id)),
+  };
 }
 
 let quoteWriteLock: Promise<void> = Promise.resolve();
@@ -900,6 +977,78 @@ function isProductFieldSetError(error: unknown): boolean {
   return hasFieldDetail || /\bfields?\b|api_name/i.test(message);
 }
 
+function escapeZohoCriteriaValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/[(),]/g, "\\$&");
+}
+
+type ZohoAccount = { id?: string | number; Account_Name?: string; Phone?: string };
+
+export async function ensureAccountForLead(lead: Lead): Promise<string> {
+  return withIdempotency(`ensure-account-for-lead:${lead.id}`, async () => {
+    const linkedAccountId = lead.accountId?.trim();
+    if (linkedAccountId) return linkedAccountId;
+
+    const accountName = lead.company.trim() || lead.name.trim();
+    if (!accountName || accountName.toLowerCase() === "(no name)") {
+      throw new ZohoError(
+        "Add a company or customer name to this lead before converting its quotation to an invoice.",
+        400, "INVOICE_ACCOUNT_REQUIRED", "Account_Name",
+      );
+    }
+
+    const searchAccounts = async (criteria: string) => {
+      const response = await zoho<{ data?: ZohoAccount[] }>("GET", "/Accounts/search", {
+        query: { criteria, fields: "Account_Name,Phone", per_page: 200 },
+      });
+      return response?.data ?? [];
+    };
+
+    const byName = await searchAccounts(`(Account_Name:equals:${escapeZohoCriteriaValue(accountName)})`);
+    let accountId = byName.find((account) =>
+      String(account.Account_Name ?? "").trim().toLowerCase() === accountName.toLowerCase()
+      && String(account.id ?? "").trim(),
+    )?.id;
+
+    const normalizedPhone = normalizePhone(lead.phone);
+    if (!accountId && normalizedPhone) {
+      const phoneVariants = [...new Set([
+        lead.phone.trim(),
+        normalizedPhone,
+        `+91${normalizedPhone}`,
+        `91${normalizedPhone}`,
+        `0${normalizedPhone}`,
+      ].filter(Boolean))];
+      const phoneCriteria = `(${phoneVariants
+        .map((phone) => `(Phone:equals:${escapeZohoCriteriaValue(phone)})`)
+        .join("or")})`;
+      const byPhone = await searchAccounts(phoneCriteria);
+      accountId = byPhone.find((account) =>
+        normalizePhone(String(account.Phone ?? "")) === normalizedPhone
+        && String(account.id ?? "").trim(),
+      )?.id;
+    }
+
+    if (!accountId) {
+      accountId = await zohoWrite("POST", "/Accounts", {
+        Account_Name: accountName,
+        ...(lead.phone.trim() ? { Phone: lead.phone.trim() } : {}),
+        ...(lead.email?.trim() ? { Email: lead.email.trim() } : {}),
+      });
+    }
+
+    const resolvedAccountId = String(accountId ?? "").trim();
+    if (!resolvedAccountId) {
+      throw new ZohoError("Zoho did not return the Account ID.", undefined, "ACCOUNT_ID_MISSING");
+    }
+
+    await zohoWrite("PUT", `/Leads/${encodeURIComponent(lead.id)}`, {
+      [FIELD.lead.accountId]: resolvedAccountId,
+    });
+    await markStale("leads");
+    return resolvedAccountId;
+  });
+}
+
 export const zohoRepository: CrmRepository = {
   listUsers: users,
   listAssignableUsers,
@@ -913,7 +1062,7 @@ export const zohoRepository: CrmRepository = {
     const safePage = Math.max(1, Math.floor(page));
     const safePageSize = Math.min(100, Math.max(1, Math.floor(pageSize)));
     const ownerFilter = ownerId?.trim() ?? "";
-    return cached(`leads:page:${ownerFilter || "all"}:${safePage}:${safePageSize}`, SHORT, async () => {
+    return cached(`leads:page:${ownerFilter || "all"}:${safePage}:${safePageSize}`, SHORT(), async () => {
       const ownerCriteria = ownerFilter ? `(Owner.id:equals:${ownerFilter})` : undefined;
       const response = await zoho<{ data?: ZLead[]; info?: { count?: number; more_records?: boolean } }>(
         "GET", ownerCriteria ? "/Leads/search" : "/Leads", {
@@ -1218,7 +1367,7 @@ export const zohoRepository: CrmRepository = {
       if (createdTask && typeof createdTask !== "string") {
         try {
           const currentVisits = await loadVisits();
-          await setCachedValue("visits", SHORT, [
+          await setCachedValue("visits", SHORT(), [
             createdTask,
             ...currentVisits.filter((visit) => visit.id !== createdTask.id),
           ]);
@@ -1555,7 +1704,7 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listCalls(): Promise<CallActivity[]> {
-    return cached("visits:calls", SHORT, async () => {
+    return cached("visits:calls", SHORT(), async () => {
       const raw = await zohoList<ZCall>("Calls", CALL_FIELDS, env().ZOHO_MAX_LEADS);
       return raw.map((call) => ({
         id: String(call.id).trim(),
@@ -1649,9 +1798,12 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listQuotes() {
-    return cached("quotes", SHORT, async () => {
+    return cached("quotes", SHORT(), async () => {
       return (await quotePage(1)).quotes;
     }, { keepStale: true });
+  },
+  async listInvoiceCandidates() {
+    return invoiceCandidates();
   },
   async listQuotesPage(page) {
     return quotePage(Math.max(1, Math.floor(page)));
@@ -1661,7 +1813,7 @@ export const zohoRepository: CrmRepository = {
   },
   async countQuotes(ownerId) {
     const ownerFilter = ownerId?.trim();
-    return cached(`quotes:count:${ownerFilter || "all"}`, SHORT, async () => {
+    return cached(`quotes:count:${ownerFilter || "all"}`, SHORT(), async () => {
       const response = await zoho<{ count?: number }>("GET", "/Quotes/actions/count", {
         query: ownerFilter ? { criteria: `(Owner.id:equals:${ownerFilter})` } : undefined,
       });
@@ -2053,7 +2205,7 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listInvoices() {
-    return cached("invoices", SHORT, async () => {
+    return cached("invoices", SHORT(), async () => {
       const rows = await zohoList<ZohoInvoiceRecord>("Invoices", [
         "Subject", "Status", "Created_Time", "Account_Name",
         FIELD.invoice.invoiceNo, FIELD.invoice.customerGstin,
@@ -2092,19 +2244,13 @@ export const zohoRepository: CrmRepository = {
   async createInvoice(quote, lead, actor, gstin) {
     const existing = (await this.listInvoices()).find((invoice) => invoice.quoteId === quote.id);
     if (existing) return existing;
-    const accountId = quote.accountId || lead.accountId;
-    if (!accountId) {
-      throw new ZohoError(
-        "Link this lead to a Zoho Account before converting its quotation to an invoice.",
-        400, "INVOICE_ACCOUNT_REQUIRED", "Account_Name",
-      );
-    }
     if (!quote.items?.length || quote.items.some((item) => !item.productId)) {
       throw new ZohoError(
         "This quotation contains an item without a Zoho Product. Update the quotation before converting it.",
         400, "INVOICE_PRODUCT_REQUIRED", "Product_Details",
       );
     }
+    const accountId = quote.accountId || lead.accountId || await ensureAccountForLead(lead);
     const invoiceNo = await nextInvoiceNumber();
     const invoice = invoiceSnapshot(quote, lead, invoiceNo, actor, gstin, todayIST());
     const items = invoice.items.map((item) => ({
@@ -2144,7 +2290,7 @@ export const zohoRepository: CrmRepository = {
   },
 
   async listVisits() {
-    return cached("visits", SHORT, loadVisits, { keepStale: true });
+    return cached("visits", SHORT(), loadVisits, { keepStale: true });
   },
   getVisitsWarning() { return taskMetadataWarning; },
   async getVisit(id) {

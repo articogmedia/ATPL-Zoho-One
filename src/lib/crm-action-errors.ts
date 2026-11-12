@@ -43,7 +43,7 @@ export function friendlyZohoError(
     return `${field ? `Required field missing: ${field}` : "A required field is missing."}${suffix}`;
   }
   if (code === "INVOICE_ACCOUNT_REQUIRED") {
-    return `This customer is not linked to a Zoho Account. Open the customer/lead in Zoho CRM, link or create the Account, then retry invoice conversion.${suffix}`;
+    return `Add a company or customer name to this lead before converting its quotation to an invoice.${suffix}`;
   }
   if (code === "INVOICE_PRODUCT_REQUIRED") {
     return `This quotation contains a line that is not linked to a Zoho Product. Update the quotation with an approved catalogue product, then retry.${suffix}`;
@@ -95,11 +95,17 @@ export function friendlyZohoError(
               ? "ZohoCRM.modules.leads.UPDATE"
               : operationPath.startsWith("DELETE /LEADS")
                 ? "ZohoCRM.modules.leads.DELETE"
-                : operationPath.startsWith("POST /QUOTES")
-                  ? "ZohoCRM.modules.quotes.CREATE"
-                  : operationPath.startsWith("GET /QUOTES")
-                    ? "ZohoCRM.modules.quotes.READ"
-                : null;
+                : operationPath.startsWith("POST /ACCOUNTS")
+                  ? "ZohoCRM.modules.accounts.CREATE"
+                  : operationPath.startsWith("GET /ACCOUNTS")
+                    ? "ZohoCRM.modules.accounts.READ"
+                    : operationPath.startsWith("PUT /ACCOUNTS")
+                      ? "ZohoCRM.modules.accounts.UPDATE"
+                      : operationPath.startsWith("POST /QUOTES")
+                        ? "ZohoCRM.modules.quotes.CREATE"
+                        : operationPath.startsWith("GET /QUOTES")
+                          ? "ZohoCRM.modules.quotes.READ"
+                          : null;
     if (requiredScope) return `Zoho permission missing: ${requiredScope}${suffix}`;
     return `Zoho permissions are insufficient. Reconnect with Leads create/read and field metadata read access.${suffix}`;
   }

@@ -206,6 +206,18 @@ export const mockRepository: CrmRepository = {
     return product;
   },
   async listQuotes() { return [...state.quotes].sort((a, b) => b.date.localeCompare(a.date)); },
+  async listInvoiceCandidates() {
+    const leadsById = new Map(state.leads.map((lead) => [lead.id, lead]));
+    const quotes = state.quotes.filter((quote) => {
+      const status = (quote.status ?? "").trim().toLowerCase();
+      return status === "accepted" || status === "won" || leadsById.get(quote.leadId)?.status === "Won";
+    });
+    const leadIds = new Set(quotes.map((quote) => quote.leadId).filter(Boolean));
+    return {
+      quotes: [...quotes].sort((a, b) => b.date.localeCompare(a.date)),
+      leads: state.leads.filter((lead) => leadIds.has(lead.id)),
+    };
+  },
   async suggestOfferNo() { return nextOfferNo(state.quotes.map((quote) => quote.offerNo), today()); },
   async listQuotesPage(page) {
     const quotes = [...state.quotes].sort((a, b) => b.date.localeCompare(a.date));

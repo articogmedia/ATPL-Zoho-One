@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Download, ExternalLink, ReceiptText } from "lucide-react";
+import { ChevronDown, Download, ExternalLink, ReceiptText, RefreshCw } from "lucide-react";
 import { convertQuoteToInvoiceAction, sendInvoiceEmailAction } from "@/app/actions/crm";
+import { Button } from "@/components/ui/button";
 import { EmptyState, PageHeader, StatusBadge } from "@/components/ui-bits";
 import { formatINR, type Invoice } from "@/lib/domain";
 
@@ -21,6 +22,7 @@ export function InvoiceClient({ invoices, convertibleQuotes, loadError }: { invo
   const [emails, setEmails] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
   const [pending, startTransition] = useTransition();
+  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
   // Show a newly created invoice immediately; the server cache refreshes in the background.
   const [created, setCreated] = useState<Invoice[]>([]);
@@ -52,8 +54,28 @@ export function InvoiceClient({ invoices, convertibleQuotes, loadError }: { invo
     setMessage(result.ok ? "Invoice email sent." : result.error);
   });
 
+  const refreshInvoices = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ section: "invoices" }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "Could not refresh invoices.");
+      router.refresh();
+      setMessage("Invoices refreshed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not refresh invoices.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return <section className="space-y-6">
-    <PageHeader title="Invoices" subtitle="Convert accepted or Won quotations, then view, download, or email the invoice." />
+    <PageHeader title="Invoices" subtitle="Convert accepted or Won quotations, then view, download, or email the invoice." action={<Button type="button" variant="outline" disabled={refreshing} onClick={refreshInvoices}><RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />{refreshing ? "Refreshing…" : "Refresh"}</Button>} />
     {loadError && <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">{loadError}</p>}
     {message && <p role="status" className="rounded-lg border bg-card p-3 text-sm">{message}</p>}
 

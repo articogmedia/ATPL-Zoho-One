@@ -22,7 +22,7 @@ describe("friendly Zoho action errors", () => {
     expect(friendlyZohoError(400, "INVALID_PICKLIST", "Invalid value", "Lead_Status", "R9"))
       .toBe("The lead status value is not configured in Zoho CRM. Add the required status value in the Leads module picklist, then retry. (Ref: R9)");
     expect(friendlyZohoError(400, "INVOICE_ACCOUNT_REQUIRED", "Missing account", "Account_Name", "R10"))
-      .toBe("This customer is not linked to a Zoho Account. Open the customer/lead in Zoho CRM, link or create the Account, then retry invoice conversion. (Ref: R10)");
+      .toBe("Add a company or customer name to this lead before converting its quotation to an invoice. (Ref: R10)");
     expect(friendlyZohoError(
       400,
       "INVALID_PICKLIST",
@@ -44,6 +44,8 @@ describe("friendly Zoho action errors", () => {
       .toBe("Zoho permission missing: ZohoCRM.settings.fields.READ (Ref: R5)");
     expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R6", "POST /Leads"))
       .toBe("Zoho permission missing: ZohoCRM.modules.leads.CREATE (Ref: R6)");
+    expect(friendlyZohoError(401, "OAUTH_SCOPE_MISMATCH", "invalid oauth scope to access this URL", undefined, "R11", "POST /Accounts"))
+      .toBe("Zoho permission missing: ZohoCRM.modules.accounts.CREATE (Ref: R11)");
   });
 
   it("returns a short reference for unknown errors", () => {

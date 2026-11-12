@@ -26,7 +26,7 @@ authorization errors, a separate Self Client may be needed for the sandbox.
 
 1. In the API Console add a **Self Client**. Put its Client ID / Secret in `ZOHO_CLIENT_ID` / `ZOHO_CLIENT_SECRET`.
 2. Open its **Generate Code** tab. Scope (comma-separated):
-   `ZohoCRM.modules.ALL,ZohoCRM.settings.ALL,ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.invoices.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.calls.ALL,ZohoCRM.modules.events.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.modules.products.CREATE,ZohoCRM.modules.custom.ALL,ZohoCRM.users.READ,ZohoCRM.org.READ,ZohoCRM.settings.fields.READ,ZohoCRM.settings.modules.READ`
+   `ZohoCRM.modules.ALL,ZohoCRM.settings.ALL,ZohoCRM.modules.leads.ALL,ZohoCRM.modules.quotes.ALL,ZohoCRM.modules.invoices.ALL,ZohoCRM.modules.accounts.ALL,ZohoCRM.modules.tasks.ALL,ZohoCRM.modules.calls.ALL,ZohoCRM.modules.events.ALL,ZohoCRM.modules.notes.ALL,ZohoCRM.modules.products.READ,ZohoCRM.modules.products.CREATE,ZohoCRM.modules.custom.ALL,ZohoCRM.users.READ,ZohoCRM.org.READ,ZohoCRM.settings.fields.READ,ZohoCRM.settings.modules.READ`
    Time duration 10 minutes → Generate → copy the code.
 3. Exchange it before it expires:
    ```bash
@@ -46,6 +46,10 @@ authorization errors, a separate Self Client may be needed for the sandbox.
    Invoice creation and listing require `ZohoCRM.modules.invoices.ALL`. Add this
    scope and generate a new authorization code and refresh token; an existing
    refresh token does not gain permissions when refreshed.
+   Invoice conversion looks up and may create Zoho Accounts, so it requires
+   `ZohoCRM.modules.accounts.ALL`. Add this scope and generate a new authorization
+   code and refresh token; an existing refresh token does not gain permissions
+   when refreshed.
    If CRM reports `OAUTH_SCOPE_MISMATCH`, generate a new authorization code with
    these scopes and replace the saved refresh token; refreshing an old token
    will not add permissions.
@@ -73,10 +77,11 @@ Before enabling conversion, create these custom fields in the Invoices module:
 | `ATPL_Source_Quote_ID` | Single line | Prevent duplicate conversion of a quote |
 | `ATPL_Invoice_Snapshot` | Multi-line (large text) | Saved line items, GST rates, charges, and customer details |
 
-Invoice creation requires an existing Zoho Account lookup. Link the quote's
-`Account_Name`, or populate the Leads custom field `ATPL_Account_ID` with the
-linked Zoho Account record ID. The portal does not create an Account during
-conversion. Each invoice line must also reference an existing Zoho Product.
+Invoice creation uses the quote's `Account_Name` lookup or the lead's
+`ATPL_Account_ID` when already linked. Otherwise, the portal searches Zoho
+Accounts by the lead's company/customer name and then phone number; if no
+matching Account exists, it creates one and saves its ID to `ATPL_Account_ID`.
+Each invoice line must also reference an existing Zoho Product.
 Invoice PDFs are stored in the configured Vercel Blob store; invoice email links
 point to that stored PDF. Invoice numbers use the shared Upstash Redis `INCR`
 sequence, scoped by Indian financial year, so both Upstash variables must be

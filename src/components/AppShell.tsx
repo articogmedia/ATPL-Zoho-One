@@ -107,11 +107,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
           </div>
         </Link>
         <nav className="mt-2 flex flex-col gap-1 px-3">
-          <Link href="/home" className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
+          <Link href="/home" prefetch={true} className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold transition-colors ${path === "/home" ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
             <PendingNavContent icon={Home} label="Home" />
           </Link>
           {items.map((n) => (
-            <Link key={n.to} href={n.to}
+            <Link key={n.to} href={n.to} prefetch={true}
               className={`flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors ${path === n.to ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm" : "hover:bg-sidebar-primary"}`}>
               <PendingNavContent icon={n.icon} label={n.label} />
             </Link>
@@ -162,11 +162,11 @@ export function AppShell({ user, inactivityMinutes = 30, children }: { user: { n
 
       {items.length > 0 && (
         <nav className="fixed inset-x-0 bottom-0 z-30 grid min-h-[64px] border-t border-border bg-card px-1 pb-[env(safe-area-inset-bottom)] lg:hidden" style={{ gridTemplateColumns: `repeat(${items.length + 1}, minmax(0,1fr))` }}>
-          <Link href="/home" className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
+          <Link href="/home" prefetch={true} className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === "/home" ? "text-primary" : "text-muted-foreground"}`}>
             <PendingNavContent icon={Home} label="Home" vertical />
           </Link>
           {items.map((n) => (
-            <Link key={n.to} href={n.to}
+            <Link key={n.to} href={n.to} prefetch={true}
               className={`flex min-h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium ${path === n.to ? "text-primary" : "text-muted-foreground"}`}>
               <PendingNavContent icon={n.icon} label={n.short} vertical />
             </Link>

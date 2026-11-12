@@ -2,8 +2,9 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
-import { CalendarPlus, FileText, History, LoaderCircle, MoreHorizontal, Pencil, Phone, Plus, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { CalendarPlus, FileText, History, LoaderCircle, MoreHorizontal, Pencil, Phone, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import { claimLeadSubmission, shouldClearLeadDuplicate } from "@/lib/lead-form-state";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
@@ -86,6 +87,7 @@ function isLeadsResponse(value: unknown): value is LeadsResponse {
 }
 
 export function LeadsClient({ user, leads, initialHasMore = false, executives, assignees, assigneesUnavailable, owners, canAssign, leadSources: initialLeadSources = LEAD_SOURCES, leadSourcesUnavailable = false, fixableLeads, initialTab, initialCount, tabCounts: initialTabCounts, hasAnyLeads: initialHasAnyLeads, callStats: initialCallStats = {} }: Props) {
+  const router = useRouter();
   const [fixableLeadRows, setFixableLeadRows] = useState(fixableLeads);
   const [leadRows, setLeadRows] = useState(leads);
   const [callStats, setCallStats] = useState(initialCallStats);
@@ -104,6 +106,7 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
   const currentPage = useRef(1);
   const [loadingRows, setLoadingRows] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [justAdded, setJustAdded] = useState<Lead | null>(null);
   const isExec = user.role === "Sales Executive";
   const [tab, setTab] = useState<LeadTab>(initialTab);
@@ -553,12 +556,32 @@ export function LeadsClient({ user, leads, initialHasMore = false, executives, a
     setPendingLeadAdds((current) => current.filter((item) => item.id !== id));
   };
 
+  const refreshLeads = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const response = await fetch("/api/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ section: "leads" }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "Could not refresh leads.");
+      router.refresh();
+      toast.success("Leads refreshed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not refresh leads.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div className="space-y-4 text-sm max-[480px]:space-y-3 max-[480px]:pt-4">
       <PageHeader
         title="Manage Leads"
         subtitle={<>Review enquiries, assign ownership, and track follow-ups.{(user.role === "Manager" || user.role === "Calling Team") && <span className="ml-2">Today&apos;s follow-ups: {currentTodaysFollowUps}</span>}</>}
-        action={<Button className="sm:w-auto" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button>}
+        action={<div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={refreshing} onClick={refreshLeads}><RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />{refreshing ? "Refreshing…" : "Refresh"}</Button><Button className="sm:w-auto" onClick={() => { setAddLeadDraft(null); setAddLeadDuplicate(null); setAdding(true); }}><Plus /> Add Lead</Button></div>}
       />
       {user.role === "Manager" && fixableCount > 0 && <div className="flex justify-end"><FixAssignedLeads leads={fixableLeadRows} count={fixableCount} /></div>}
 

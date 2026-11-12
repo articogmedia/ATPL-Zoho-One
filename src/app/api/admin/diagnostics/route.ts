@@ -79,11 +79,17 @@ export async function GET() {
       return Object.fromEntries(counts);
     });
     const moduleAccess = await check(async () => {
-      const [calls, events] = await Promise.all([
+      const [calls, events, accounts] = await Promise.all([
         zoho<{ data?: unknown[] }>("GET", "/Calls", { query: { per_page: 1 } }),
         zoho<{ data?: unknown[] }>("GET", "/Events", { query: { per_page: 1 } }),
+        zoho<{ data?: unknown[] }>("GET", "/Accounts", { query: { fields: "Account_Name", per_page: 1 } }),
       ]);
-      return { calls: calls?.data?.length ?? 0, events: events?.data?.length ?? 0 };
+      return {
+        calls: calls?.data?.length ?? 0,
+        events: events?.data?.length ?? 0,
+        accounts: accounts?.data?.length ?? 0,
+        requiredAccountScope: "ZohoCRM.modules.accounts.ALL",
+      };
     });
     const products = await check(async () => {
       const response = await zoho<{ data?: Record<string, unknown>[]; info?: { more_records?: boolean } }>("GET", "/Products", {
