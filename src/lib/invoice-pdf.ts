@@ -1,7 +1,19 @@
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, type PDFFont } from "pdf-lib";
 import { COMPANY } from "@/lib/company";
 import { formatINR } from "@/lib/domain";
 import type { Invoice } from "@/lib/domain";
+
+export function sanitizeInvoicePdfText(value: string, font: PDFFont): string {
+  return Array.from(value.replace(/[\r\n\t]/g, " ")).filter((character) => {
+    try {
+      font.encodeText(character);
+      return true;
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("cannot encode")) return false;
+      throw error;
+    }
+  }).join("");
+}
 
 export async function renderInvoicePdf(invoice: Invoice) {
   const document = await PDFDocument.create();
@@ -15,7 +27,9 @@ export async function renderInvoicePdf(invoice: Invoice) {
   let page = document.addPage(pageSize);
   let y = pageSize[1] - margin;
   const text = (value: string, x: number, top: number, size = 10, font = regular, color = ink) => {
-    page.drawText(value.slice(0, 100), { x, y: top - size, size, font, color, maxWidth: pageSize[0] - x - margin });
+    page.drawText(sanitizeInvoicePdfText(value, font).slice(0, 100), {
+      x, y: top - size, size, font, color, maxWidth: pageSize[0] - x - margin,
+    });
   };
   const line = (top: number) => page.drawLine({
     start: { x: margin, y: top },

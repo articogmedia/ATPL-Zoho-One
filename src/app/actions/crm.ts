@@ -790,10 +790,13 @@ export async function sendInvoiceEmailAction(input: unknown) {
     if (!invoice || !canViewInvoice(user, invoice)) {
       throw new ForbiddenError("Invoice not found or access denied.");
     }
+    if (env().EMAIL_PROVIDER === "disabled") {
+      throw new ForbiddenError("Email is not configured yet.");
+    }
     let pdf = await getStoredInvoicePdf(invoice.id);
     if (!pdf?.url) {
       const blobToken = env().BLOB_READ_WRITE_TOKEN;
-      if (!blobToken) throw new Error("Invoice email requires BLOB_READ_WRITE_TOKEN so the customer can access its PDF.");
+      if (!blobToken) throw new ForbiddenError("Email is not configured yet.");
       const [{ put }, { renderInvoicePdf }] = await Promise.all([
         import("@vercel/blob"),
         import("@/lib/invoice-pdf"),

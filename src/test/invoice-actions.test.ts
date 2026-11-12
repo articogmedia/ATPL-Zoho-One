@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
   getStoredInvoicePdf: vi.fn(),
   takeQuotationEmailRateLimit: vi.fn(),
   sendEmail: vi.fn(),
+  env: vi.fn((): {
+    ZOHO_SANDBOX: string;
+    EMAIL_PROVIDER: string;
+    BLOB_READ_WRITE_TOKEN?: string;
+  } => ({ ZOHO_SANDBOX: "true", EMAIL_PROVIDER: "resend", BLOB_READ_WRITE_TOKEN: "blob-token" })),
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
@@ -54,7 +59,7 @@ vi.mock("@/lib/zoho/client", () => ({
   ZohoError: class ZohoError extends Error {},
   hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
 }));
-vi.mock("@/lib/env", () => ({ env: () => ({ ZOHO_SANDBOX: "true" }) }));
+vi.mock("@/lib/env", () => ({ env: mocks.env }));
 vi.mock("@/lib/crm-action-errors", () => ({
   friendlyZohoError: vi.fn(),
   newErrorReference: () => "TEST-REF",
@@ -120,6 +125,12 @@ describe("convertQuoteToInvoiceAction", () => {
     mocks.getStoredInvoicePdf.mockReset().mockResolvedValue({ url: "https://blob.example/invoice.pdf" });
     mocks.takeQuotationEmailRateLimit.mockReset().mockResolvedValue(true);
     mocks.sendEmail.mockReset().mockResolvedValue(undefined);
+    mocks.env.mockReset().mockReturnValue({
+      ZOHO_SANDBOX: "true",
+      EMAIL_PROVIDER: "resend",
+      BLOB_READ_WRITE_TOKEN: "blob-token",
+    });
+
   });
 
   it("creates an invoice from an owned Won quotation", async () => {
@@ -173,6 +184,25 @@ describe("convertQuoteToInvoiceAction", () => {
     mocks.takeQuotationEmailRateLimit.mockResolvedValue(false);
     await expect(sendInvoiceEmailAction({ invoiceId: invoice.id, to: "customer@example.com" }))
       .resolves.toMatchObject({ ok: false, error: "Email limit reached. Try again later." });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("returns a clear message when invoice email is disabled", async () => {
+    mocks.env.mockReturnValue({ ZOHO_SANDBOX: "true", EMAIL_PROVIDER: "disabled" });
+    const { sendInvoiceEmailAction } = await import("@/app/actions/crm");
+
+    await expect(sendInvoiceEmailAction({ invoiceId: invoice.id, to: "customer@example.com" }))
+      .resolves.toMatchObject({ ok: false, error: "Email is not configured yet." });
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("returns a clear message when a PDF must be generated but Blob is not configured", async () => {
+    mocks.env.mockReturnValue({ ZOHO_SANDBOX: "true", EMAIL_PROVIDER: "resend" });
+    mocks.getStoredInvoicePdf.mockResolvedValue(null);
+    const { sendInvoiceEmailAction } = await import("@/app/actions/crm");
+
+    await expect(sendInvoiceEmailAction({ invoiceId: invoice.id, to: "customer@example.com" }))
+      .resolves.toMatchObject({ ok: false, error: "Email is not configured yet." });
     expect(mocks.sendEmail).not.toHaveBeenCalled();
   });
 });
