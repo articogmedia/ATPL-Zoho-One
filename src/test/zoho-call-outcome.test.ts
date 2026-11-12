@@ -28,8 +28,18 @@ async function flushAfterJobs() {
   await Promise.all(jobs.map((job) => job()));
 }
 
-function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolean; taskFailure?: boolean; unassignedLead?: boolean; callFailure?: boolean; dependentCallFirst?: boolean } = {}) {
+function mockRepository(options: {
+  noteFailure?: boolean;
+  statusFailure?: boolean;
+  taskFailure?: boolean;
+  unassignedLead?: boolean;
+  callFailure?: boolean;
+  callHistoryFailure?: boolean;
+  historyCalls?: { id: string; Call_Start_Time?: string; Created_Time?: string; Call_Result?: string; Owner?: { id?: string } }[];
+  dependentCallFirst?: boolean;
+} = {}) {
   const calls: { method: string; path: string; record: Record<string, unknown> }[] = [];
+  const callHistoryQueries: { sort_by?: string; sort_order?: string }[] = [];
   let callAttempts = 0;
   class MockZohoError extends Error {
     constructor(
@@ -62,14 +72,19 @@ function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolea
   vi.doMock("@/lib/zoho/client", () => ({
     ZOHO_CRM_API_VERSION: "v6",
     ZohoError: MockZohoError,
-    zoho: vi.fn(async (_method: string, path: string, opts?: { query?: { module?: string } }) => {
+    zoho: vi.fn(async (_method: string, path: string, opts?: { query?: { module?: string; sort_by?: string; sort_order?: string } }) => {
       if (path === `/Leads/${leadId}`) return { data: [{ id: leadId, Last_Name: "Call test lead", Company: "Call test lead", Mobile: "9876543210", Lead_Status: "Fresh Lead", ...(options.unassignedLead ? {} : { Owner: { id: "manager-1", name: "Manager" } }) }] };
-      if (path === `/Leads/${leadId}/Calls`) return { data: calls.filter((entry) => entry.path === "/Calls").map((entry, index) => ({
-        id: String(index + 1),
-        Call_Start_Time: String(entry.record.Call_Start_Time ?? ""),
-        Call_Result: entry.record.Call_Result,
-        Owner: entry.record.Owner,
-      })) };
+      if (path === `/Leads/${leadId}/Calls`) {
+        callHistoryQueries.push(opts?.query ?? {});
+        if (options.callHistoryFailure) throw new MockZohoError("Calls history unavailable", 503, "SERVICE_UNAVAILABLE");
+        return { data: options.historyCalls ?? calls.filter((entry) => entry.path === "/Calls").map((entry, index) => ({
+          id: String(index + 1),
+          Call_Start_Time: String(entry.record.Call_Start_Time ?? ""),
+          Created_Time: String(entry.record.Call_Start_Time ?? ""),
+          Call_Result: entry.record.Call_Result,
+          Owner: entry.record.Owner,
+        })) };
+      }
       if (path === "/users") return { users: [{ id: "manager-1", full_name: "Manager", role: { name: "Manager" }, profile: { name: "Administrator" } }] };
       if (path === "/settings/fields") {
         if (opts?.query?.module === "Calls") return { fields: [
@@ -93,12 +108,12 @@ function mockRepository(options: { noteFailure?: boolean; statusFailure?: boolea
       : []),
     zohoWrite: write,
   }));
-  return { calls, write };
+  return { calls, write, callHistoryQueries };
 }
 
 describe("Zoho call outcome persistence", () => {
   it("counts consecutive missed calls, ignores Wrong Number, resets on Connected, and records each attempt", async () => {
-    const { calls } = mockRepository();
+    const { calls, callHistoryQueries } = mockRepository();
     const { zohoRepository } = await import("@/lib/zoho/repository");
     const actor = { id: "manager-1", name: "Manager", role: "Manager" as const };
     const outcomes = ["No Answer", "Wrong Number", "Busy", "Connected", "Busy", "No Answer", "Busy"] as const;
@@ -113,6 +128,46 @@ describe("Zoho call outcome persistence", () => {
     }
     expect(calls.filter((call) => call.path === "/Calls")).toHaveLength(outcomes.length);
     expect(calls.filter((call) => call.path === "/Calls").map((call) => call.record.Call_Result)).toEqual(outcomes);
+    expect(callHistoryQueries.every((query) => query.sort_by === "Created_Time" && query.sort_order === "desc")).toBe(true);
+  });
+
+  it("saves the outcome with empty history when the previous-calls request fails", async () => {
+    const { calls, callHistoryQueries } = mockRepository({ callHistoryFailure: true });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    const result = await zohoRepository.logCall(
+      { leadId, outcome: "No Answer", remarks: "" },
+      { id: "manager-1", name: "Manager", role: "Manager" },
+    );
+
+    expect(result).toMatchObject({ attempts: 1, status: "Attempted to Contact", lastOutcome: "No Answer" });
+    expect(callHistoryQueries).toEqual([{ fields: expect.any(String), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" }]);
+    expect(calls.some((call) => call.path === "/Calls" && call.method === "POST")).toBe(true);
+    expect(calls.some((call) => call.path === `/Leads/${leadId}` && call.method === "PUT")).toBe(true);
+    expect(errorLog).toHaveBeenCalledWith(
+      "[zoho] previous call history unavailable; continuing with empty history",
+      expect.objectContaining({ leadId, message: "Calls history unavailable" }),
+    );
+    errorLog.mockRestore();
+  });
+
+  it("uses Created_Time when sorting a previous call without Call_Start_Time", async () => {
+    mockRepository({
+      historyCalls: [
+        { id: "missed", Call_Start_Time: "2026-11-11T09:00:00+05:30", Call_Result: "No Answer" },
+        { id: "connected", Created_Time: "2026-11-12T03:00:00Z", Call_Result: "Connected" },
+      ],
+    });
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    const result = await zohoRepository.logCall(
+      { leadId, outcome: "No Answer", remarks: "" },
+      { id: "manager-1", name: "Manager", role: "Manager" },
+    );
+
+    expect(result.attempts).toBe(1);
+    expect(result.status).toBe("Attempted to Contact");
   });
 
   it("uses the Zoho v6 call and note relationship payloads and tolerates a failed history note", async () => {

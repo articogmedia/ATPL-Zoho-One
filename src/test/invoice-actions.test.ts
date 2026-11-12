@@ -11,8 +11,11 @@ const mocks = vi.hoisted(() => ({
   getInvoice: vi.fn(),
   addLeadNote: vi.fn(),
   getStoredInvoicePdf: vi.fn(),
+  saveStoredInvoicePdf: vi.fn(),
   takeQuotationEmailRateLimit: vi.fn(),
   sendEmail: vi.fn(),
+  renderInvoicePdf: vi.fn(),
+  put: vi.fn(),
   env: vi.fn((): {
     ZOHO_SANDBOX: string;
     EMAIL_PROVIDER: string;
@@ -49,11 +52,11 @@ vi.mock("@/lib/quotation-pdf-store", () => ({
 }));
 vi.mock("@/lib/invoice-pdf-store", () => ({
   getStoredInvoicePdf: mocks.getStoredInvoicePdf,
-  saveStoredInvoicePdf: vi.fn(),
+  saveStoredInvoicePdf: mocks.saveStoredInvoicePdf,
 }));
-vi.mock("@/lib/invoice-pdf", () => ({ renderInvoicePdf: vi.fn() }));
+vi.mock("@/lib/invoice-pdf", () => ({ renderInvoicePdf: mocks.renderInvoicePdf }));
 vi.mock("@/lib/quotation-email-rate-limit", () => ({ takeQuotationEmailRateLimit: mocks.takeQuotationEmailRateLimit }));
-vi.mock("@vercel/blob", () => ({ put: vi.fn() }));
+vi.mock("@vercel/blob", () => ({ put: mocks.put }));
 vi.mock("@/lib/email", () => ({ sendEmail: mocks.sendEmail }));
 vi.mock("@/lib/zoho/client", () => ({
   ZohoError: class ZohoError extends Error {},
@@ -123,6 +126,9 @@ describe("convertQuoteToInvoiceAction", () => {
     mocks.getInvoice.mockReset().mockResolvedValue(invoice);
     mocks.addLeadNote.mockReset().mockResolvedValue(undefined);
     mocks.getStoredInvoicePdf.mockReset().mockResolvedValue({ url: "https://blob.example/invoice.pdf" });
+    mocks.saveStoredInvoicePdf.mockReset().mockResolvedValue(undefined);
+    mocks.renderInvoicePdf.mockReset().mockResolvedValue(Buffer.from("%PDF-fixture"));
+    mocks.put.mockReset().mockResolvedValue({ url: "https://blob.example/generated-invoice.pdf" });
     mocks.takeQuotationEmailRateLimit.mockReset().mockResolvedValue(true);
     mocks.sendEmail.mockReset().mockResolvedValue(undefined);
     mocks.env.mockReset().mockReturnValue({
@@ -163,6 +169,36 @@ describe("convertQuoteToInvoiceAction", () => {
     await expect(convertQuoteToInvoiceAction({ quoteId: quote.id }))
       .resolves.toMatchObject({ ok: true, data: invoice });
     expect(mocks.createInvoice).not.toHaveBeenCalled();
+  });
+
+  it("returns the stored invoice PDF URL without uploading again", async () => {
+    const { getInvoicePdfUrlAction } = await import("@/app/actions/crm");
+
+    await expect(getInvoicePdfUrlAction({ invoiceId: invoice.id }))
+      .resolves.toMatchObject({ ok: true, data: { url: "https://blob.example/invoice.pdf" } });
+    expect(mocks.put).not.toHaveBeenCalled();
+    expect(mocks.renderInvoicePdf).not.toHaveBeenCalled();
+  });
+
+  it("returns an uploaded PDF URL even if saving it to cache fails", async () => {
+    mocks.getStoredInvoicePdf.mockResolvedValue(null);
+    mocks.saveStoredInvoicePdf.mockRejectedValue(new Error("Redis unavailable"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { getInvoicePdfUrlAction } = await import("@/app/actions/crm");
+
+    await expect(getInvoicePdfUrlAction({ invoiceId: invoice.id }))
+      .resolves.toMatchObject({ ok: true, data: { url: "https://blob.example/generated-invoice.pdf" } });
+    expect(mocks.renderInvoicePdf).toHaveBeenCalledWith(invoice);
+    expect(mocks.put).toHaveBeenCalledWith(
+      expect.stringMatching(/^invoices\/.+\.pdf$/),
+      Buffer.from("%PDF-fixture"),
+      expect.objectContaining({ access: "public", contentType: "application/pdf", token: "blob-token" }),
+    );
+    expect(warning).toHaveBeenCalledWith(
+      "[action] invoice PDF URL could not be cached; returning the uploaded URL",
+      expect.objectContaining({ invoiceId: invoice.id, message: "Redis unavailable" }),
+    );
+    warning.mockRestore();
   });
 
   it("emails the stored PDF link and logs the invoice on its lead", async () => {

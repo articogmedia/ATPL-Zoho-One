@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getProductsAction: vi.fn(),
   getQuotationPdfUrlAction: vi.fn(),
   getQuoteDetailAction: vi.fn(),
+  markQuotationSentAction: vi.fn(),
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
 
@@ -27,9 +28,8 @@ vi.mock("@/app/actions/crm", () => ({
   getProductsAction: mocks.getProductsAction,
   getQuoteDetailAction: mocks.getQuoteDetailAction,
   getQuotationPdfUrlAction: mocks.getQuotationPdfUrlAction,
-  markQuotationSentAction: vi.fn(),
+  markQuotationSentAction: mocks.markQuotationSentAction,
   refreshProductsAction: vi.fn(),
-  sendQuotationEmailAction: vi.fn(),
   setLeadOutcomeAction: vi.fn(),
   updateQuoteAction: vi.fn(),
 }));
@@ -47,6 +47,7 @@ const lead = {
   name: "Original Customer",
   company: "Original Company",
   phone: "9876543210",
+  email: "customer@example.com",
   area: "",
   source: "Direct Call" as const,
   status: "Fresh Lead" as const,
@@ -105,6 +106,7 @@ describe("quotation PDF error state", () => {
     mocks.getProductsAction.mockReset().mockResolvedValue({ ok: true, data: [product] });
     mocks.getQuotationPdfUrlAction.mockReset().mockResolvedValue({ ok: true, data: null });
     mocks.getQuoteDetailAction.mockReset().mockResolvedValue({ ok: true, data: otherQuote });
+    mocks.markQuotationSentAction.mockReset().mockResolvedValue({ ok: true, data: { status: "Quotation Sent", quoteStatus: "Sent" } });
     mocks.toast.error.mockReset();
     mocks.toast.success.mockReset();
     host = document.createElement("div");
@@ -154,7 +156,6 @@ describe("quotation PDF error state", () => {
         leadSources={[]}
         leadSourcesUnavailable={false}
         products={[product]}
-        emailConfigured
         isManager
         suggestedOfferNo="280/26-27"
         presetLeadId="lead-1"
@@ -208,7 +209,6 @@ describe("quotation PDF error state", () => {
         leadSources={[]}
         leadSourcesUnavailable={false}
         products={[product]}
-        emailConfigured
         isManager
         suggestedOfferNo="280/26-27"
         presetLeadId="lead-1"
@@ -230,5 +230,52 @@ describe("quotation PDF error state", () => {
       quoteSnapshotToken: "fresh-snapshot",
     });
     expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("does not open the email app or mark the quotation sent if PDF link preparation fails", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/quotations/share" && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          error: "Could not prepare PDF (step: blob_upload). Ref: PDF-REF",
+          stage: "blob_upload",
+          reference: "PDF-REF",
+        }), { status: 500 });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { QuotationsClient } = await import("@/app/(app)/quotations/QuotationsClient");
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<QuotationsClient
+        leads={[lead]}
+        initialCustomersHasMore={false}
+        initialSavedQuotesCount={48}
+        leadSources={[]}
+        leadSourcesUnavailable={false}
+        products={[product]}
+        isManager
+        suggestedOfferNo="280/26-27"
+        presetLeadId="lead-1"
+      />);
+    });
+
+    const initialUrl = window.location.href;
+    await click(host.querySelector('button[aria-label="Item 1 product"]'));
+    await click(host.querySelector('[role="option"]'));
+    await click(button("Preview Offer"));
+    await click(button("Email"));
+    const emailForm = host.querySelector('form[aria-labelledby="quotation-email-title"]');
+    if (!(emailForm instanceof HTMLFormElement)) throw new Error("Quotation email form was not opened.");
+    await act(async () => {
+      emailForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mocks.markQuotationSentAction).not.toHaveBeenCalled();
+    expect(mocks.toast.error).toHaveBeenCalledWith("Could not prepare PDF (step: blob_upload). Ref: PDF-REF");
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(window.location.href).toBe(initialUrl);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

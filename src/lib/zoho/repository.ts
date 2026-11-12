@@ -1684,24 +1684,47 @@ export const zohoRepository: CrmRepository = {
         return [];
       }),
     ]);
-    const previousCalls = await zoho<{ data?: ZCall[] }>("GET", `/Leads/${leadId}/Calls`, {
-      query: { fields: CALL_FIELDS.join(","), page: 1, per_page: 200, sort_by: "Call_Start_Time", sort_order: "desc" },
+    let previousCalls: { data?: ZCall[] } | null = null;
+    try {
+      previousCalls = await zoho<{ data?: ZCall[] }>("GET", `/Leads/${leadId}/Calls`, {
+        query: { fields: CALL_FIELDS.join(","), page: 1, per_page: 200, sort_by: "Created_Time", sort_order: "desc" },
+      });
+    } catch (error) {
+      console.error("[zoho] previous call history unavailable; continuing with empty history", {
+        leadId,
+        errorName: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    }
+    const callDateForHistory = (call: ZCall) => call.Call_Start_Time || String(call.Created_Time ?? "");
+    const timestampForHistory = (call: ZCall) => Date.parse(callDateForHistory(call));
+    const sortableCallDate = (date: string) => {
+      const timestamp = Date.parse(date);
+      return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "";
+    };
+    const previousCallRecords = [...(previousCalls?.data ?? [])].sort((left, right) => {
+      const leftTime = timestampForHistory(left);
+      const rightTime = timestampForHistory(right);
+      if (!Number.isFinite(leftTime)) return Number.isFinite(rightTime) ? 1 : 0;
+      if (!Number.isFinite(rightTime)) return -1;
+      return rightTime - leftTime;
     });
     const knownOutcomes: CallOutcome[] = ["Connected", "No Answer", "Busy", "Wrong Number", "Call Back Later"];
     const callDate = zohoDateTime();
-    const callHistory: CallActivity[] = (previousCalls?.data ?? []).flatMap((call) => {
+    const callHistory: CallActivity[] = previousCallRecords.flatMap((call) => {
       const outcome = call[FIELD.call.result];
       return typeof outcome === "string" && knownOutcomes.includes(outcome as CallOutcome)
         ? [{
             id: String(call.id),
             leadId,
             ownerId: String(call.Owner?.id ?? ""),
-            date: call.Call_Start_Time ?? "",
+            date: sortableCallDate(callDateForHistory(call)),
             outcome: outcome as CallOutcome,
           }]
         : [];
     });
-    callHistory.push({ id: "pending", leadId, ownerId: actor.id, date: callDate, outcome: input.outcome });
+    callHistory.push({ id: "pending", leadId, ownerId: actor.id, date: sortableCallDate(callDate), outcome: input.outcome });
     const threshold = input.notResponsiveAttempts ?? DEFAULT_NOT_RESPONSIVE_ATTEMPTS;
     const callSummary = summarizeLeadCalls(callHistory, leadId, threshold);
     const status = input.outcome === "Wrong Number"

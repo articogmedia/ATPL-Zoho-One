@@ -11,8 +11,9 @@ import { EmptyState, PageHeader, ResponsiveTable, StatusBadge, fieldClass } from
 import { cn } from "@/lib/utils";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
-import { addLeadAction, createProductAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, getQuotationPdfUrlAction, markQuotationSentAction, refreshProductsAction, sendQuotationEmailAction, setLeadOutcomeAction, updateQuoteAction } from "@/app/actions/crm";
+import { addLeadAction, createProductAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, getQuotationPdfUrlAction, markQuotationSentAction, refreshProductsAction, setLeadOutcomeAction, updateQuoteAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
+import { buildMailtoUrl, isValidEmailRecipient } from "@/lib/mailto";
 import { canCreateQuotationPdf, displayProductUnit, formatOfferReference, formatQuotationMoney, splitQuotationItems } from "@/lib/quotation-presentation";
 import { formatINR, GST_RATE, LOST_REASONS, quotationGstBreakdown, uniqueProducts, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type LostReason, type Product, type Quotation, type QuoteExtraCharge, type QuoteGstBreakdown, type QuoteGstTotals } from "@/lib/domain";
 
@@ -31,7 +32,7 @@ type WizardState = {
 type DuplicateCustomer = { id: string; name: string; owner: string; status: string };
 type QuotationCustomer = Pick<Lead, "id" | "name" | "company" | "phone" | "email" | "area" | "source" | "status" | "assignedTo">
   & Partial<Pick<Lead, "assignedToId" | "ownerId" | "remarks" | "createdOn" | "address" | "touchedBy" | "followUp" | "followUpTime">>;
-type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; emailConfigured: boolean; isManager: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
+type Props = { leads: QuotationCustomer[]; initialCustomersHasMore: boolean; initialSavedQuotesCount?: number; leadSources: LeadSource[]; leadSourcesUnavailable: boolean; products: Product[]; isManager: boolean; suggestedOfferNo: string; presetLeadId: string; presetLeadError?: string };
 
 function normalizeWhatsAppPhone(value: string) {
   const digits = value.replace(/\D/g, "");
@@ -96,7 +97,7 @@ async function storeQuotationPdf(quote: Quotation, snapshotToken?: string): Prom
   return result.url;
 }
 
-export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQuotesCount, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products: initialProducts, emailConfigured, isManager, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
+export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQuotesCount, leadSources: initialLeadSources, leadSourcesUnavailable: initialLeadSourcesUnavailable, products: initialProducts, isManager, suggestedOfferNo, presetLeadId, presetLeadError }: Props) {
   const [leadSources, setLeadSources] = useState(initialLeadSources);
   const [leadSourcesUnavailable, setLeadSourcesUnavailable] = useState(initialLeadSourcesUnavailable);
   const [retryingLeadSources, setRetryingLeadSources] = useState(false);
@@ -980,7 +981,6 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
         offerDate={readOnlyQuote.date}
         validTill={readOnlyQuote.validTill}
         savedQuoteId={readOnlyQuote.id}
-        emailConfigured={emailConfigured}
         savedSubject={readOnlyQuote.subject}
         emailInitiallyOpen={emailSavedQuoteId === readOnlyQuote.id}
         onEmailDialogOpenConsumed={() => setEmailSavedQuoteId(null)}
@@ -1001,7 +1001,7 @@ export function QuotationsClient({ leads, initialCustomersHasMore, initialSavedQ
       </Button>
     </div>}
     <QuotationStepper step={step} hasLead={!!lead} productsValid={productsValid} hasSavedQuote={hasSavedQuote} onStep={setStep} />
-    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} revision={wizard.savedQuotation.revision} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} extraCharges={wizard.savedQuotation.gstBreakdown?.extraCharges ?? extraCharges} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedTotal={wizard.savedQuotation.total} savedStatus={wizard.savedQuotation.status} storedPdfUrl={pdfUrls[wizard.savedQuotation.id]} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} emailConfigured={emailConfigured} />
+    <Offer lead={lead} offerNo={wizard.savedQuotation.offerNo} revision={wizard.savedQuotation.revision} setOfferNo={setOfferNo} items={wizard.savedQuotation.items ?? items} extraCharges={wizard.savedQuotation.gstBreakdown?.extraCharges ?? extraCharges} subject={wizard.subject || offerSubject((wizard.savedQuotation.items ?? items).map((item) => item.model))} setSubject={(subject) => setWizard((current) => ({ ...current, subject }))} onBack={() => setStep(2)} onMarkSent={markQuotationSent} editableOfferNo={false} editableSubject={false} customer={wizard.savedQuotation.customer} savedTotal={wizard.savedQuotation.total} savedStatus={wizard.savedQuotation.status} storedPdfUrl={pdfUrls[wizard.savedQuotation.id]} gstBreakdown={wizard.savedQuotation.gstBreakdown} savedQuoteId={wizard.savedQuotation.id} />
     {savedDialog}
   </div>;
 
@@ -1457,10 +1457,10 @@ class SharePreparationError extends Error {
   }
 }
 
-function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, savedTotal, savedStatus, storedPdfUrl, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, gstBreakdown, emailInitiallyOpen = false, onEmailDialogOpenConsumed, emailConfigured }: {
+function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, subject, setSubject, onBack, onMarkSent, readOnly = false, editableOfferNo = true, editableSubject = true, customer: savedCustomer, savedTotal, savedStatus, storedPdfUrl, offerDate, validTill: savedValidTill, savedQuoteId, savedSubject, gstBreakdown, emailInitiallyOpen = false, onEmailDialogOpenConsumed }: {
  lead: QuotationCustomer; offerNo: string; revision?: number; setOfferNo: (s: string) => void; items: Item[]; extraCharges: QuoteExtraCharge[]; subject: string; setSubject: (subject: string) => void;
   onBack: () => void; onMarkSent: () => Promise<void>;
-  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; savedTotal?: number; savedStatus?: string; storedPdfUrl?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown; emailInitiallyOpen?: boolean; onEmailDialogOpenConsumed?: () => void; emailConfigured: boolean;
+  readOnly?: boolean; editableOfferNo?: boolean; editableSubject?: boolean; customer?: string; savedTotal?: number; savedStatus?: string; storedPdfUrl?: string; offerDate?: string; validTill?: string; savedQuoteId?: string; savedSubject?: string; gstBreakdown?: QuoteGstBreakdown; emailInitiallyOpen?: boolean; onEmailDialogOpenConsumed?: () => void;
 }) {
   const isLegacySavedQuote = !!savedQuoteId && !gstBreakdown;
   const computedBreakdown = quotationGstBreakdown(items, extraCharges);
@@ -1718,34 +1718,36 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
   const emailQuotation = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!savedQuoteId || sendingEmail) return;
+    const recipient = emailRecipient.trim();
+    if (!isValidEmailRecipient(recipient)) {
+      toast.error("Enter a valid recipient email address.");
+      return;
+    }
     setSendingEmail(true);
-    const downloadForManualEmail = async (message: string) => {
-      if (!message.includes("BLOB_READ_WRITE_TOKEN")) return false;
-      downloadFile(await buildPdfFile());
-      setEmailOpen(false);
-      toast.warning("PDF storage is unavailable. The PDF was downloaded; attach it to your email.");
-      return true;
-    };
     try {
-      const result = await sendQuotationEmailAction({ quoteId: savedQuoteId, to: emailRecipient.trim() });
-      if (!result.ok) {
-        if (await downloadForManualEmail(result.error)) return;
-        toast.error(result.error);
-        return;
-      }
-      toast.success(`Quotation emailed to ${emailRecipient.trim()}`, result.data?.noteLogged === false
-        ? { description: "The email was sent, but its CRM note could not be logged." }
-        : undefined);
+      const publicUrl = await prepareShareUrl();
+      const body = [
+        `Dear ${lead.name.trim() || customer},`,
+        "",
+        `Please find your quotation ${offerReference} from Air Trendz Pvt Ltd.`,
+        `Grand total: ${offerMoney(t.total)}`,
+        `Quotation PDF: ${publicUrl}`,
+        "",
+        "Air Trendz Pvt Ltd",
+        COMPANY.address,
+        COMPANY.contact,
+        `GSTIN: ${COMPANY.gstin}`,
+      ].join("\n");
+      window.location.href = buildMailtoUrl(
+        recipient,
+        `Quotation ${offerReference} from Air Trendz Pvt Ltd`,
+        body,
+      );
       setEmailOpen(false);
+      void onMarkSent().catch(notifyMutationFailure);
+      toast.success("Opening your email app. Press Send to deliver the quotation.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not send the quotation email.";
-      try {
-        if (await downloadForManualEmail(message)) return;
-      } catch (downloadError) {
-        toast.error(downloadError instanceof Error ? downloadError.message : "Could not generate the quotation PDF.");
-        return;
-      }
-      toast.error(message);
+      toast.error(error instanceof Error ? error.message : "Could not prepare the quotation email.");
     } finally {
       setSendingEmail(false);
     }
@@ -1913,8 +1915,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
       >
         <div>
           <h2 id="quotation-email-title" className="font-semibold">Email quotation</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Offer {offerReference} · PDF link included</p>
-          {!emailConfigured && <p className="mt-2 text-sm text-destructive">Email is not configured. Contact a manager to enable email delivery.</p>}
+          <p className="mt-1 text-sm text-muted-foreground">Opens your email app with the PDF link included</p>
         </div>
         <label className="block space-y-1 text-sm font-medium" htmlFor="quotation-email-recipient">
           Recipient email
@@ -1931,7 +1932,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
         </label>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" className="h-11" onClick={() => setEmailOpen(false)}>Cancel</Button>
-          <Button type="submit" className="h-11" disabled={!emailConfigured || sendingEmail || !emailRecipient.trim()}><Mail className="h-4 w-4" />{sendingEmail ? "Sending…" : "Send email"}</Button>
+          <Button type="submit" className="h-11" disabled={sendingEmail || !emailRecipient.trim()}><Mail className="h-4 w-4" />{sendingEmail ? "Preparing…" : "Open email app"}</Button>
         </div>
       </form>
     </div>}

@@ -8,7 +8,6 @@ import { beginPagePerf, endPagePerf } from "@/lib/page-perf";
 import { PageLoadError } from "@/components/PageLoadError";
 import { PageSkeleton } from "@/components/ui-bits";
 import { withPageTimeout } from "@/lib/page-timeout";
-import { env } from "@/lib/env";
 
 export const metadata = { title: "Create Quotation" };
 export const dynamic = "force-dynamic";
@@ -96,7 +95,6 @@ async function QuotationsData({ user, presetLeadId }: { user: User; presetLeadId
     leadSources={leadSources}
     leadSourcesUnavailable={leadSourcesUnavailable || leadSources.length === 0}
     products={uniqueProducts(products)}
-    emailConfigured={env().EMAIL_PROVIDER === "resend"}
     isManager={user.role === "Manager"}
     suggestedOfferNo={suggestedOfferNo}
     presetLeadId={presetLead && !presetLeadError ? String(presetLead.id).trim() : ""}

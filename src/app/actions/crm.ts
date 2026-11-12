@@ -781,6 +781,58 @@ const invoiceEmailSchema = z.object({
   to: z.string().trim().email("Enter a valid recipient email address.").max(254),
 });
 
+const invoicePdfUrlSchema = z.object({ invoiceId: id });
+
+export async function getInvoicePdfUrlAction(input: unknown): Promise<ActionResult<{ url: string }>> {
+  return run(async () => {
+    const user = await requireActionUser("invoices");
+    const { invoiceId } = invoicePdfUrlSchema.parse(input);
+    const invoice = await crm().getInvoice(invoiceId);
+    if (!invoice || !canViewInvoice(user, invoice)) {
+      throw new ForbiddenError("Invoice not found or access denied.");
+    }
+
+    let storedPdf: Awaited<ReturnType<typeof getStoredInvoicePdf>> | undefined;
+    try {
+      storedPdf = await getStoredInvoicePdf(invoice.id);
+    } catch (error) {
+      console.warn("[action] stored invoice PDF lookup failed; regenerating", {
+        invoiceId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (storedPdf?.url) return { url: storedPdf.url };
+
+    const blobToken = env().BLOB_READ_WRITE_TOKEN;
+    if (!blobToken) {
+      throw new ForbiddenError("Invoice PDF sharing is not configured. Set BLOB_READ_WRITE_TOKEN.");
+    }
+    const [{ put }, { renderInvoicePdf }] = await Promise.all([
+      import("@vercel/blob"),
+      import("@/lib/invoice-pdf"),
+    ]);
+    const bytes = await renderInvoicePdf(invoice);
+    const blob = await put(`invoices/${randomUUID()}.pdf`, Buffer.from(bytes), {
+      access: "public",
+      contentType: "application/pdf",
+      token: blobToken,
+    });
+    try {
+      await saveStoredInvoicePdf(invoice.id, {
+        url: blob.url,
+        ownerId: invoice.ownerId,
+        executive: invoice.executive,
+      });
+    } catch (error) {
+      console.warn("[action] invoice PDF URL could not be cached; returning the uploaded URL", {
+        invoiceId,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return { url: blob.url };
+  }, undefined, { input, action: "get-invoice-pdf-url", section: "invoices" });
+}
+
 export async function sendInvoiceEmailAction(input: unknown) {
   return run(async () => {
     const user = await requireActionUser("invoices");

@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Download, ExternalLink, ReceiptText, RefreshCw } from "lucide-react";
-import { convertQuoteToInvoiceAction, sendInvoiceEmailAction } from "@/app/actions/crm";
+import { ChevronDown, Download, ExternalLink, Mail, ReceiptText, RefreshCw } from "lucide-react";
+import { convertQuoteToInvoiceAction, getInvoicePdfUrlAction } from "@/app/actions/crm";
 import { Button } from "@/components/ui/button";
 import { EmptyState, PageHeader, StatusBadge } from "@/components/ui-bits";
+import { COMPANY } from "@/lib/company";
 import { formatINR, type Invoice } from "@/lib/domain";
+import { buildMailtoUrl, isValidEmailRecipient } from "@/lib/mailto";
 
 type ConvertibleQuote = {
   id: string;
@@ -49,9 +51,39 @@ export function InvoiceClient({ invoices, convertibleQuotes, loadError }: { invo
 
   const emailInvoice = (invoiceId: string) => startTransition(async () => {
     setMessage("");
-    const invoice = invoices.find((item) => item.id === invoiceId);
-    const result = await sendInvoiceEmailAction({ invoiceId, to: emails[invoiceId] ?? invoice?.email ?? "" });
-    setMessage(result.ok ? "Invoice email sent." : result.error);
+    const invoice = shownInvoices.find((item) => item.id === invoiceId);
+    if (!invoice) {
+      setMessage("Invoice not found.");
+      return;
+    }
+    const recipient = (emails[invoiceId] ?? invoice.email ?? "").trim();
+    if (!isValidEmailRecipient(recipient)) {
+      setMessage("Enter a valid recipient email address.");
+      return;
+    }
+    const result = await getInvoicePdfUrlAction({ invoiceId });
+    if (!result.ok || !result.data?.url) {
+      setMessage(result.ok ? "Could not prepare the invoice PDF link." : result.error);
+      return;
+    }
+    const body = [
+      `Dear ${invoice.contactName || invoice.customer},`,
+      "",
+      `Please find your invoice ${invoice.invoiceNo} from Air Trendz Pvt Ltd.`,
+      `Grand total: ${formatINR(invoice.total)}`,
+      `Invoice PDF: ${result.data.url}`,
+      "",
+      "Air Trendz Pvt Ltd",
+      COMPANY.address,
+      COMPANY.contact,
+      `GSTIN: ${COMPANY.gstin}`,
+    ].join("\n");
+    window.location.href = buildMailtoUrl(
+      recipient,
+      `Invoice ${invoice.invoiceNo} from Air Trendz Pvt Ltd`,
+      body,
+    );
+    setMessage("Opening your email app. Press Send to deliver the invoice.");
   });
 
   const refreshInvoices = async () => {
@@ -111,13 +143,14 @@ export function InvoiceClient({ invoices, convertibleQuotes, loadError }: { invo
             <div className="flex flex-wrap gap-2">
               <input
                 type="email"
+                required
                 aria-label={`Email recipient for ${invoice.invoiceNo}`}
                 placeholder="Recipient email"
                 value={emails[invoice.id] ?? invoice.email ?? ""}
                 onChange={(event) => setEmails((current) => ({ ...current, [invoice.id]: event.target.value }))}
                 className="min-h-11 min-w-0 flex-1 basis-48 rounded-md border bg-background px-3 text-base sm:text-sm"
               />
-              <button type="button" disabled={pending} onClick={() => emailInvoice(invoice.id)} className="min-h-11 w-full rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50 sm:w-auto">{pending ? "Working…" : "Email invoice"}</button>
+              <button type="button" disabled={pending} onClick={() => emailInvoice(invoice.id)} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-50 sm:w-auto"><Mail className="h-4 w-4" />{pending ? "Preparing…" : "Open email app"}</button>
             </div>
           </div>
         </details>
