@@ -260,13 +260,16 @@ function quoteLineItemsPayload(
   });
 }
 
+const TAX_FIELD_WRITE_STATUSES = new Set([200, 400, 422]);
+const TAX_FIELD_REFERENCE = /(?:^|[^A-Za-z0-9_])(?:Line_Tax|Tax)(?:$|[^A-Za-z0-9_])/i;
+
 function isTaxFieldWriteFailure(error: unknown): error is ZohoError {
   if (!(error instanceof ZohoError)) return false;
 
   // Zoho CRM can return HTTP 200 while rejecting an individual record in
   // data[0] with status: "error". zohoWrite converts that response into a
   // ZohoError(status=200), so 200 must be accepted here as well as HTTP errors.
-  if (![200, 400, 422].includes(error.status ?? 0)) return false;
+  if (!TAX_FIELD_WRITE_STATUSES.has(error.status ?? 0)) return false;
 
   const details = error.details ?? {};
   const fieldReferences = [
@@ -274,12 +277,74 @@ function isTaxFieldWriteFailure(error: unknown): error is ZohoError {
     details.api_name,
     details.json_path,
     details.field,
+    details.param_name,
+    details.path,
+    details.message,
     error.message,
   ].filter((value): value is string => typeof value === "string");
 
-  return fieldReferences.some((value) =>
-    /(?:^|[^A-Za-z0-9_])(?:Line_Tax|Tax)(?:$|[^A-Za-z0-9_])/i.test(value),
-  );
+  return fieldReferences.some((value) => TAX_FIELD_REFERENCE.test(value));
+}
+
+async function writeQuoteWithTaxFallback(
+  method: "POST" | "PUT",
+  path: string,
+  record: Record<string, unknown>,
+  lineItemsField: QuoteLineItemsField,
+  gstAmount: number,
+  adjustmentAmount: number,
+): Promise<string> {
+  try {
+    return await zohoWrite(method, path, record);
+  } catch (error) {
+    if (!isTaxFieldWriteFailure(error)) throw error;
+    const operation = `${method} ${path}`;
+    console.error("[zoho] quotation tax write rejected; retrying without unsupported tax fields", {
+      operation,
+      reference: error.reference,
+      status: error.status,
+      field: error.field ?? error.details?.api_name ?? error.details?.json_path,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      gstAmount,
+      adjustmentAmount,
+      quotePayloadKeys: Object.keys(record),
+    });
+    const fallbackLines = (record[lineItemsField] as Record<string, unknown>[]).map((line) => {
+      const fallbackLine = { ...line };
+      delete fallbackLine.Line_Tax;
+      return fallbackLine;
+    });
+    const fallbackRecord: Record<string, unknown> = {
+      ...record,
+      [lineItemsField]: fallbackLines,
+      Adjustment: gstAmount + adjustmentAmount,
+    };
+    delete fallbackRecord.Tax;
+    try {
+      const savedId = await zohoWrite(method, path, fallbackRecord);
+      console.info("[zoho] quotation tax fallback saved", {
+        operation,
+        reference: error.reference,
+        quoteId: savedId,
+        gstPreservedInAdjustment: gstAmount,
+        adjustment: fallbackRecord.Adjustment,
+      });
+      return savedId;
+    } catch (fallbackError) {
+      console.error("[zoho] quotation tax fallback failed", {
+        operation,
+        reference: error.reference,
+        originalMessage: error.message,
+        fallbackMessage: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+        fallbackStatus: fallbackError instanceof ZohoError ? fallbackError.status : undefined,
+        fallbackCode: fallbackError instanceof ZohoError ? fallbackError.code : undefined,
+        fallbackReference: fallbackError instanceof ZohoError ? fallbackError.reference : undefined,
+      });
+      throw fallbackError;
+    }
+  }
 }
 
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {
@@ -1814,30 +1879,10 @@ export const zohoRepository: CrmRepository = {
             .map((field) => field.api_name).filter(Boolean),
           payloadKeys: Object.keys(quoteRecord),
         });
-        try {
-          return await zohoWrite("POST", "/Quotes", quoteRecord);
-        } catch (error) {
-          if (!isTaxFieldWriteFailure(error)) throw error;
-          console.error("[zoho] Quotes Tax field was rejected; retrying quote with GST as Adjustment to preserve the portal total", {
-            operation: "POST /Quotes",
-            field: error.field ?? error.details?.api_name ?? error.details?.json_path,
-            code: error.code,
-            gstAmount: totals.zoho.tax,
-            quotePayloadKeys: Object.keys(quoteRecord),
-          });
-          const fallbackLines = (quoteRecord[lineItemsField] as Record<string, unknown>[]).map((item) => {
-            const line = { ...item };
-            delete line.Line_Tax;
-            return line;
-          });
-          const fallbackRecord: Record<string, unknown> = {
-            ...quoteRecord,
-            [lineItemsField]: fallbackLines,
-            Adjustment: totals.zoho.tax + totals.zoho.adjustment,
-          };
-          delete fallbackRecord.Tax;
-          return zohoWrite("POST", "/Quotes", fallbackRecord);
-        }
+        return writeQuoteWithTaxFallback(
+          "POST", "/Quotes", quoteRecord, lineItemsField,
+          totals.zoho.tax, totals.zoho.adjustment,
+        );
       };
       let offerNo = allocate(currentOfferNos);
       try {
@@ -1935,26 +1980,12 @@ export const zohoRepository: CrmRepository = {
       if (schema.fieldNames.has(field) && schema.fieldsByName.get(field)?.read_only !== true) record[field] = value;
     }
 
-    const write = async (payload: Record<string, unknown>) => {
-      await zohoWrite("PUT", `/Quotes/${encodeURIComponent(id)}`, payload);
-    };
-    try {
-      await write(record);
-    } catch (error) {
-      if (!isTaxFieldWriteFailure(error)) throw error;
-      const fallbackLines = (record[lineItemsField] as Record<string, unknown>[]).map((line) => {
-        const fallbackLine = { ...line };
-        delete fallbackLine.Line_Tax;
-        return fallbackLine;
-      });
-      const fallbackRecord = {
-        ...record,
-        [lineItemsField]: fallbackLines,
-        Adjustment: gstBreakdown.zoho.tax + gstBreakdown.zoho.adjustment,
-      };
-      delete fallbackRecord.Tax;
-      await write(fallbackRecord);
-    }
+    const write = (payload: Record<string, unknown>) =>
+      writeQuoteWithTaxFallback(
+        "PUT", `/Quotes/${encodeURIComponent(id)}`, payload, lineItemsField,
+        gstBreakdown.zoho.tax, gstBreakdown.zoho.adjustment,
+      );
+    await write(record);
     scheduleSideEffects("revise quotation", [["history note", () => addHistoryNoteBestEffort(
       lead.id, "Quotation revised", `Quotation ${current.offerNo} revised R${revision} by ${actor.name}`,
       { action: "revise quotation", quoteId: id },

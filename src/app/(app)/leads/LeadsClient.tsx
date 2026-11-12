@@ -1083,17 +1083,20 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
   const [mode, setMode] = useState<DrawerMode>("edit");
   const [status, setStatus] = useState<LeadStatus>(lead.status);
   const [lostReason, setLostReason] = useState<LostReason | "">(lead.lostReason ?? "");
+  const [markingLost, setMarkingLost] = useState(lead.status === "Lost Lead");
   const [assignee, setAssignee] = useState(lead.assignedTo ?? "");
   const [remarks, setRemarks] = useState("");
   const [history, setHistory] = useState<LeadTimelineItem[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const submissionInFlight = useRef(false);
   const [comboboxOpen, setComboboxOpen] = useState(false);
   const [assigneeSearch, setAssigneeSearch] = useState("");
   const drawerRef = useRef<HTMLElement>(null);
   const originalLead = useRef(lead);
   const filteredExecutives = executives.filter((name) => name.toLowerCase().includes(assigneeSearch.toLowerCase()));
+  const whatsapp = whatsappUrl(lead.phone);
   useBodyScrollLock(true);
 
   useEffect(() => {
@@ -1104,11 +1107,12 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
   }, [onClose]);
 
   const save = (saveNext = false) => {
-    if (pending) return;
+    if (pending || submissionInFlight.current) return;
     if (status === "Lost Lead" && !lostReason) {
       toast.error("Choose a reason before marking this lead lost.");
       return;
     }
+    submissionInFlight.current = true;
     const assigned = assignees.find((member) => member.name === assignee);
     const optimistic: Lead = {
       ...lead,
@@ -1151,14 +1155,20 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
       } catch (error) {
         onRollback(originalLead.current);
         notifyMutationFailure(error);
+      } finally {
+        submissionInFlight.current = false;
       }
     });
   };
 
   const setOutcome = (outcome: "Won" | "Lost Lead") => {
-    if (outcome === "Lost Lead" && !lostReason) return;
+    if (pending || submissionInFlight.current) return;
+    if (outcome === "Lost Lead" && !lostReason) {
+      setMarkingLost(true);
+      return;
+    }
+    submissionInFlight.current = true;
     return start(async () => {
-      if (outcome === "Lost Lead" && !lostReason) return;
       const optimistic: Lead = {
         ...lead,
         status: outcome,
@@ -1179,10 +1189,13 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
         const saved = result.data?.lead ?? optimistic;
         onSaved(saved);
         setStatus(outcome);
+        setMarkingLost(false);
         toast.success(outcome === "Won" ? "Lead marked won." : "Lead marked lost.");
       } catch (error) {
         onRollback(originalLead.current);
         notifyMutationFailure(error);
+      } finally {
+        submissionInFlight.current = false;
       }
     });
   };
@@ -1210,35 +1223,72 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
   return (
     <div className="fixed inset-0 z-50" role="presentation">
       <button className="absolute inset-0 cursor-default bg-black/40" aria-label="Close lead details" onClick={onClose} />
-      <ResponsivePanel ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title">
-        <header className="flex items-start justify-between gap-3 border-b px-4 py-4 sm:px-6">
-          <div className="min-w-0"><h2 id="lead-drawer-title" className="truncate text-lg font-bold">{lead.name}</h2><p className="truncate text-xs text-muted-foreground">{lead.company || "No company"} · {lead.phone || "No phone"}</p></div>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close"><X /></Button>
+      <ResponsivePanel ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="lead-drawer-title" className="min-w-0">
+        <header className="flex min-w-0 items-start justify-between gap-3 border-b bg-white px-4 py-4 sm:px-6">
+          <div className="min-w-0 flex-1">
+            <h2 id="lead-drawer-title" className="break-words text-xl font-bold tracking-tight text-slate-950 sm:text-2xl">{lead.name}</h2>
+            {lead.company && <p className="mt-1 truncate text-sm font-medium text-slate-600">{lead.company}</p>}
+            <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+              {lead.phone && <a href={`tel:${lead.phone.replace(/[^\d+]/g, "")}`} className="inline-flex min-w-0 items-center gap-2 text-sm font-semibold text-primary hover:underline" aria-label={`Call ${lead.name} at ${lead.phone}`}>
+                <Phone aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="truncate">{lead.phone}</span>
+              </a>}
+              {whatsapp && <a href={whatsapp} target="_blank" rel="noreferrer" className="inline-flex h-9 items-center gap-2 rounded-lg border border-emerald-200 px-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-50" aria-label={`Message ${lead.name} on WhatsApp`}>
+                <WhatsAppIcon className="h-4 w-4" /> WhatsApp
+              </a>}
+            </div>
+          </div>
+          <Button variant="ghost" size="icon" className="shrink-0" onClick={onClose} aria-label="Close"><X /></Button>
         </header>
         <div className="flex gap-1 border-b px-4 pt-2 sm:px-6">
           <DrawerTab active={mode === "edit"} onClick={() => setMode("edit")}>Details</DrawerTab>
           <DrawerTab active={mode === "history"} onClick={loadHistory}><History /> Timeline</DrawerTab>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4 sm:p-6">
           {mode === "history" ? (
             <HistoryList history={history} loading={historyLoading} error={historyError} onRetry={loadHistory} />
           ) : mode === "schedule" ? (
             <ScheduleForm lead={lead} onDone={() => setMode("edit")} onSaved={() => onSaved(lead)} />
           ) : (
-            <div className="space-y-4">
-              <label className="block font-medium">Status<SelectField className="mt-1" value={status} onValueChange={(value) => setStatus(value as LeadStatus)} options={LEAD_STATUSES.map((item) => ({ value: item, label: item }))} /></label>
-              <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2">
-                <Button type="button" variant="outline" disabled={pending || lead.status === "Won"} onClick={() => setOutcome("Won")}>Mark Won</Button>
-                <div className="flex gap-2">
-                  <select aria-label="Lost reason" className={`${fieldClass} min-w-0 flex-1 text-sm`} value={lostReason} onChange={(event) => setLostReason(event.target.value as LostReason | "")}>
-                    <option value="">Select lost reason</option>
-                    {LOST_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
-                  </select>
-                  <Button type="button" variant="destructive" disabled={pending || !lostReason || lead.status === "Lost Lead"} onClick={() => setOutcome("Lost Lead")}>Mark Lost</Button>
+            <div className="mx-auto w-full max-w-2xl space-y-5">
+              <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label htmlFor="lead-current-status" className="text-sm font-semibold text-slate-800">Lead status</label>
+                  <span className="text-xs font-medium text-slate-500">Current stage</span>
                 </div>
-              </div>
-              {canAssign && <label className="relative block font-medium">Assign to Sales Executive
-                <button type="button" role="combobox" aria-expanded={comboboxOpen} aria-controls="lead-executive-options" className={`${fieldClass} mt-1 flex items-center justify-between text-left text-sm`} onClick={() => setComboboxOpen((value) => !value)} disabled={!executives.length}><span className={assignee ? "text-foreground" : "text-muted-foreground"}>{assignee || "Unassigned"}</span><Search className="h-4 w-4" /></button>
+                <SelectField id="lead-current-status" className="h-11 bg-white" value={status} onValueChange={(value) => {
+                  const nextStatus = value as LeadStatus;
+                  setStatus(nextStatus);
+                  setMarkingLost(nextStatus === "Lost Lead");
+                }} options={LEAD_STATUSES.map((item) => ({ value: item, label: item }))} />
+              </section>
+              <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50/80 p-4">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Lead outcome</h3>
+                  <p className="mt-1 text-xs text-slate-600">Record the final result when the opportunity is decided.</p>
+                </div>
+                <div className="grid min-w-0 gap-2 sm:grid-cols-2">
+                  <Button type="button" className="h-11 bg-emerald-700 text-white hover:bg-emerald-800" disabled={pending || lead.status === "Won"} onClick={() => setOutcome("Won")}>Mark Won</Button>
+                  <Button type="button" variant="destructive" className="h-11" disabled={pending || lead.status === "Lost Lead"} onClick={() => {
+                    if (lostReason) void setOutcome("Lost Lead");
+                    else setMarkingLost(true);
+                  }}>Mark Lost</Button>
+                </div>
+                {markingLost && <div className="grid min-w-0 gap-2 rounded-lg border border-rose-200 bg-white p-3">
+                  <label htmlFor="lead-lost-reason" className="text-sm font-semibold text-slate-800">Loss reason <span className="text-destructive">*</span></label>
+                  <SelectField id="lead-lost-reason" aria-label="Lost reason" className="h-11 min-w-0 w-full bg-white text-sm" value={lostReason} onValueChange={(value) => setLostReason(value as LostReason | "")} options={[
+                    { value: "", label: "Select a reason" },
+                    ...LOST_REASONS.map((reason) => ({ value: reason, label: reason })),
+                  ]} />
+                  <p className="text-xs text-slate-500">A reason is required before this lead can be marked lost.</p>
+                </div>}
+              </section>
+              <section className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-900">Owner assignment</h3>
+                  <p className="mt-1 text-sm text-slate-600">Current executive: <span className="font-semibold text-slate-900">{lead.assignedTo || "Unassigned"}</span></p>
+                </div>
+                {canAssign && <label className="relative block text-sm font-medium text-slate-800">Assign to sales executive
+                <button type="button" role="combobox" aria-expanded={comboboxOpen} aria-controls="lead-executive-options" className={`${fieldClass} mt-1 flex h-11 items-center justify-between text-left text-sm`} onClick={() => setComboboxOpen((value) => !value)} disabled={!executives.length}><span className={assignee ? "text-foreground" : "text-muted-foreground"}>{assignee || "Unassigned"}</span><Search className="h-4 w-4" /></button>
                 {comboboxOpen && <div id="lead-executive-options" role="listbox" className="absolute z-10 mt-1 max-h-52 w-full overflow-auto rounded-md border bg-card p-1 shadow-lg">
                   <input autoFocus className={`${fieldClass} text-sm`} placeholder="Search executives…" value={assigneeSearch} onChange={(event) => setAssigneeSearch(event.target.value)} aria-label="Search executives" />
                   <button type="button" role="option" aria-selected={!assignee} className="mt-1 block min-h-11 w-full rounded-lg px-2 py-2 text-left text-sm font-medium hover:bg-secondary" onClick={() => { setAssignee(""); setComboboxOpen(false); }}>Unassigned</button>
@@ -1246,17 +1296,21 @@ function LeadDrawer({ lead, executives, assignees, canAssign, onClose, onOptimis
                   {!executives.length && <p className="p-2 text-xs text-destructive">No sales executives found. A manager must check ZOHO_ROLE_OVERRIDES / Zoho roles.</p>}
                   {!!executives.length && !filteredExecutives.length && <p className="p-2 text-xs text-muted-foreground">No executives match your search.</p>}
                 </div>}
-              </label>}
-              <label className="block font-medium">Remarks<textarea className={`${fieldClass} mt-1 h-28 py-2 text-sm`} placeholder="Add a note about this lead…" value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} /></label>
+                </label>}
+              </section>
+              <label className="block rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-800 shadow-sm">Remarks
+                <span className="mt-1 block text-xs font-normal text-slate-500">Add context for the next person working this lead.</span>
+                <textarea className={`${fieldClass} mt-3 min-h-32 resize-y bg-white py-3 text-sm leading-6`} placeholder="Add a note about this lead…" value={remarks} onChange={(event) => setRemarks(event.target.value)} maxLength={500} />
+              </label>
               <div className="sticky bottom-0 z-10 -mx-4 mt-4 border-t bg-card/95 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] backdrop-blur sm:static sm:mx-0 sm:mt-0 sm:border-0 sm:bg-transparent sm:p-0 sm:pb-0 sm:backdrop-blur-none">
                 <div className="grid gap-2 sm:grid-cols-2">
-                <Button disabled={pending} onClick={() => save()}>{pending ? "Saving…" : "Save"}</Button>
-                <Button variant="outline" disabled={pending || !nextLead} onClick={() => save(true)}>{pending ? "Saving…" : "Save & next"}</Button>
+                <Button className="h-11" disabled={pending} onClick={() => save()}>{pending ? "Saving…" : "Save"}</Button>
+                <Button variant="outline" className="h-11" disabled={pending || !nextLead} onClick={() => save(true)}>{pending ? "Saving…" : "Save & next"}</Button>
                 </div>
-                <div className="mt-2 grid gap-2 border-t pt-3 sm:grid-cols-3">
-                  <Button variant="outline" onClick={loadHistory}><History /> Timeline</Button>
-                  <Button variant="outline" onClick={() => setMode("schedule")}><CalendarPlus /> Schedule visit</Button>
-                  <Button asChild variant="secondary"><Link href={`/quotations?lead=${lead.id}`} onClick={onClose}><FileText /> Create quotation</Link></Button>
+                <div className="mt-3 grid min-w-0 grid-cols-1 gap-2 border-t pt-3 min-[400px]:grid-cols-2 sm:grid-cols-3">
+                  <Button type="button" variant="outline" className="h-11 min-w-0" onClick={loadHistory}><History /> Timeline</Button>
+                  <Button type="button" variant="outline" className="h-11 min-w-0" onClick={() => setMode("schedule")}><CalendarPlus /> Schedule visit</Button>
+                  <Button asChild variant="secondary" className="h-11 min-w-0 min-[400px]:col-span-2 sm:col-span-1"><Link href={`/quotations?lead=${lead.id}`} onClick={onClose}><FileText /> Create quotation</Link></Button>
                 </div>
               </div>
             </div>

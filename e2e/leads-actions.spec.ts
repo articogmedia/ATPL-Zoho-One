@@ -276,6 +276,8 @@ test("mobile lead cards fit narrow viewports and open the action sheet", async (
   const cards = page.getByTestId("mobile-lead-card");
   const firstWithPhone = cards.filter({ has: page.locator('a[aria-label^="Call "]') }).first();
   await expect(firstWithPhone).toBeVisible();
+  const leadName = (await firstWithPhone.locator(".font-semibold").first().textContent())?.trim();
+  if (!leadName) throw new Error("The selected lead has no name.");
   for (const width of [360, 390, 430]) {
     await page.setViewportSize({ width, height: 844 });
     await expect(firstWithPhone).toBeVisible();
@@ -293,6 +295,25 @@ test("mobile lead cards fit narrow viewports and open the action sheet", async (
   await expect(actionSheet.getByRole("button", { name: "Call", exact: true })).toBeVisible();
   await expect(actionSheet.getByRole("link", { name: "WhatsApp" })).toBeVisible();
   await expect(actionSheet.getByRole("button", { name: "Update status" })).toBeVisible();
+  await actionSheet.getByRole("button", { name: "View lead details" }).click();
+  const drawer = page.getByRole("dialog", { name: leadName });
+  for (const width of [360, 390, 430]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(drawer).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    expect(await drawer.evaluate((panel) => panel.scrollWidth <= panel.clientWidth)).toBe(true);
+    for (const control of [
+      drawer.getByRole("button", { name: "Mark Won" }),
+      drawer.getByRole("button", { name: "Mark Lost" }),
+      drawer.getByRole("button", { name: "Save", exact: true }),
+      drawer.getByRole("button", { name: "Schedule visit" }),
+    ]) {
+      const bounds = await control.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    }
+  }
 });
 
 test("all call outcomes save on mobile and laptop widths", async ({ page }) => {

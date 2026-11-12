@@ -21,6 +21,7 @@ const quoteFields = [
     { api_name: "Total", data_type: "currency" },
     { api_name: "Net_Total", data_type: "currency" },
     { api_name: "Total_After_Discount", data_type: "currency" },
+    { api_name: "Description", data_type: "text" },
   ] },
 ];
 
@@ -130,5 +131,130 @@ describe("Zoho quotation revision", () => {
     const snapshot = JSON.parse(String(payload.Description)) as { revision?: number; gstBreakdown?: { extraCharges?: unknown[] } };
     expect(snapshot.revision).toBe(1);
     expect(snapshot.gstBreakdown?.extraCharges).toEqual([{ label: "Freight", amount: 50, taxRate: 0.12 }]);
+  });
+
+  it.each([400, 422])("does not retry unrelated Zoho field errors with HTTP %i", async (status) => {
+    const { ZohoError } = await import("@/lib/zoho/client");
+    const originalError = new ZohoError(
+      "The Taxonomy option is invalid.",
+      status,
+      "INVALID_DATA",
+      "Taxonomy",
+      undefined,
+      "PUT /Quotes/quote-1",
+      { api_name: "Taxonomy", json_path: "$.data[0].Taxonomy" },
+    );
+    mocks.zohoWrite.mockRejectedValue(originalError);
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.updateQuote("quote-1", {
+      leadId: "lead-1",
+      items: [{ productId: "product-1", qty: 1, discount: 0 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" })).rejects.toBe(originalError);
+    expect(mocks.zohoWrite).toHaveBeenCalledOnce();
+  });
+
+  it("retries an HTTP-200 Line_Tax rejection without losing revision details or GST totals", async () => {
+    class MockZohoError extends Error {
+      constructor(
+        message: string,
+        readonly status?: number,
+        readonly code?: string,
+        readonly field?: string,
+        readonly operation?: string,
+        readonly details?: Record<string, unknown>,
+        readonly reference?: string,
+      ) {
+        super(message);
+      }
+    }
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const infoLog = vi.spyOn(console, "info").mockImplementation(() => {});
+    const records: Record<string, unknown>[] = [];
+    mocks.zohoWrite.mockImplementation(async (_method: string, _path: string, record: Record<string, unknown>) => {
+      records.push(record);
+      if (records.length === 1) {
+        throw new MockZohoError(
+          "Zoho rejected the value for field/path $.data[0].data[0].Quoted_Items[0].Line_Tax[0].name",
+          200,
+          "INVALID_DATA",
+          undefined,
+          "PUT /Quotes/quote-1",
+          { json_path: "$.data[0].data[0].Quoted_Items[0].Line_Tax[0].name" },
+          "ZOHO-UPDATE-TAX-REF",
+        );
+      }
+      return "quote-1";
+    });
+    mocks.zohoList.mockImplementation(async (module: string) => module === "Products" ? [{
+      id: "product-1",
+      Product_Name: "Cassette AC",
+      Product_Code: "AC-1",
+      Unit_Price: 1000,
+      Usage_Unit: "Nos",
+      Description: "Cassette indoor unit",
+      Tax: [{ percentage: 18, name: "GST 18%" }],
+      Product_Active: true,
+    }] : []);
+    vi.doMock("@/lib/zoho/client", () => ({
+      ZohoError: MockZohoError,
+      ZOHO_CRM_API_VERSION: "v6",
+      hosts: () => ({ api: "https://sandbox.zohoapis.in" }),
+      zoho: mocks.zoho,
+      zohoList: mocks.zohoList,
+      zohoWrite: mocks.zohoWrite,
+    }));
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+
+    await expect(zohoRepository.updateQuote("quote-1", {
+      leadId: "lead-1",
+      subject: "Revised AC package",
+      items: [{ productId: "product-1", qty: 2, discount: 100, taxRate: 0.05 }],
+      extraCharges: [{ label: "Freight", amount: 50, taxRate: 0.12 }],
+    }, { id: "manager-1", name: "Manager", role: "Manager" })).resolves.toMatchObject({
+      id: "quote-1",
+      revision: 1,
+      total: 2051,
+      gstBreakdown: {
+        subtotal: 2000, discount: 100, gst: 101, total: 2051,
+        extraCharges: [{ label: "Freight", amount: 50, taxRate: 0.12 }],
+      },
+    });
+
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      Tax: 101,
+      Adjustment: 50,
+      Quoted_Items: [expect.objectContaining({
+        Product_Name: { id: "product-1" }, Quantity: 2, List_Price: 1000, Discount: 100,
+        Description: "Cassette indoor unit", Line_Tax: [{ percentage: 5, name: "GST 5%" }],
+      })],
+    });
+    expect(records[1]).toMatchObject({
+      Sub_Total: 2000,
+      Discount: 100,
+      Adjustment: 151,
+      Quoted_Items: [expect.objectContaining({
+        Product_Name: { id: "product-1" }, Quantity: 2, List_Price: 1000, Discount: 100,
+        Description: "Cassette indoor unit",
+      })],
+    });
+    expect(records[1]).not.toHaveProperty("Tax");
+    expect((records[1]!.Quoted_Items as Record<string, unknown>[])[0]).not.toHaveProperty("Line_Tax");
+    expect(errorLog).toHaveBeenCalledWith(
+      "[zoho] quotation tax write rejected; retrying without unsupported tax fields",
+      expect.objectContaining({ reference: "ZOHO-UPDATE-TAX-REF", status: 200, gstAmount: 101 }),
+    );
+    expect(infoLog).toHaveBeenCalledWith(
+      "[zoho] quotation tax fallback saved",
+      expect.objectContaining({
+        reference: "ZOHO-UPDATE-TAX-REF",
+        quoteId: "quote-1",
+        gstPreservedInAdjustment: 101,
+        adjustment: 151,
+      }),
+    );
+    errorLog.mockRestore();
+    infoLog.mockRestore();
   });
 });

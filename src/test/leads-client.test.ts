@@ -23,6 +23,7 @@ vi.mock("@/app/actions/crm", () => ({
   reassignLeadAction: vi.fn(),
   saveLeadUpdateAction: vi.fn(),
   scheduleVisitAction: vi.fn(),
+  setLeadOutcomeAction: vi.fn(),
   updateLeadAction: vi.fn(),
 }));
 
@@ -102,5 +103,27 @@ describe("LeadsClient server paging", () => {
     expect(host.textContent).toContain("Lead 6");
     expect(host.querySelector('[data-tab="all"]')?.textContent).toContain("(6)");
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("shows responsive lead contact actions and only reveals the loss reason when marking lost", async () => {
+    await renderClient(leads.slice(0, 1), 1, "all");
+    await act(async () => {
+      host.querySelector<HTMLTableRowElement>("#leads-list tbody tr")?.click();
+    });
+
+    const panel = host.querySelector('[role="dialog"]');
+    expect(panel?.textContent).toContain("Lead 1");
+    expect(panel?.querySelector('a[href="tel:9000000001"]')).not.toBeNull();
+    expect(panel?.querySelector('a[href="https://wa.me/919000000001"]')).not.toBeNull();
+    expect(panel?.querySelector('[aria-label="Lost reason"]')).toBeNull();
+    expect(panel?.className).toContain("min-w-0");
+    expect(panel?.querySelector(".overflow-y-auto")).not.toBeNull();
+
+    await act(async () => {
+      [...(panel?.querySelectorAll("button") ?? [])]
+        .find((button) => button.textContent?.includes("Mark Lost"))
+        ?.click();
+    });
+    expect(panel?.querySelector('[aria-label="Lost reason"]')).not.toBeNull();
   });
 });

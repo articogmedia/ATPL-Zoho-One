@@ -39,6 +39,7 @@ const quoteFields = {
       { api_name: "Total", data_type: "currency" },
       { api_name: "Net_Total", data_type: "currency" },
       { api_name: "Total_After_Discount", data_type: "currency" },
+      { api_name: "Description", data_type: "text" },
     ] },
     { api_name: "Offer_No" },
     { api_name: "Lead_Ref", data_type: "lookup", lookup: { module: { api_name: "Leads" } }, system_mandatory: true },
@@ -639,7 +640,7 @@ describe("Zoho quotation creation", () => {
     infoLog.mockRestore();
   });
 
-  it("creates the quote and preserves its portal total if Zoho rejects the Tax field", async () => {
+  it("retries an HTTP-200 Line_Tax record rejection and preserves GST and extra charges", async () => {
     class MockZohoError extends Error {
       constructor(
         message: string,
@@ -649,23 +650,27 @@ describe("Zoho quotation creation", () => {
         readonly invalidValue?: unknown,
         readonly operation?: string,
         readonly details?: Record<string, unknown>,
+        readonly reference?: string,
       ) {
         super(message);
       }
     }
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const infoLog = vi.spyOn(console, "info").mockImplementation(() => {});
     const postPayloads: Record<string, unknown>[] = [];
     const write = vi.fn(async (_method: string, path: string, payload: Record<string, unknown>) => {
       if (path === "/Quotes") {
         postPayloads.push({ ...payload });
-        if ("Tax" in payload) throw new MockZohoError(
-          "Tax field is not writable",
-          400,
+        const line = (payload.Quoted_Items as Record<string, unknown>[] | undefined)?.[0];
+        if (line?.Line_Tax) throw new MockZohoError(
+          "Zoho rejected the value for field/path $.data[0].data[0].Quoted_Items[0].Line_Tax[0].name",
+          200,
           "INVALID_DATA",
-          "Tax",
+          undefined,
           undefined,
           "POST /Quotes",
-          { api_name: "Tax", json_path: "$.data[0].Tax" },
+          { json_path: "$.data[0].data[0].Quoted_Items[0].Line_Tax[0].name" },
+          "ZOHO-LINE-TAX-REF",
         );
         return "quote-tax-fallback";
       }
@@ -679,7 +684,7 @@ describe("Zoho quotation creation", () => {
       return {};
     });
     const list = vi.fn(async (module: string) => module === "Products"
-      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Product_Active: true }]
+      ? [{ id: "product-1", Product_Name: "Cassette AC", Unit_Price: 122000, Usage_Unit: "Nos", Description: "Cassette indoor unit", Product_Active: true }]
       : []);
     vi.doMock("@/lib/zoho/client", () => ({
       ZOHO_CRM_API_VERSION: "v6",
@@ -696,30 +701,51 @@ describe("Zoho quotation creation", () => {
       leadId: "lead-1",
       subject: "Cassette AC quotation",
       items: [{ productId: "product-1", qty: 2, discount: 4000 }],
+      extraCharges: [{ label: "Freight", amount: 100, taxRate: 0.12 }],
     }, { id: "manager-1", name: "Manager", role: "Manager" }, "Manager")).resolves.toMatchObject({
       id: "quote-tax-fallback",
-      total: 283200,
+      total: 283312,
       gstBreakdown: {
-        subtotal: 244000, discount: 4000, gst: 43200, total: 283200, rate: 0.18, partAGstMode: "extra",
-        partA: { subtotal: 244000, discount: 4000, gst: 43200, total: 283200 },
-        partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        gstByRate: [{ rate: 0.18, taxableAmount: 240000, amount: 43200 }],
-        extraCharges: [],
-        zoho: { subtotal: 244000, discount: 4000, tax: 43200, adjustment: 0 },
+        subtotal: 244000, discount: 4000, gst: 43212, total: 283312, rate: 0.18,
+        zoho: { subtotal: 244000, discount: 4000, tax: 43212, adjustment: 100 },
+        extraCharges: [{ label: "Freight", amount: 100, taxRate: 0.12 }],
       },
     });
 
     expect(postPayloads).toHaveLength(2);
-    expect(postPayloads[0]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Tax: 43200, Adjustment: 0 });
+    expect(postPayloads[0]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Tax: 43212, Adjustment: 100 });
     expect(postPayloads[0]).not.toHaveProperty("Grand_Total");
-    expect(postPayloads[1]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Adjustment: 43200 });
+    expect(postPayloads[1]).toMatchObject({ Sub_Total: 244000, Discount: 4000, Adjustment: 43312 });
     expect(postPayloads[1]).not.toHaveProperty("Tax");
     expect(postPayloads[1]).not.toHaveProperty("Grand_Total");
+    expect(postPayloads[1]!.Quoted_Items).toEqual([expect.objectContaining({
+      Product_Name: { id: "product-1" },
+      Quantity: 2,
+      List_Price: 122000,
+      Discount: 4000,
+      Total: 244000,
+      Net_Total: 240000,
+      Total_After_Discount: 240000,
+      Description: "Cassette indoor unit",
+    })]);
+    expect((postPayloads[1]!.Quoted_Items as Record<string, unknown>[])[0]).not.toHaveProperty("Line_Tax");
     expect(errorLog).toHaveBeenCalledWith(
-      "[zoho] Quotes Tax field was rejected; retrying quote with GST as Adjustment to preserve the portal total",
-      expect.objectContaining({ field: "Tax", gstAmount: 43200 }),
+      "[zoho] quotation tax write rejected; retrying without unsupported tax fields",
+      expect.objectContaining({
+        reference: "ZOHO-LINE-TAX-REF",
+        status: 200,
+        gstAmount: 43212,
+        message: expect.stringContaining("Line_Tax[0].name"),
+      }),
     );
+    expect(infoLog).toHaveBeenCalledWith("[zoho] quotation tax fallback saved", expect.objectContaining({
+      reference: "ZOHO-LINE-TAX-REF",
+      quoteId: "quote-tax-fallback",
+      gstPreservedInAdjustment: 43212,
+      adjustment: 43312,
+    }));
     errorLog.mockRestore();
+    infoLog.mockRestore();
   });
 
   it("allocates different offer numbers for back-to-back quote creates", async () => {

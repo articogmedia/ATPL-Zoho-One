@@ -132,10 +132,11 @@ describe("quotation PDF route", () => {
         price: 100,
       }],
       gstBreakdown: {
-        subtotal: 100, discount: 0, gst: 18, total: 118, rate: 0.18, partAGstMode: "extra",
+        subtotal: 100, discount: 0, gst: 30, total: 230, rate: 0.18, partAGstMode: "extra",
         partA: { subtotal: 100, discount: 0, gst: 18, total: 118 },
         partB: { subtotal: 0, discount: 0, gst: 0, total: 0 },
-        zoho: { subtotal: 100, discount: 0, tax: 18, adjustment: 0 },
+        extraCharges: [{ label: "Freight", amount: 100, taxRate: 0.12 }],
+        zoho: { subtotal: 100, discount: 0, tax: 30, adjustment: 100 },
       },
     });
     const { POST } = await import("@/app/api/quotations/pdf/route");
@@ -160,6 +161,9 @@ describe("quotation PDF route", () => {
     expect(renderedText).not.toContain("SHIP TO");
     expect(renderedText).toContain("Taxes: GST at applicable line-item and extra-charge rates, as shown above");
     expect(renderedText).toContain("GST @ 18%");
+    expect(renderedText).toContain("GST @ 12%");
+    expect(renderedText).toContain("Extra charge: Freight");
+    expect(renderedText).toContain("Rs. 230.00");
     expect(drawText.mock.calls.filter(([value]) => String(value).includes("Long equipment")).length).toBeGreaterThan(1);
     drawText.mockRestore();
   });

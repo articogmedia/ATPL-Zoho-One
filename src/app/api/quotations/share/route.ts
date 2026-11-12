@@ -10,6 +10,7 @@ import { crm } from "@/lib/crm";
 import { visibleFor, type Quotation } from "@/lib/domain";
 import { getStoredQuotationPdf, saveStoredQuotationPdf } from "@/lib/quotation-pdf-store";
 import { signQuotationPdfSnapshot, verifyQuotationPdfSnapshot } from "@/lib/quotation-pdf-snapshot";
+import { POST as generateQuotationPdf } from "@/app/api/quotations/pdf/route";
 
 export const runtime = "nodejs";
 export const preferredRegion = "bom1";
@@ -33,6 +34,7 @@ async function handlePost(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Authentication required." }, { status: 401 });
 
   let payload: unknown;
+  let stage = "quotation_lookup";
   try {
     payload = await request.json();
   } catch (error) {
@@ -87,11 +89,11 @@ async function handlePost(request: NextRequest) {
       }, { status: 503 });
     }
 
+    stage = "pdf_generation";
     const pdfStarted = Date.now();
     const pdfUrl = new URL("/api/quotations/pdf", request.url);
-    const pdfResponse = await fetch(pdfUrl, {
+    const pdfResponse = await generateQuotationPdf(new NextRequest(pdfUrl, {
       method: "POST",
-      cache: "no-store",
       headers: {
         "Content-Type": "application/json",
         ...(request.headers.get("cookie") ? { Cookie: request.headers.get("cookie")! } : {}),
@@ -100,29 +102,35 @@ async function handlePost(request: NextRequest) {
         ...parsed.data,
         ...(savedQuote ? { quoteSnapshotToken: signQuotationPdfSnapshot(savedQuote, user.id) } : {}),
       }),
-    });
+    }));
     logPerf("api.quotations.share.pdf", Date.now() - pdfStarted, { status: pdfResponse.status });
     if (!pdfResponse.ok) {
       const body = await pdfResponse.text();
-      let errorMessage = `Could not prepare the quotation PDF (HTTP ${pdfResponse.status}).`;
+      let innerReference: string | undefined;
       try {
         const responseBody = JSON.parse(body) as { error?: unknown };
-        if (typeof responseBody.error === "string" && responseBody.error.trim()) errorMessage = responseBody.error;
+        if (typeof responseBody.error === "string") {
+          innerReference = /\(Ref:\s*([A-Za-z0-9-]+)\)/.exec(responseBody.error)?.[1];
+        }
       } catch {
-        // Keep the HTTP status message when the PDF endpoint does not return JSON.
+        // The outer error remains safe if PDF generation returned non-JSON.
       }
       const reference = newErrorReference();
       console.error("[api] quotation share PDF generation failed", {
-        reference, status: pdfResponse.status, body,
-        payload: redactPayload(parsed.data),
+        reference, stage, status: pdfResponse.status, innerReference,
       });
-      return NextResponse.json({ error: errorMessage, reference }, { status: pdfResponse.status });
+      return NextResponse.json({
+        error: `Could not prepare the quotation PDF. (Ref: ${reference})`,
+        reference,
+      }, { status: pdfResponse.status });
     }
 
+    stage = "pdf_validation";
     const pdf = Buffer.from(await pdfResponse.arrayBuffer());
     if (pdf.length === 0 || pdf.subarray(0, 4).toString("ascii") !== "%PDF") {
       throw new Error("The generated quotation file is empty or invalid.");
     }
+    stage = "blob_upload";
     const blobStarted = Date.now();
     const blob = await put(`quotations/${randomUUID()}.pdf`, pdf, {
       access: "public",
@@ -131,6 +139,7 @@ async function handlePost(request: NextRequest) {
     });
     logPerf("api.quotations.share.upload", Date.now() - blobStarted, { bytes: pdf.length });
     if (savedQuote) {
+      stage = "pdf_storage";
       await saveStoredQuotationPdf(savedQuote.id, {
         url: blob.url,
         ownerId: savedQuote.ownerId,
@@ -142,9 +151,9 @@ async function handlePost(request: NextRequest) {
     const reference = newErrorReference();
     console.error("[api] quotation share preparation failed", {
       reference,
+      stage,
       message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined,
-      payload: redactPayload(parsed.data),
     });
     return NextResponse.json({
       error: `Could not prepare a shareable quotation PDF. (Ref: ${reference})`,
