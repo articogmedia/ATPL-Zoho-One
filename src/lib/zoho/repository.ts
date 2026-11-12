@@ -11,7 +11,7 @@ import { hosts, zoho, zohoList, zohoWrite, ZohoError, ZOHO_CRM_API_VERSION } fro
 import { ASSIGNED_STAGE, CALL_STATUS_BY_OUTCOME, FIELD, TASK_STATUS_WRITE, WRITE_LEAD_STATUS, zohoLeadSource } from "./fields";
 import {
   mapLead, mapNote, mapProduct, mapQuote, mapTask, mapUser, parseRoleOverrides,
-  parseQuoteCustomerSnapshot, quoteLineItemsField, type QuoteCustomerSnapshot, type QuoteLineItemsField, type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
+  parseQuoteCustomerSnapshot, quoteLineItemsField, invoiceLineItemsField, type InvoiceLineItemsField, type QuoteCustomerSnapshot, type QuoteLineItemsField, type ZCall, type ZEvent, type ZLead, type ZNote, type ZProduct, type ZQuote, type ZTask, type ZUser,
 } from "./mappers";
 import { getSiteVisitsSchema, listSiteVisits, mapSiteVisitRecord, mapSiteVisitUpdate } from "./site-visits";
 import { zohoDateTime } from "./date-time";
@@ -206,8 +206,28 @@ const quoteSchema = async () => {
   };
 };
 
+type InvoiceFieldMetadata = QuoteFieldMetadata;
+const invoiceSchema = async () => {
+  const schema = await cached("zoho:invoice-schema", LONG, async () => {
+    const response = await zoho<{ fields?: InvoiceFieldMetadata[] }>(
+      "GET", "/settings/fields", { query: { module: "Invoices" } },
+    );
+    const fields = response?.fields ?? [];
+    return {
+      fields,
+      fieldNames: fields.map((field) => field.api_name).filter((name): name is string => !!name),
+    };
+  });
+  return {
+    ...schema,
+    fieldNames: new Set(schema.fieldNames),
+    fieldsByName: new Map(schema.fields.filter((field): field is typeof field & { api_name: string } => !!field.api_name)
+      .map((field) => [field.api_name, field])),
+  };
+};
+
 function quoteLineItemsPayload(
-  lineItemsField: QuoteLineItemsField,
+  lineItemsField: QuoteLineItemsField | InvoiceLineItemsField,
   lines: { p: Product; qty: number; discount: number; amount: number; taxRate: number }[],
   fieldMetadata?: QuoteFieldMetadata,
   configuredTaxes: Product["zohoTaxes"] = [],
@@ -216,12 +236,12 @@ function quoteLineItemsPayload(
   const availableNames = new Set(subfields.map((field) => field.api_name).filter((name): name is string => !!name));
   const supportsLineTax = availableNames.has("Line_Tax");
   if (subfields.length) {
-    console.info("[zoho] Quotes line-item field metadata", {
+    console.info("[zoho] CRM line-item field metadata", {
       lineItemsField,
       subfieldApiNames: [...availableNames],
     });
   } else {
-    console.info("[zoho] Quotes line-item subfield metadata unavailable; using documented inventory fields", {
+    console.info("[zoho] CRM line-item subfield metadata unavailable; using documented inventory fields", {
       lineItemsField,
     });
   }
@@ -2288,15 +2308,19 @@ export const zohoRepository: CrmRepository = {
   async createInvoice(quote, lead, actor, gstin) {
     const existing = (await this.listInvoices()).find((invoice) => invoice.quoteId === quote.id);
     if (existing) return existing;
+    const accountId = quote.accountId || lead.accountId || await ensureAccountForLead(lead);
+    const schema = await invoiceSchema();
+    const lineItemsField = invoiceLineItemsField(schema.fieldNames);
     if (!quote.items?.length || quote.items.some((item) => !item.productId)) {
       throw new ZohoError(
         "This quotation contains an item without a Zoho Product. Update the quotation before converting it.",
-        400, "INVOICE_PRODUCT_REQUIRED", "Product_Details",
+        400, "INVOICE_PRODUCT_REQUIRED", lineItemsField,
       );
     }
-    const accountId = quote.accountId || lead.accountId || await ensureAccountForLead(lead);
     const invoiceNo = await nextInvoiceNumber();
     const invoice = invoiceSnapshot(quote, lead, invoiceNo, actor, gstin, todayIST());
+    const products = await this.listProducts();
+    const productsById = new Map(products.map((product) => [product.id, product]));
     const items = invoice.items.map((item) => ({
       p: {
         id: item.productId!,
@@ -2304,18 +2328,23 @@ export const zohoRepository: CrmRepository = {
         description: item.description,
         unit: item.unit,
         price: item.price,
+        zohoTaxes: productsById.get(item.productId!)?.zohoTaxes,
       },
       qty: item.qty,
       discount: item.discount ?? 0,
       amount: Math.max(0, item.qty * item.price - (item.discount ?? 0)),
       taxRate: item.taxRate ?? GST_RATE,
     }));
+    const configuredTaxes = products.flatMap((product) => product.zohoTaxes ?? []);
+    const lineItemsMetadata = lineItemsField === "Invoiced_Items"
+      ? schema.fieldsByName.get(lineItemsField)
+      : undefined;
     const extraCharges = invoice.gstBreakdown.extraCharges ?? [];
     const payload: Record<string, unknown> = {
       Subject: `Invoice ${invoiceNo} - ${invoice.customer}`,
       Invoice_Date: invoice.date,
       Account_Name: { id: accountId },
-      Product_Details: quoteLineItemsPayload("Product_Details", items),
+      [lineItemsField]: quoteLineItemsPayload(lineItemsField, items, lineItemsMetadata, configuredTaxes),
       Sub_Total: invoice.gstBreakdown.subtotal,
       Discount: invoice.gstBreakdown.discount,
       Tax: invoice.gstBreakdown.gst,

@@ -163,3 +163,67 @@ describe("Zoho Account resolution for invoice conversion", () => {
     expect(mocks.zohoWrite).not.toHaveBeenCalled();
   });
 });
+
+describe("Zoho invoice line-item field mapping", () => {
+  async function createInvoiceWithField(lineItemsField: "Invoiced_Items" | "Product_Details") {
+    const subfields = [
+      "Product_Name", "Quantity", "List_Price", "Discount", "Total", "Net_Total", "Line_Tax",
+    ].map((api_name) => ({ api_name }));
+    mocks.zoho.mockImplementation(async (_method: string, path: string, options?: { query?: { module?: string } }) =>
+      path === "/settings/fields" && options?.query?.module === "Invoices"
+        ? { fields: [{ api_name: lineItemsField, subform_fields: subfields }] }
+        : { data: [] });
+    mocks.zohoList.mockImplementation(async (module: string) => module === "Products"
+      ? [{
+        id: "product-1",
+        Product_Name: "Unit",
+        Unit_Price: 100,
+        Product_Active: true,
+        Usage_Unit: "Nos",
+        Tax: [{ name: "GST 18", percentage: 18 }],
+      }]
+      : []);
+
+    const { zohoRepository } = await import("@/lib/zoho/repository");
+    const invoiceQuote = { ...quote, accountId: "account-1" };
+    await zohoRepository.createInvoice(invoiceQuote, lead, actor, "");
+
+    const call = mocks.zohoWrite.mock.calls.find((args) => args[1] === "/Invoices");
+    return call?.[2] as Record<string, unknown>;
+  }
+
+  it("uses Invoiced_Items with the metadata-supported Zoho subform shape", async () => {
+    const payload = await createInvoiceWithField("Invoiced_Items");
+    const item = (payload.Invoiced_Items as Record<string, unknown>[])[0];
+
+    expect(payload).toHaveProperty("Invoiced_Items");
+    expect(payload).not.toHaveProperty("Product_Details");
+    expect(item).toMatchObject({
+      Product_Name: { id: "product-1" },
+      Quantity: 1,
+      List_Price: 100,
+      Discount: 0,
+      Total: 100,
+      Net_Total: 100,
+      Line_Tax: [{ name: "GST 18", percentage: 18 }],
+    });
+    expect(item).not.toHaveProperty("Unit_Price");
+  });
+
+  it("keeps the legacy Product_Details line-item shape when metadata requires it", async () => {
+    const payload = await createInvoiceWithField("Product_Details");
+    const item = (payload.Product_Details as Record<string, unknown>[])[0];
+
+    expect(payload).toHaveProperty("Product_Details");
+    expect(payload).not.toHaveProperty("Invoiced_Items");
+    expect(item).toMatchObject({
+      product: { id: "product-1" },
+      quantity: 1,
+      list_price: 100,
+      Discount: 0,
+      total: 100,
+      total_after_discount: 100,
+      net_total: 100,
+    });
+  });
+});

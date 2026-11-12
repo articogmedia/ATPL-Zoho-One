@@ -46,10 +46,16 @@ export type ZQuotedItem = {
 };
 export type ZQuote = { id: string; Subject?: string; Quote_Stage?: string | null; Owner?: Ref; Created_Time?: string; Sub_Total?: number | string | null; Discount?: number | string | null; Tax?: number | string | null; Adjustment?: number | string | null; Grand_Total?: number; Valid_Till?: string; Mobile?: string; Phone?: string; Customer_Name?: string; Product_Details?: ZQuotedItem[]; Quoted_Items?: ZQuotedItem[]; [k: string]: unknown };
 export type QuoteLineItemsField = "Quoted_Items" | "Product_Details";
+export type InvoiceLineItemsField = "Invoiced_Items" | "Product_Details";
 
 export function quoteLineItemsField(fieldNames: Iterable<string>): QuoteLineItemsField {
   const names = new Set(fieldNames);
   return names.has("Quoted_Items") ? "Quoted_Items" : "Product_Details";
+}
+
+export function invoiceLineItemsField(fieldNames: Iterable<string>): InvoiceLineItemsField {
+  const names = new Set(fieldNames);
+  return names.has("Invoiced_Items") ? "Invoiced_Items" : "Product_Details";
 }
 
 export type QuoteCustomerSnapshot = {
