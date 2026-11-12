@@ -261,12 +261,25 @@ function quoteLineItemsPayload(
 }
 
 function isTaxFieldWriteFailure(error: unknown): error is ZohoError {
-  if (!(error instanceof ZohoError) || ![400, 422].includes(error.status ?? 0)) return false;
+  if (!(error instanceof ZohoError)) return false;
+
+  // Zoho CRM can return HTTP 200 while rejecting an individual record in
+  // data[0] with status: "error". zohoWrite converts that response into a
+  // ZohoError(status=200), so 200 must be accepted here as well as HTTP errors.
+  if (![200, 400, 422].includes(error.status ?? 0)) return false;
+
   const details = error.details ?? {};
-  const fieldReferences = [error.field, details.api_name, details.json_path, details.field]
-    .filter((value): value is string => typeof value === "string");
-  return fieldReferences.some((value) => /(?:^|[^A-Za-z0-9_])(?:Line_Tax|Tax)(?:$|[^A-Za-z0-9_])/i.test(value))
-    || /\b(?:Line_Tax|Tax)\b/i.test(error.message);
+  const fieldReferences = [
+    error.field,
+    details.api_name,
+    details.json_path,
+    details.field,
+    error.message,
+  ].filter((value): value is string => typeof value === "string");
+
+  return fieldReferences.some((value) =>
+    /(?:^|[^A-Za-z0-9_])(?:Line_Tax|Tax)(?:$|[^A-Za-z0-9_])/i.test(value),
+  );
 }
 
 const sourceValueForZoho = (source: Lead["source"], sourceValues: string[]) => {

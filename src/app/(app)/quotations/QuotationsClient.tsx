@@ -1697,15 +1697,17 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
           {shareUrl && <Button type="button" variant="outline" className="h-12" onClick={copyShareLink}><Copy className="h-4 w-4" /> Copy link</Button>}
         </div>
       </div>
-      <div className="no-print fixed inset-x-0 bottom-16 z-30 border-t border-border bg-card p-3 pb-[calc(.75rem+env(safe-area-inset-bottom))] shadow-lg sm:hidden">
+      <div className="no-print fixed inset-x-0 bottom-16 z-30 border-t border-border bg-card/95 p-2 pb-[calc(.5rem+env(safe-area-inset-bottom))] shadow-lg backdrop-blur sm:hidden">
         <div className="mx-auto grid max-w-md grid-cols-3 gap-2">
-          <Button className="h-12 min-w-0 whitespace-nowrap px-2" onClick={downloadPdf} disabled={downloading || !canCreatePdf}>
-            <Printer className="h-5 w-5 shrink-0" /> {downloading ? "Preparing…" : "Download PDF"}
+          <Button aria-label="Download quotation PDF" title="Download quotation PDF" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] leading-none" onClick={downloadPdf} disabled={downloading || !canCreatePdf}>
+            <Printer className="h-4 w-4 shrink-0" /> <span>{downloading ? "Preparing…" : "PDF"}</span>
           </Button>
-          <Button variant="outline" title={!resolvedWaPhone ? "Enter the customer's mobile number to continue" : undefined} className="h-12 min-w-0 whitespace-nowrap bg-white px-2 text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={() => void shareOnWhatsApp()} disabled={downloading}>
-            <WhatsAppIcon className="h-5 w-5 shrink-0" /> {downloading ? "Preparing…" : "WhatsApp"}
+          <Button aria-label="Share quotation on WhatsApp" title={!resolvedWaPhone ? "Enter the customer's mobile number to continue" : "Share on WhatsApp"} variant="outline" className="h-11 min-w-0 flex-col gap-0.5 bg-white px-1 text-[11px] leading-none text-slate-900 hover:bg-slate-50 hover:text-slate-900" onClick={() => void shareOnWhatsApp()} disabled={downloading}>
+            <WhatsAppIcon className="h-4 w-4 shrink-0" /> <span>{downloading ? "Preparing…" : "WhatsApp"}</span>
           </Button>
-          <Button type="button" variant="outline" className="h-12 min-w-0 whitespace-nowrap px-2" onClick={() => setEmailOpen(true)} disabled={!savedQuoteId || sendingEmail}><Mail className="h-4 w-4 shrink-0" /> Email</Button>
+          <Button aria-label="Email quotation" title="Email quotation" type="button" variant="outline" className="h-11 min-w-0 flex-col gap-0.5 px-1 text-[11px] leading-none" onClick={() => setEmailOpen(true)} disabled={!savedQuoteId || sendingEmail}>
+            <Mail className="h-4 w-4 shrink-0" /> <span>Email</span>
+          </Button>
         </div>
       </div>
       <article className="print-area offer-document mx-auto min-w-0 max-w-full rounded-xl bg-card p-3 text-[11px] leading-snug shadow-sm sm:max-w-3xl sm:p-8">
@@ -1718,14 +1720,20 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
             <div className="mt-1 text-[10px] font-semibold">GSTIN - {COMPANY.gstin}</div>
           </div>
         </header>
-        {savedQuoteId && <section className="no-print flex flex-wrap items-center gap-2 border-b border-slate-200 py-3">
-          <Button type="button" variant="outline" disabled={savingOutcome || outcomeStatus === "Won"} onClick={() => void markLeadOutcome("Won")}>Mark Won</Button>
-          <select aria-label="Lost reason" className={`${fieldClass} min-w-0 max-w-56 text-sm`} value={lostReason} onChange={(event) => setLostReason(event.target.value as LostReason | "")}>
-            <option value="">Select lost reason</option>
-            {LOST_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
-          </select>
-          <Button type="button" variant="destructive" disabled={savingOutcome || !lostReason || outcomeStatus === "Lost Lead"} onClick={() => void markLeadOutcome("Lost Lead")}>Mark Lost</Button>
-        </section>}
+        {savedQuoteId && <details className="no-print border-b border-slate-200 py-2">
+          <summary className="flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+            <span>Update lead outcome</span>
+            <span className="text-[11px] font-normal text-slate-500">{outcomeStatus || "Choose status"} · Tap to manage</span>
+          </summary>
+          <div className="mt-2 grid grid-cols-1 gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+            <Button type="button" variant="outline" className="h-10" disabled={savingOutcome || outcomeStatus === "Won"} onClick={() => void markLeadOutcome("Won")}>Mark Won</Button>
+            <select aria-label="Lost reason" className={`${fieldClass} min-w-0 text-sm`} value={lostReason} onChange={(event) => setLostReason(event.target.value as LostReason | "")}>
+              <option value="">Select lost reason</option>
+              {LOST_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
+            </select>
+            <Button type="button" variant="destructive" className="h-10" disabled={savingOutcome || !lostReason || outcomeStatus === "Lost Lead"} onClick={() => void markLeadOutcome("Lost Lead")}>Mark Lost</Button>
+          </div>
+        </details>}
         <div className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2">
           <div className="offer-no-break space-y-1 border-slate-300 sm:border-r sm:pr-4">
             <div className="flex items-center justify-between gap-2">
