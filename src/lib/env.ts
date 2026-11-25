@@ -30,9 +30,11 @@ const schema = z
     ZOHO_CLIENT_SECRET: z.string().optional(),
     ZOHO_REFRESH_TOKEN: z.string().optional(),
     BLOB_READ_WRITE_TOKEN: z.string().optional(),
-    EMAIL_PROVIDER: z.enum(["disabled", "resend"]).default("disabled"),
+    EMAIL_PROVIDER: z.enum(["disabled", "resend", "gmail"]).default("disabled"),
     EMAIL_FROM: z.string().email().optional(),
     RESEND_API_KEY: z.string().optional(),
+    GMAIL_USER: z.string().trim().email().optional(),
+    GMAIL_APP_PASSWORD: z.string().optional().transform((v) => v?.replace(/\s+/g, "") || undefined),
     APP_URL: z.preprocess(
       (value) => typeof value === "string" && !value.trim() ? undefined : value,
       z.string().trim().url().optional(),
@@ -60,8 +62,9 @@ const schema = z
       });
     }
     if (e.AUTH_MODE === "zoho") need(["ZOHO_LOGIN_CLIENT_ID", "ZOHO_LOGIN_CLIENT_SECRET", "ZOHO_LOGIN_REDIRECT_URI"], "AUTH_MODE=zoho");
-    if (e.EMAIL_PROVIDER === "resend") {
-      need(["EMAIL_FROM", "RESEND_API_KEY", "APP_URL"], "EMAIL_PROVIDER=resend");
+    if (e.EMAIL_PROVIDER === "gmail") need(["GMAIL_USER", "GMAIL_APP_PASSWORD", "APP_URL"], "EMAIL_PROVIDER=gmail");
+    if (e.EMAIL_PROVIDER === "resend") need(["EMAIL_FROM", "RESEND_API_KEY", "APP_URL"], "EMAIL_PROVIDER=resend");
+    if (e.EMAIL_PROVIDER === "resend" || e.EMAIL_PROVIDER === "gmail") {
       if (e.APP_URL) {
         const appUrl = new URL(e.APP_URL);
         const localDevelopmentUrl =

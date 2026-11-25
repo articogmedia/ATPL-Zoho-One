@@ -1,11 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
 const envMock = vi.hoisted(() => ({ env: vi.fn() }));
+const nodemailerMock = vi.hoisted(() => ({ createTransport: vi.fn() }));
 vi.mock("@/lib/env", () => ({ env: envMock.env }));
+vi.mock("nodemailer", () => ({ default: { createTransport: nodemailerMock.createTransport } }));
 
 describe("sendEmail", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    nodemailerMock.createTransport.mockReset();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -56,6 +63,61 @@ describe("sendEmail", () => {
     expect(JSON.parse(fetch.mock.calls[0]?.[1].body as string)).toMatchObject({
       html: "<p>Reset your password</p>",
     });
+  });
+
+  it("sends through Gmail SMTP with the configured message fields", async () => {
+    envMock.env.mockReturnValue({
+      EMAIL_PROVIDER: "gmail",
+      GMAIL_USER: "sales@gmail.com",
+      GMAIL_APP_PASSWORD: "gmail-app-password",
+    });
+    const sendMail = vi.fn().mockResolvedValue(undefined);
+    nodemailerMock.createTransport.mockReturnValue({ sendMail });
+    const { sendEmail } = await import("@/lib/email");
+
+    await sendEmail({ to: "customer@example.com", subject: "Offer", text: "PDF link" });
+
+    expect(nodemailerMock.createTransport).toHaveBeenCalledWith(expect.objectContaining({
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: { user: "sales@gmail.com", pass: "gmail-app-password" },
+    }));
+    expect(sendMail).toHaveBeenCalledWith({
+      from: "Air Trendz <sales@gmail.com>",
+      to: "customer@example.com",
+      subject: "Offer",
+      text: "PDF link",
+    });
+  });
+
+  it.each([
+    {
+      error: Object.assign(new Error("secret smtp response"), { code: "EAUTH", responseCode: 535 }),
+      message: "Email sign-in to Gmail failed. Check GMAIL_USER and the App Password.",
+    },
+    {
+      error: new Error("secret smtp response"),
+      message: "Could not send the email through Gmail.",
+    },
+  ])("returns a safe friendly error when Gmail delivery fails", async ({ error, message }) => {
+    envMock.env.mockReturnValue({
+      EMAIL_PROVIDER: "gmail",
+      GMAIL_USER: "sales@gmail.com",
+      GMAIL_APP_PASSWORD: "gmail-app-password",
+    });
+    const sendMail = vi.fn().mockRejectedValue(error);
+    nodemailerMock.createTransport.mockReturnValue({ sendMail });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { sendEmail } = await import("@/lib/email");
+
+    await expect(sendEmail({ to: "customer@example.com", subject: "Offer", text: "Body" }))
+      .rejects.toThrow(message);
+    expect(errorLog).toHaveBeenCalledWith("[email] Gmail SMTP send failed", {
+      code: "code" in error ? error.code : undefined,
+      responseCode: "responseCode" in error ? error.responseCode : undefined,
+    });
+    expect(errorLog).not.toHaveBeenCalledWith(expect.anything(), expect.stringContaining("secret smtp response"));
   });
 
   it("fails explicitly when email delivery is disabled or rejected", async () => {

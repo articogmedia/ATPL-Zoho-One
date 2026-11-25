@@ -11,9 +11,9 @@ import { EmptyState, PageHeader, ResponsiveTable, StatusBadge, fieldClass } from
 import { cn } from "@/lib/utils";
 import { clearExpiredAction, isRetryableActionMessage, isSessionExpiredMessage, readExpiredAction, redirectForExpiredSession } from "@/lib/session-recovery";
 import { executeMutation, friendlyMutationError, notifyMutationFailure } from "@/lib/use-mutation";
-import { addLeadAction, createProductAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, getQuotationPdfUrlAction, markQuotationSentAction, refreshProductsAction, setLeadOutcomeAction, updateQuoteAction } from "@/app/actions/crm";
+import { addLeadAction, createProductAction, createQuoteAction, getLeadSourcesAction, getProductsAction, getQuoteDetailAction, getQuotationPdfUrlAction, markQuotationSentAction, refreshProductsAction, sendQuotationEmailAction, setLeadOutcomeAction, updateQuoteAction } from "@/app/actions/crm";
 import { COMPANY, OFFER_TEXT, offerSubject } from "@/lib/company";
-import { buildMailtoUrl, isValidEmailRecipient } from "@/lib/mailto";
+import { isValidEmailRecipient } from "@/lib/mailto";
 import { canCreateQuotationPdf, displayProductUnit, formatOfferReference, formatQuotationMoney, splitQuotationItems } from "@/lib/quotation-presentation";
 import { formatINR, GST_RATE, LOST_REASONS, quotationGstBreakdown, uniqueProducts, validateQuoteLine, type Lead, type LeadSource, type LeadStatus, type LostReason, type Product, type Quotation, type QuoteExtraCharge, type QuoteGstBreakdown, type QuoteGstTotals } from "@/lib/domain";
 
@@ -1725,29 +1725,17 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
     }
     setSendingEmail(true);
     try {
-      const publicUrl = await prepareShareUrl();
-      const body = [
-        `Dear ${lead.name.trim() || customer},`,
-        "",
-        `Please find your quotation ${offerReference} from Air Trendz Pvt Ltd.`,
-        `Grand total: ${offerMoney(t.total)}`,
-        `Quotation PDF: ${publicUrl}`,
-        "",
-        "Air Trendz Pvt Ltd",
-        COMPANY.address,
-        COMPANY.contact,
-        `GSTIN: ${COMPANY.gstin}`,
-      ].join("\n");
-      window.location.href = buildMailtoUrl(
-        recipient,
-        `Quotation ${offerReference} from Air Trendz Pvt Ltd`,
-        body,
-      );
+      const result = await sendQuotationEmailAction({ quoteId: savedQuoteId, to: recipient });
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
       setEmailOpen(false);
       void onMarkSent().catch(notifyMutationFailure);
-      toast.success("Opening your email app. Press Send to deliver the quotation.");
+      toast.success(`Quotation emailed to ${recipient}.`);
+      if (result.data && !result.data.noteLogged) toast.warning("Email sent, but the CRM note could not be logged.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not prepare the quotation email.");
+      toast.error(error instanceof Error ? error.message : "Could not send the quotation email.");
     } finally {
       setSendingEmail(false);
     }
@@ -1915,7 +1903,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
       >
         <div>
           <h2 id="quotation-email-title" className="font-semibold">Email quotation</h2>
-          <p className="mt-1 text-sm text-muted-foreground">Opens your email app with the PDF link included</p>
+          <p className="mt-1 text-sm text-muted-foreground">Sent automatically from the official ATPL email with the PDF link included</p>
         </div>
         <label className="block space-y-1 text-sm font-medium" htmlFor="quotation-email-recipient">
           Recipient email
@@ -1932,7 +1920,7 @@ function Offer({ lead, offerNo, revision = 0, setOfferNo, items, extraCharges, s
         </label>
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" className="h-11" onClick={() => setEmailOpen(false)}>Cancel</Button>
-          <Button type="submit" className="h-11" disabled={sendingEmail || !emailRecipient.trim()}><Mail className="h-4 w-4" />{sendingEmail ? "Preparing…" : "Open email app"}</Button>
+          <Button type="submit" className="h-11" disabled={sendingEmail || !emailRecipient.trim()}><Mail className="h-4 w-4" />{sendingEmail ? "Sending…" : "Send email"}</Button>
         </div>
       </form>
     </div>}

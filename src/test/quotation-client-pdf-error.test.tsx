@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getQuotationPdfUrlAction: vi.fn(),
   getQuoteDetailAction: vi.fn(),
   markQuotationSentAction: vi.fn(),
+  sendQuotationEmailAction: vi.fn(),
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
 
@@ -29,6 +30,7 @@ vi.mock("@/app/actions/crm", () => ({
   getQuoteDetailAction: mocks.getQuoteDetailAction,
   getQuotationPdfUrlAction: mocks.getQuotationPdfUrlAction,
   markQuotationSentAction: mocks.markQuotationSentAction,
+  sendQuotationEmailAction: mocks.sendQuotationEmailAction,
   refreshProductsAction: vi.fn(),
   setLeadOutcomeAction: vi.fn(),
   updateQuoteAction: vi.fn(),
@@ -107,6 +109,7 @@ describe("quotation PDF error state", () => {
     mocks.getQuotationPdfUrlAction.mockReset().mockResolvedValue({ ok: true, data: null });
     mocks.getQuoteDetailAction.mockReset().mockResolvedValue({ ok: true, data: otherQuote });
     mocks.markQuotationSentAction.mockReset().mockResolvedValue({ ok: true, data: { status: "Quotation Sent", quoteStatus: "Sent" } });
+    mocks.sendQuotationEmailAction.mockReset().mockResolvedValue({ ok: true, data: { noteLogged: true } });
     mocks.toast.error.mockReset();
     mocks.toast.success.mockReset();
     host = document.createElement("div");
@@ -232,18 +235,11 @@ describe("quotation PDF error state", () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("does not open the email app or mark the quotation sent if PDF link preparation fails", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/quotations/share" && init?.method === "POST") {
-        return new Response(JSON.stringify({
-          error: "Could not prepare PDF (step: blob_upload). Ref: PDF-REF",
-          stage: "blob_upload",
-          reference: "PDF-REF",
-        }), { status: 500 });
-      }
-      throw new Error(`Unexpected fetch: ${String(input)}`);
+  it("keeps the email dialog open when direct email sending fails", async () => {
+    mocks.sendQuotationEmailAction.mockResolvedValue({
+      ok: false,
+      error: "Email is not configured.",
     });
-    vi.stubGlobal("fetch", fetchMock);
     const { QuotationsClient } = await import("@/app/(app)/quotations/QuotationsClient");
     root = createRoot(host);
     await act(async () => {
@@ -260,11 +256,10 @@ describe("quotation PDF error state", () => {
       />);
     });
 
-    const initialUrl = window.location.href;
     await click(host.querySelector('button[aria-label="Item 1 product"]'));
     await click(host.querySelector('[role="option"]'));
     await click(button("Preview Offer"));
-    await click(button("Email"));
+    await click(host.querySelector('button[aria-label="Email quotation"]'));
     const emailForm = host.querySelector('form[aria-labelledby="quotation-email-title"]');
     if (!(emailForm instanceof HTMLFormElement)) throw new Error("Quotation email form was not opened.");
     await act(async () => {
@@ -273,9 +268,42 @@ describe("quotation PDF error state", () => {
     });
 
     expect(mocks.markQuotationSentAction).not.toHaveBeenCalled();
-    expect(mocks.toast.error).toHaveBeenCalledWith("Could not prepare PDF (step: blob_upload). Ref: PDF-REF");
+    expect(mocks.sendQuotationEmailAction).toHaveBeenCalledWith({ quoteId: savedQuote.id, to: "customer@example.com" });
+    expect(mocks.toast.error).toHaveBeenCalledWith("Email is not configured.");
     expect(host.querySelector('[role="dialog"]')).not.toBeNull();
-    expect(window.location.href).toBe(initialUrl);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the quotation sent and closes the dialog after direct email succeeds", async () => {
+    mocks.sendQuotationEmailAction.mockResolvedValue({ ok: true, data: { noteLogged: true } });
+    const { QuotationsClient } = await import("@/app/(app)/quotations/QuotationsClient");
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<QuotationsClient
+        leads={[lead]}
+        initialCustomersHasMore={false}
+        initialSavedQuotesCount={48}
+        leadSources={[]}
+        leadSourcesUnavailable={false}
+        products={[product]}
+        isManager
+        suggestedOfferNo="280/26-27"
+        presetLeadId="lead-1"
+      />);
+    });
+
+    await click(host.querySelector('button[aria-label="Item 1 product"]'));
+    await click(host.querySelector('[role="option"]'));
+    await click(button("Preview Offer"));
+    await click(host.querySelector('button[aria-label="Email quotation"]'));
+    const emailForm = host.querySelector('form[aria-labelledby="quotation-email-title"]');
+    if (!(emailForm instanceof HTMLFormElement)) throw new Error("Quotation email form was not opened.");
+    await act(async () => {
+      emailForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(mocks.markQuotationSentAction).toHaveBeenCalled();
+    expect(mocks.toast.success).toHaveBeenCalledWith(expect.stringContaining("Quotation emailed to"));
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 });
